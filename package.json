@@ -1,0 +1,25 @@
+{
+  "name": "souieba",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.12.1",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "server": "tsx apps/server/src/main.ts",
+    "admin": "tsx apps/server/src/admin-cli.ts",
+    "souieba": "tsx apps/cli/src/main.ts",
+    "build:server": "pnpm --filter @souieba/server build",
+    "build:skill": "esbuild apps/cli/src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=skills/souieba/scripts/souieba.mjs --banner:js='#!/usr/bin/env node' --log-level=warning"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "tsx": "^4",
+    "typescript": "^5.9",
+    "vitest": "^3",
+    "esbuild": "^0.25"
+  }
+}

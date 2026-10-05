@@ -1,0 +1,16 @@
+// Tailscale の ACL 例。souieba サーバの 443 番には group:souieba-members だけが届く。
+{
+  "groups": {
+    "group:souieba-members": ["alice@example.com", "bob@example.com"],
+  },
+  "tagOwners": {
+    "tag:souieba": ["autogroup:admin"],
+  },
+  "grants": [
+    {
+      "src": ["group:souieba-members"],
+      "dst": ["tag:souieba"],
+      "ip":  ["tcp:443"],
+    },
+  ],
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@souieba/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@souieba/core": "workspace:*",
+    "@souieba/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@souieba/server": "workspace:*",
+    "@hono/node-server": "^1"
+  }
+}
