@@ -1,7 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { sha256 } from "./crypto.ts";
 import type { DB } from "./db.ts";
-import { forbidden, unauthorized } from "./errors.ts";
+import { ApiError, forbidden, unauthorized } from "./errors.ts";
 
 export type Auth = {
   kind: "user" | "agent";
@@ -21,11 +21,22 @@ type CredRow = {
   role: "admin" | "member";
 };
 
-export function authenticate(db: DB): MiddlewareHandler<Env> {
+export type AuthFailureGuard = {
+  /** 認証に失敗しすぎた送信元なら true（トークンを照合せずに 429 にする） */
+  blocked(c: Context<Env>): boolean;
+  failed(c: Context<Env>): void;
+};
+
+export function authenticate(db: DB, guard?: AuthFailureGuard): MiddlewareHandler<Env> {
   return async (c, next) => {
+    if (guard?.blocked(c)) throw new ApiError(429, "rate_limited", "認証の失敗が多すぎます。時間をおいてください");
+    const fail = () => {
+      guard?.failed(c);
+      return unauthorized();
+    };
     const header = c.req.header("authorization") ?? "";
     const m = /^Bearer\s+(sou_[ua]_[A-Za-z0-9_-]+)$/.exec(header);
-    if (!m) throw unauthorized();
+    if (!m) throw fail();
     // 失効した資格情報・無効化されたユーザー・失効した Agent はすべて 401
     const row = db
       .prepare(
@@ -36,7 +47,7 @@ export function authenticate(db: DB): MiddlewareHandler<Env> {
            AND (c.agent_id IS NULL OR a.revoked_at IS NULL)`,
       )
       .get(sha256(m[1]!)) as CredRow | undefined;
-    if (!row) throw unauthorized();
+    if (!row) throw fail();
     c.set("auth", {
       kind: row.kind,
       userId: row.user_id,

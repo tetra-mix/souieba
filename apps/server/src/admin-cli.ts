@@ -13,7 +13,8 @@ const USAGE = `使い方: souieba-admin <command> [options]
 
   create-user --handle <h> --name <表示名> [--admin]   ユーザーを作成し、ログインコードを表示
   login-code  --handle <h>                            ログインコードを再発行（古い User トークンは失効）
-  invite      [--no-auto-friend]                      招待コードを発行（招待者なし）
+  invite                                              アカウント作成用の招待コードを発行（どのグループにも入らない）
+  list-groups                                         グループ一覧（名前・人数。投稿本文はサーバでは読めません）
   disable-user --handle <h>                           ユーザーを無効化
   list-users                                          ユーザー一覧
   backup      [path]                                  DB のバックアップ（VACUUM INTO）
@@ -29,7 +30,6 @@ function main(argv: string[]) {
       handle: { type: "string" },
       name: { type: "string" },
       admin: { type: "boolean", default: false },
-      "no-auto-friend": { type: "boolean", default: false },
     },
   });
   const dataDir = process.env.SOUIEBA_DATA_DIR ?? "/data";
@@ -62,8 +62,21 @@ function main(argv: string[]) {
       break;
     }
     case "invite": {
-      const { code, expiresAt } = accounts.createInvite(db, { createdBy: null, autoFriend: !values["no-auto-friend"] }, now);
-      console.log(`招待コード: ${code}（${expiresAt} まで有効）`);
+      const { code, expiresAt } = accounts.createAccountInvite(db, now);
+      console.log(`招待コード: ${code}（${expiresAt} まで有効、1回限り）`);
+      console.log(`利用者の PC で: souieba login <サーバURL> --code ${code} --handle <handle> --name <表示名>`);
+      console.log("参加した人は souieba groups create <名前> でグループを作れます。");
+      break;
+    }
+    case "list-groups": {
+      const rows = db
+        .prepare(
+          `SELECT g.id, g.name, g.created_at, (SELECT count(*) FROM group_members m WHERE m.group_id = g.id AND m.left_at IS NULL) AS n
+           FROM groups g ORDER BY g.created_at`,
+        )
+        .all() as { id: string; name: string; created_at: string; n: number }[];
+      if (rows.length === 0) console.log("（グループはありません）");
+      for (const g of rows) console.log(`${g.id}\t${g.name}\t${g.n}人\t${g.created_at}`);
       break;
     }
     case "disable-user": {

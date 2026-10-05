@@ -52,12 +52,27 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     // セットアップ（setup.md の手順）
     const u = accounts.createUser(db, { handle: "alice", displayName: "アリス" }, now);
     const { code } = accounts.issueLoginCode(db, u.id, now);
-    expect((await souieba("alice", "login", baseUrl, "--code", code)).out).toContain("@alice");
+    const login = await souieba("alice", "login", baseUrl, "--code", code);
+    expect(login.out).toContain("@alice");
+    expect(login.out).toMatch(/Identity 鍵の指紋: [0-9A-F]{4}-/);
+    expect((await souieba("alice", "groups", "create", "研究室")).out).toContain("グループ「研究室」を作りました");
     expect((await souieba("alice", "agent", "add", "OpenClaw")).code).toBe(0);
     const inv = await souieba("alice", "invite");
-    const invCode = /([A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4})/.exec(inv.out)![1]!;
-    await souieba("bob", "login", baseUrl, "--code", invCode, "--handle", "bob", "--name", "ボブ");
+    const invCode = /((?:[A-Z0-9]{4}-){4}[A-Z0-9]{4})/.exec(inv.out)![1]!;
+    const fp = /--verify ([0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4})/.exec(inv.out)![1]!;
+
+    // 指紋が違えば参加を中止する（サーバによる鍵のすり替えを想定）
+    const inv2 = /((?:[A-Z0-9]{4}-){4}[A-Z0-9]{4})/.exec((await souieba("alice", "invite")).out)![1]!;
+    const wrong = await souieba("eve", "login", baseUrl, "--code", inv2, "--verify", "0000-0000-0000", "--handle", "eve", "--name", "イヴ");
+    expect(wrong.code).toBe(1);
+    expect(wrong.out).toContain("指紋が一致しません");
+
+    const joined = await souieba("bob", "login", baseUrl, "--code", invCode, "--verify", fp, "--handle", "bob", "--name", "ボブ");
+    expect(joined.out).toContain("グループ「研究室」に参加しました");
     await souieba("bob", "agent", "add", "Hermes");
+    const members = await souieba("bob", "groups", "members");
+    expect(members.out).toContain("@alice");
+    expect(members.out).toContain("検証済み");
 
     // 会話中のメモ（13時台）。秘密情報は拒否される
     expect((await souieba("alice", "note", "主人はM5Stackでロボットを作っていた")).out).toContain("メモしました");
@@ -75,6 +90,12 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     expect(composed.out).toContain("--period 2026-10-05T13:00:00.000Z");
     const pub = await souieba("alice", "publish", "--period", "2026-10-05T13:00:00.000Z", "主人はM5Stackを使ったロボットを作っていた。");
     expect(pub.out).toContain("投稿しました");
+    // サーバの DB には本文が残らない
+    expect(JSON.stringify(db.prepare("SELECT * FROM posts").all())).not.toContain("M5Stack");
+    expect((await souieba("alice", "posts", "mine")).out).toContain("主人はM5Stackを使ったロボットを作っていた。");
+    // 秘密情報は送る前に拒否する
+    const leak = await souieba("alice", "publish", "--period", "2026-10-05T13:00:00.000Z", "主人は AKIAIOSFODNN7EXAMPLE を設定した");
+    expect(leak.code).toBe(2);
     expect((await souieba("alice", "compose")).out).toContain("投稿待ちの時間帯はありません");
 
     // ボブのエージェントが会話の始めに tell

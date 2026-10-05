@@ -19,6 +19,12 @@ export class RateLimiter {
     return cur.count <= this.limit;
   }
 
+  /** 上限に達しているか（数えずに確かめる） */
+  blocked(key: string, now: number): boolean {
+    const cur = this.hits.get(key);
+    return !!cur && cur.resetAt > now && cur.count >= this.limit;
+  }
+
   private sweep(now: number) {
     for (const [k, v] of this.hits) if (v.resetAt <= now) this.hits.delete(k);
   }
