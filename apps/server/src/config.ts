@@ -17,7 +17,7 @@ const EnvSchema = z.object({
   SOUIEBA_INVITE_BY: z.enum(["member", "admin"]).default("member"),
   SOUIEBA_GROUP_CREATE_BY: z.enum(["member", "admin"]).default("member"),
   SOUIEBA_POST_GRACE_MINUTES: z.coerce.number().int().min(0).default(10),
-  SOUIEBA_POST_RETENTION_DAYS: z.coerce.number().int().min(3).default(14),
+  SOUIEBA_POST_RETENTION_DAYS: z.coerce.number().int().min(3).default(30),
   SOUIEBA_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 
