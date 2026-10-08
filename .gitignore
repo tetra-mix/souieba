@@ -6,3 +6,6 @@ dist/
 .env
 .souieba*/
 .data/
+*.tsbuildinfo
+.wrangler/
+.dev.vars*
