@@ -1,27 +1,85 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { MIGRATIONS, migrate, openDb, schemaVersion } from "../src/db.ts";
+import { createDb, migrate, pendingMigrations, schema } from "../src/db/index.ts";
+import { NodeSqlStorage, openDb } from "../src/db/node.ts";
+import { LEGACY_MIGRATIONS } from "./fixtures/legacy-schema.ts";
+
+/** テーブルごとの列・外部キー・一意制約（インデックス名は比べない） */
+function shape(raw: DatabaseSync) {
+  const q = (s: string) => raw.prepare(s).all() as Record<string, unknown>[];
+  const tables = q("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '__drizzle_migrations'")
+    .map((r) => r.name as string)
+    .sort();
+  return Object.fromEntries(
+    tables.map((t) => [
+      t,
+      {
+        columns: q(`PRAGMA table_info(${t})`)
+          // 旧スキーマの TEXT PRIMARY KEY には NOT NULL が付いていない（SQLite では主キーでも NULL を許す）。値は常に入れているので比べない
+          .map((c) => ({ name: c.name, type: c.type, notnull: c.pk ? "pk" : c.notnull, dflt: c.dflt_value, pk: c.pk }))
+          .sort((a, b) => String(a.name).localeCompare(String(b.name))),
+        fks: q(`PRAGMA foreign_key_list(${t})`)
+          .map((f) => `${f.from}->${f.table}.${f.to} ${f.on_delete}`)
+          .sort(),
+        // 旧スキーマの一意制約は無名（sqlite_autoindex_*）なので、名前ではなく列で比べる
+        unique: q(`PRAGMA index_list(${t})`)
+          .filter((i) => i.unique && i.origin !== "pk")
+          .map((i) => (q(`PRAGMA index_info(${i.name})`) as { name: string }[]).map((c) => c.name).join(","))
+          .sort(),
+        indexes: q(`PRAGMA index_list(${t})`)
+          .filter((i) => !i.unique)
+          .map((i) => (q(`PRAGMA index_info(${i.name})`) as { name: string }[]).map((c) => c.name).join(","))
+          .sort(),
+      },
+    ]),
+  );
+}
+
+function legacyDb(version: number) {
+  const raw = new DatabaseSync(":memory:");
+  raw.exec("PRAGMA foreign_keys = ON");
+  for (const m of LEGACY_MIGRATIONS.slice(0, version)) raw.exec(m);
+  raw.exec(`PRAGMA user_version = ${version}`);
+  const storage = new NodeSqlStorage(raw);
+  return { raw, storage, db: createDb(storage) };
+}
 
 describe("マイグレーション", () => {
-  it("Friend・平文の投稿の DB（v1）から、グループ・E2EE の DB（v2）へ移行できる", () => {
-    const db = openDb(":memory:");
-    db.exec(MIGRATIONS[0]!);
-    db.exec("PRAGMA user_version = 1");
-    db.exec(`
-      INSERT INTO users (id, handle, display_name, role, created_at) VALUES ('u1','alice','A','admin','t'), ('u2','bob','B','member','t');
-      INSERT INTO agents (id, owner_id, name, created_at) VALUES ('a1','u1','x','t');
-      INSERT INTO friendships (id, user_low_id, user_high_id, requested_by, status, created_at, updated_at) VALUES ('f','u1','u2','u1','accepted','t','t');
-      INSERT INTO posts (id, owner_id, author_agent_id, period_start, period_end, content, visibility, visible_at, created_at, updated_at)
-        VALUES ('p','u1','a1','s','e','平文の投稿','friends','t','t','t');
-      INSERT INTO deliveries (post_id, recipient_user_id, received_at, received_by_agent_id) VALUES ('p','u2','t','a1');
-    `);
+  it("新しい DB には全テーブルを作り、2回目は何もしない", () => {
+    const { db } = openDb(":memory:");
+    expect(pendingMigrations(db)).toBeGreaterThan(0);
     migrate(db);
-    expect(schemaVersion(db)).toBe(MIGRATIONS.length);
-    // 平文の投稿と Friend 関係は破棄し、ユーザーと Agent は残す（Agent は鍵がないので登録し直してもらう）
-    expect(db.prepare("SELECT count(*) AS n FROM posts").get()).toEqual({ n: 0 });
-    expect(db.prepare("SELECT id, enc_key FROM agents").all()).toEqual([{ id: "a1", enc_key: null }]);
-    expect(db.prepare("SELECT count(*) AS n FROM users").get()).toEqual({ n: 2 });
-    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((r) => r.name);
-    expect(tables).not.toContain("friendships");
-    expect(tables).toEqual(expect.arrayContaining(["groups", "group_members", "post_recipients"]));
+    expect(pendingMigrations(db)).toBe(0);
+    migrate(db);
+    expect(db.select().from(schema.users).all()).toEqual([]);
+  });
+
+  it("0.2 系の手書きのマイグレーション（v2）で作った DB と、同じ形のスキーマになる", () => {
+    const fresh = openDb(":memory:");
+    migrate(fresh.db);
+    const legacy = legacyDb(2);
+    migrate(legacy.db, { legacyVersion: () => legacy.storage.legacyVersion() });
+    expect(shape(legacy.raw)).toEqual(shape(fresh.storage.raw));
+  });
+
+  it("0.2 系の DB を、データを残したまま引き継ぐ", () => {
+    const { raw, storage, db } = legacyDb(2);
+    raw.exec(`
+      INSERT INTO users (id, handle, display_name, role, created_at, identity_key) VALUES ('u1','alice','A','admin','t','k');
+      INSERT INTO agents (id, owner_id, name, created_at) VALUES ('a1','u1','x','t');
+    `);
+    migrate(db, { legacyVersion: () => storage.legacyVersion() });
+    expect(pendingMigrations(db)).toBe(0);
+    expect(db.select({ handle: schema.users.handle, identityKey: schema.users.identityKey }).from(schema.users).all()).toEqual([
+      { handle: "alice", identityKey: "k" },
+    ]);
+    // 引き継いだ後も、外部キーの ON DELETE CASCADE が効く
+    db.delete(schema.users).run();
+    expect(db.select().from(schema.agents).all()).toEqual([]);
+  });
+
+  it("Friend の時代の DB（v1）は、先に 0.2 系で移行するよう求める", () => {
+    const { storage, db } = legacyDb(1);
+    expect(() => migrate(db, { legacyVersion: () => storage.legacyVersion() })).toThrow(/0\.2 系/);
   });
 });

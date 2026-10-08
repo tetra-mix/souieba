@@ -1,6 +1,16 @@
-import { type PostEnvelope, type SyncResult, TELL_WINDOW_MS, type WireInboxItem, type WireTellCandidate, selectTellCandidate } from "@souieba/core";
-import { type DB, tx } from "../db.ts";
+import {
+  type PostEnvelope,
+  type SyncResult,
+  TELL_WINDOW_MS,
+  type WireInboxItem,
+  type WireTellCandidate,
+  selectTellCandidate,
+} from "@souieba/core";
+import { and, desc, eq, exists, gte, isNotNull, isNull, lt, lte, ne, or } from "drizzle-orm";
+import type { DB } from "../db/index.ts";
+import { agents, deliveries, postRecipients, posts, users } from "../db/schema.ts";
 import { conflict, notFound } from "../errors.ts";
+import { sharesGroup } from "./groups.ts";
 
 export type AgentActor = { userId: string; agentId: string };
 
@@ -11,84 +21,92 @@ export const DEFAULT_LEASE_MS = 10 * 60_000;
  * 所属は毎回その時点で判定し（抜けたら受信済みでも候補から消える）、
  * この Agent が復号できる（宛先に含まれる）投稿だけに絞る。
  */
-const VISIBLE_TO_ME = `
-  p.owner_id != :me
-  AND p.visibility = 'groups'
-  AND p.visible_at <= :now
-  AND p.created_at >= :minCreated
-  AND EXISTS (
-    SELECT 1 FROM group_members x JOIN group_members y ON x.group_id = y.group_id
-    WHERE x.user_id = p.owner_id AND y.user_id = :me AND x.left_at IS NULL AND y.left_at IS NULL
-  )
-  AND EXISTS (SELECT 1 FROM post_recipients r WHERE r.post_id = p.id AND r.agent_id = :agent)`;
-
-function params(actor: AgentActor, now: Date) {
-  return {
-    me: actor.userId,
-    agent: actor.agentId,
-    now: now.toISOString(),
-    minCreated: new Date(now.getTime() - TELL_WINDOW_MS).toISOString(),
-  };
+function visibleToMe(db: DB, actor: AgentActor, now: Date) {
+  return and(
+    ne(posts.ownerId, actor.userId),
+    eq(posts.visibility, "groups"),
+    lte(posts.visibleAt, now.toISOString()),
+    gte(posts.createdAt, new Date(now.getTime() - TELL_WINDOW_MS).toISOString()),
+    sharesGroup(db, posts.ownerId, actor.userId),
+    exists(
+      db
+        .select({ postId: postRecipients.postId })
+        .from(postRecipients)
+        .where(and(eq(postRecipients.postId, posts.id), eq(postRecipients.agentId, actor.agentId))),
+    ),
+  );
 }
 
 /** 同じグループのメンバーの新着投稿を受信箱へ取り込む（RECEIVED にする） */
 export function sync(db: DB, actor: AgentActor, now: Date): SyncResult {
-  const r = db
-    .prepare(
-      `INSERT OR IGNORE INTO deliveries (post_id, recipient_user_id, received_at, received_by_agent_id)
-       SELECT p.id, :me, :now, :agent FROM posts p WHERE ${VISIBLE_TO_ME}`,
-    )
-    .run(params(actor, now));
-  return { received: Number(r.changes), inboxSize: inboxRows(db, actor, now, false).length };
+  const received = db.transaction(() => {
+    const ids = db
+      .select({ id: posts.id })
+      .from(posts)
+      .where(visibleToMe(db, actor, now))
+      .all();
+    if (ids.length === 0) return 0;
+    return db
+      .insert(deliveries)
+      .values(
+        ids.map((p) => ({ postId: p.id, recipientUserId: actor.userId, receivedAt: now.toISOString(), receivedByAgentId: actor.agentId })),
+      )
+      .onConflictDoNothing()
+      .returning({ postId: deliveries.postId })
+      .all().length;
+  });
+  return { received, inboxSize: inboxRows(db, actor, now, false).length };
 }
 
-type InboxRow = {
-  post_id: string;
-  owner_id: string;
-  owner_handle: string;
-  owner_name: string;
-  author_agent_id: string;
-  agent_name: string;
-  period_start: string;
-  period_end: string;
-  envelope: string;
-  created_at: string;
-  received_at: string;
-  reserved_by_agent_id: string | null;
-  reserved_until: string | null;
-};
-
-function inboxRows(db: DB, actor: AgentActor, now: Date, onlyClaimable: boolean): InboxRow[] {
-  const reservation = onlyClaimable
-    ? "AND (d.reserved_until IS NULL OR d.reserved_until < :now OR d.reserved_by_agent_id = :agent)"
-    : "";
+function inboxRows(db: DB, actor: AgentActor, now: Date, onlyClaimable: boolean) {
+  const nowIso = now.toISOString();
   return db
-    .prepare(
-      `SELECT d.post_id, p.owner_id, u.handle AS owner_handle, u.display_name AS owner_name, p.author_agent_id, a.name AS agent_name,
-              p.period_start, p.period_end, p.envelope, p.created_at, d.received_at,
-              d.reserved_by_agent_id, d.reserved_until
-       FROM deliveries d
-       JOIN posts p ON p.id = d.post_id
-       JOIN users u ON u.id = p.owner_id
-       JOIN agents a ON a.id = p.author_agent_id
-       WHERE d.recipient_user_id = :me AND d.told_at IS NULL AND d.dismissed_at IS NULL
-         ${reservation}
-         AND ${VISIBLE_TO_ME}
-       ORDER BY p.created_at DESC`,
+    .select({
+      postId: deliveries.postId,
+      ownerId: posts.ownerId,
+      ownerHandle: users.handle,
+      ownerName: users.displayName,
+      authorAgentId: posts.authorAgentId,
+      agentName: agents.name,
+      periodStart: posts.periodStart,
+      periodEnd: posts.periodEnd,
+      envelope: posts.envelope,
+      createdAt: posts.createdAt,
+      receivedAt: deliveries.receivedAt,
+      reservedByAgentId: deliveries.reservedByAgentId,
+      reservedUntil: deliveries.reservedUntil,
+    })
+    .from(deliveries)
+    .innerJoin(posts, eq(posts.id, deliveries.postId))
+    .innerJoin(users, eq(users.id, posts.ownerId))
+    .innerJoin(agents, eq(agents.id, posts.authorAgentId))
+    .where(
+      and(
+        eq(deliveries.recipientUserId, actor.userId),
+        isNull(deliveries.toldAt),
+        isNull(deliveries.dismissedAt),
+        onlyClaimable
+          ? or(isNull(deliveries.reservedUntil), lt(deliveries.reservedUntil, nowIso), eq(deliveries.reservedByAgentId, actor.agentId))
+          : undefined,
+        visibleToMe(db, actor, now),
+      ),
     )
-    .all(params(actor, now)) as InboxRow[];
+    .orderBy(desc(posts.createdAt))
+    .all();
 }
+
+type InboxRow = ReturnType<typeof inboxRows>[number];
 
 function toItem(r: InboxRow): WireInboxItem {
   return {
-    postId: r.post_id,
-    owner: { id: r.owner_id, handle: r.owner_handle, displayName: r.owner_name },
-    authorAgentId: r.author_agent_id,
-    authorAgentName: r.agent_name,
-    periodStart: r.period_start,
-    periodEnd: r.period_end,
+    postId: r.postId,
+    owner: { id: r.ownerId, handle: r.ownerHandle, displayName: r.ownerName },
+    authorAgentId: r.authorAgentId,
+    authorAgentName: r.agentName,
+    periodStart: r.periodStart,
+    periodEnd: r.periodEnd,
     envelope: JSON.parse(r.envelope) as PostEnvelope,
-    receivedAt: r.received_at,
+    receivedAt: r.receivedAt,
   };
 }
 
@@ -106,65 +124,80 @@ export function claimTell(
   now: Date,
   opts: { leaseMs?: number; random?: () => number } = {},
 ): WireTellCandidate | null {
-  return tx(db, () => {
+  return db.transaction(() => {
     const rows = inboxRows(db, actor, now, true);
     const last = db
-      .prepare(
-        `SELECT p.owner_id FROM deliveries d JOIN posts p ON p.id = d.post_id
-         WHERE d.recipient_user_id = ? AND d.told_at IS NOT NULL ORDER BY d.told_at DESC LIMIT 1`,
-      )
-      .get(actor.userId) as { owner_id: string } | undefined;
+      .select({ ownerId: posts.ownerId })
+      .from(deliveries)
+      .innerJoin(posts, eq(posts.id, deliveries.postId))
+      .where(and(eq(deliveries.recipientUserId, actor.userId), isNotNull(deliveries.toldAt)))
+      .orderBy(desc(deliveries.toldAt))
+      .limit(1)
+      .get();
 
-    const pick = selectTellCandidate(
-      rows.map((r) => ({ ...r, postId: r.post_id, ownerId: r.owner_id, periodStart: r.period_start, createdAt: r.created_at })),
-      { now, lastToldOwnerId: last?.owner_id ?? null, random: opts.random },
-    );
+    const pick = selectTellCandidate(rows, { now, lastToldOwnerId: last?.ownerId ?? null, random: opts.random });
     if (!pick) return null;
 
     const reservedUntil = new Date(now.getTime() + (opts.leaseMs ?? DEFAULT_LEASE_MS)).toISOString();
-    db.prepare(
-      "UPDATE deliveries SET reserved_by_agent_id = ?, reserved_until = ? WHERE post_id = ? AND recipient_user_id = ?",
-    ).run(actor.agentId, reservedUntil, pick.post_id, actor.userId);
+    db.update(deliveries)
+      .set({ reservedByAgentId: actor.agentId, reservedUntil })
+      .where(and(eq(deliveries.postId, pick.postId), eq(deliveries.recipientUserId, actor.userId)))
+      .run();
     return { ...toItem(pick), reservedUntil };
   });
 }
 
+function deliveryOf(actor: { userId: string }, postId: string) {
+  return and(eq(deliveries.postId, postId), eq(deliveries.recipientUserId, actor.userId));
+}
+
 function assertDelivery(db: DB, actor: AgentActor, postId: string) {
-  const d = db.prepare("SELECT 1 FROM deliveries WHERE post_id = ? AND recipient_user_id = ?").get(postId, actor.userId);
-  if (!d) throw notFound("受信箱の投稿");
+  if (!db.select({ postId: deliveries.postId }).from(deliveries).where(deliveryOf(actor, postId)).get()) {
+    throw notFound("受信箱の投稿");
+  }
 }
 
 /** 予約している Agent だけが TOLD にできる */
 export function markTold(db: DB, actor: AgentActor, postId: string, now: Date): void {
-  const r = db
-    .prepare(
-      `UPDATE deliveries SET told_at = ?, told_by_agent_id = ?, reserved_by_agent_id = NULL, reserved_until = NULL
-       WHERE post_id = ? AND recipient_user_id = ? AND told_at IS NULL
-         AND reserved_by_agent_id = ? AND reserved_until >= ?`,
+  const nowIso = now.toISOString();
+  const updated = db
+    .update(deliveries)
+    .set({ toldAt: nowIso, toldByAgentId: actor.agentId, reservedByAgentId: null, reservedUntil: null })
+    .where(
+      and(
+        deliveryOf(actor, postId),
+        isNull(deliveries.toldAt),
+        eq(deliveries.reservedByAgentId, actor.agentId),
+        gte(deliveries.reservedUntil, nowIso),
+      ),
     )
-    .run(now.toISOString(), actor.agentId, postId, actor.userId, actor.agentId, now.toISOString());
-  if (r.changes === 0) {
+    .returning({ postId: deliveries.postId })
+    .all();
+  if (updated.length === 0) {
     assertDelivery(db, actor, postId);
     throw conflict("not_reserved", "この Agent が予約していないか、予約の期限が切れています");
   }
 }
 
 export function releaseTell(db: DB, actor: AgentActor, postId: string): void {
-  const r = db
-    .prepare(
-      `UPDATE deliveries SET reserved_by_agent_id = NULL, reserved_until = NULL
-       WHERE post_id = ? AND recipient_user_id = ? AND reserved_by_agent_id = ?`,
-    )
-    .run(postId, actor.userId, actor.agentId);
-  if (r.changes === 0) {
+  const updated = db
+    .update(deliveries)
+    .set({ reservedByAgentId: null, reservedUntil: null })
+    .where(and(deliveryOf(actor, postId), eq(deliveries.reservedByAgentId, actor.agentId)))
+    .returning({ postId: deliveries.postId })
+    .all();
+  if (updated.length === 0) {
     assertDelivery(db, actor, postId);
     throw conflict("not_reserved", "この Agent は予約していません");
   }
 }
 
 export function dismiss(db: DB, userId: string, postId: string, now: Date): void {
-  const r = db
-    .prepare("UPDATE deliveries SET dismissed_at = ? WHERE post_id = ? AND recipient_user_id = ? AND dismissed_at IS NULL")
-    .run(now.toISOString(), postId, userId);
-  if (r.changes === 0) throw notFound("受信箱の投稿");
+  const updated = db
+    .update(deliveries)
+    .set({ dismissedAt: now.toISOString() })
+    .where(and(deliveryOf({ userId }, postId), isNull(deliveries.dismissedAt)))
+    .returning({ postId: deliveries.postId })
+    .all();
+  if (updated.length === 0) throw notFound("受信箱の投稿");
 }

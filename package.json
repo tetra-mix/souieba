@@ -4,10 +4,10 @@
   "type": "module",
   "packageManager": "pnpm@10.12.1",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=24"
   },
   "scripts": {
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p apps/server/tsconfig.worker.json",
     "test": "vitest run",
     "server": "tsx apps/server/src/main.ts",
     "admin": "tsx apps/server/src/admin-cli.ts",

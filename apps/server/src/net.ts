@@ -1,5 +1,3 @@
-import { isIP } from "node:net";
-
 export function normalizeIp(ip: string): string {
   return ip.startsWith("::ffff:") ? ip.slice(7) : ip;
 }
@@ -13,7 +11,7 @@ export function isLoopback(ip: string): boolean {
 export function isPrivateOrLoopback(ip: string): boolean {
   const v = normalizeIp(ip);
   if (v === "::1" || v === "localhost") return true;
-  if (isIP(v) === 6) return /^f[cd]/i.test(v) || /^fe80/i.test(v); // ULA / link-local
+  if (v.includes(":")) return /^f[cd]/i.test(v) || /^fe80/i.test(v); // IPv6: ULA / link-local
   const p = v.split(".").map(Number);
   const [a, b] = [p[0] ?? -1, p[1] ?? -1];
   return (

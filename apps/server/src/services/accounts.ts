@@ -1,40 +1,35 @@
 import { AGENT_SCOPES, isPublicKey, signedText, verifyText } from "@souieba/core";
+import { and, count, eq, isNull, ne } from "drizzle-orm";
+import type { Limits } from "../config.ts";
 import { newCode, newId, newToken, sha256 } from "../crypto.ts";
-import { type DB, tx } from "../db.ts";
+import type { DB } from "../db/index.ts";
+import { type AgentRow, type UserRow, agents, credentials, invites, users } from "../db/schema.ts";
 import { badRequest, conflict, notFound } from "../errors.ts";
 import { deleteEmptyGroups, findUsableInvite, joinWithInvite } from "./groups.ts";
+
+export type { AgentRow, UserRow };
 
 export const HANDLE_RE = /^[a-z0-9_]{2,20}$/;
 const ACCOUNT_INVITE_TTL_MS = 3 * 86_400_000;
 const LOGIN_CODE_TTL_MS = 15 * 60_000;
 
-export type UserRow = {
-  id: string;
-  handle: string;
-  display_name: string;
-  role: "admin" | "member";
-  identity_key: string | null;
-  disabled_at: string | null;
-  created_at: string;
-};
-
 export function publicUser(u: UserRow) {
   return {
     id: u.id,
     handle: u.handle,
-    displayName: u.display_name,
+    displayName: u.displayName,
     role: u.role,
-    identityKey: u.identity_key,
-    createdAt: u.created_at,
+    identityKey: u.identityKey,
+    createdAt: u.createdAt,
   };
 }
 
 export function getUser(db: DB, id: string): UserRow | undefined {
-  return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as UserRow | undefined;
+  return db.select().from(users).where(eq(users.id, id)).get();
 }
 
 export function getUserByHandle(db: DB, handle: string): UserRow | undefined {
-  return db.prepare("SELECT * FROM users WHERE handle = ?").get(handle) as UserRow | undefined;
+  return db.select().from(users).where(eq(users.handle, handle)).get();
 }
 
 function validateProfile(handle: string, displayName: string) {
@@ -53,57 +48,117 @@ export function createUser(
   db: DB,
   input: { handle: string; displayName: string; role?: "admin" | "member"; identityKey?: string | null },
   now: Date,
+  limits?: Pick<Limits, "maxUsers">,
 ): UserRow {
   const displayName = validateProfile(input.handle, input.displayName);
   if (getUserByHandle(db, input.handle)) throw conflict("handle_taken", "その handle は使われています");
-  const id = newId("usr");
-  db.prepare("INSERT INTO users (id, handle, display_name, role, identity_key, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(
-    id,
-    input.handle,
-    displayName,
-    input.role ?? "member",
-    input.identityKey ?? null,
-    now.toISOString(),
-  );
-  return getUser(db, id)!;
+  if (limits && db.select({ n: count() }).from(users).get()!.n >= limits.maxUsers) {
+    throw conflict("limit_users", "このインスタンスのユーザー数が上限に達しています。管理者に連絡してください");
+  }
+  return db
+    .insert(users)
+    .values({
+      id: newId("usr"),
+      handle: input.handle,
+      displayName,
+      role: input.role ?? "member",
+      identityKey: input.identityKey ?? null,
+      createdAt: now.toISOString(),
+    })
+    .returning()
+    .get();
 }
 
 /** Identity 鍵の登録。サーバが勝手に差し替えられないよう、未登録のときだけ受け付ける */
 export function setIdentityKey(db: DB, userId: string, key: unknown): void {
-  const k = requireIdentityKey(key);
-  const r = db.prepare("UPDATE users SET identity_key = ? WHERE id = ? AND identity_key IS NULL").run(k, userId);
-  if (r.changes === 0) throw conflict("identity_exists", "Identity 鍵はすでに登録されています");
+  const updated = db
+    .update(users)
+    .set({ identityKey: requireIdentityKey(key) })
+    .where(and(eq(users.id, userId), isNull(users.identityKey)))
+    .returning({ id: users.id })
+    .all();
+  if (updated.length === 0) throw conflict("identity_exists", "Identity 鍵はすでに登録されています");
+}
+
+/** admin 専用トークンの scope。User トークンと同じ kind = 'user' の行に入れ、scope で見分ける */
+export const ADMIN_SCOPE = "admin";
+
+function insertCredential(
+  db: DB,
+  row: { kind: "user" | "agent"; userId: string; agentId: string | null; scopes: string },
+  token: string,
+  now: Date,
+) {
+  db.insert(credentials)
+    .values({ id: newId("cred"), ...row, tokenHash: sha256(token), createdAt: now.toISOString() })
+    .run();
+  return token;
 }
 
 function issueCredential(db: DB, kind: "user" | "agent", userId: string, agentId: string | null, now: Date): string {
-  const token = newToken(kind);
   const scopes = kind === "user" ? "user" : AGENT_SCOPES.join(" ");
-  db.prepare(
-    "INSERT INTO credentials (id, kind, user_id, agent_id, token_hash, scopes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(newId("cred"), kind, userId, agentId, sha256(token), scopes, now.toISOString());
-  return token;
+  return insertCredential(db, { kind, userId, agentId, scopes }, newToken(kind), now);
+}
+
+/**
+ * admin 専用トークンを発行する。admin API（/v1/admin/*）だけに使え、普段の User の API には使えない。
+ * Agent が読める ~/.souieba には保存しない前提（souieba-admin が環境変数で受け取る）。
+ */
+export function issueAdminToken(db: DB, userId: string, now: Date): string {
+  const user = getUser(db, userId);
+  if (!user || user.disabledAt || user.role !== "admin") throw badRequest("not_admin", "admin のユーザーにだけ発行できます");
+  return insertCredential(db, { kind: "user", userId, agentId: null, scopes: ADMIN_SCOPE }, newToken("admin"), now);
+}
+
+export function hasAdmin(db: DB): boolean {
+  return !!db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.role, "admin"), isNull(users.disabledAt)))
+    .limit(1)
+    .get();
+}
+
+/**
+ * 最初の admin を作る（Workers のようにサーバ上で souieba-admin を実行できない環境のため）。
+ * admin が1人もいないあいだだけ受け付ける。
+ */
+export function bootstrapAdmin(db: DB, input: { handle: string; displayName: string }, now: Date, limits: Limits) {
+  return db.transaction(() => {
+    if (hasAdmin(db)) throw conflict("already_bootstrapped", "admin はすでにいます");
+    const user = createUser(db, { ...input, role: "admin" }, now, limits);
+    return { user, adminToken: issueAdminToken(db, user.id, now), login: issueLoginCode(db, user.id, now) };
+  });
 }
 
 /** ログインコードを発行する。トークンを失くした場合の再発行にも使う */
 export function issueLoginCode(db: DB, userId: string, now: Date): { code: string; expiresAt: string } {
   const code = newCode();
   const expiresAt = new Date(now.getTime() + LOGIN_CODE_TTL_MS).toISOString();
-  db.prepare(
-    "INSERT INTO invites (id, code_hash, kind, target_user_id, auto_friend, expires_at, created_at) VALUES (?, ?, 'login', ?, 0, ?, ?)",
-  ).run(newId("inv"), sha256(code), userId, expiresAt, now.toISOString());
+  db.insert(invites)
+    .values({
+      id: newId("inv"),
+      codeHash: sha256(code),
+      kind: "login",
+      targetUserId: userId,
+      autoFriend: 0,
+      expiresAt,
+      createdAt: now.toISOString(),
+    })
+    .run();
   return { code, expiresAt };
 }
 
 /**
- * アカウント作成用の招待コード（どのグループにも入らない）。管理者がサーバ上で発行する。
+ * アカウント作成用の招待コード（どのグループにも入らない）。管理者が発行する。
  * グループへの招待はメンバーのクライアントが署名して作る（groups.createGroupInvite）。
  */
 export function createAccountInvite(db: DB, now: Date): { code: string; expiresAt: string } {
   const code = newCode();
   const expiresAt = new Date(now.getTime() + ACCOUNT_INVITE_TTL_MS).toISOString();
-  db.prepare(
-    "INSERT INTO invites (id, code_hash, kind, auto_friend, expires_at, created_at) VALUES (?, ?, 'invite', 0, ?, ?)",
-  ).run(newId("inv"), sha256(code), expiresAt, now.toISOString());
+  db.insert(invites)
+    .values({ id: newId("inv"), codeHash: sha256(code), kind: "invite", autoFriend: 0, expiresAt, createdAt: now.toISOString() })
+    .run();
   return { code, expiresAt };
 }
 
@@ -122,72 +177,74 @@ export type RedeemResult = {
   inviter: { id: string; handle: string; displayName: string; identityKey: string } | null;
 };
 
-export function redeemCode(db: DB, input: RedeemInput, now: Date): RedeemResult {
-  return tx(db, () => {
+function markInviteUsed(db: DB, inviteId: string, userId: string, now: Date) {
+  db.update(invites).set({ usedBy: userId, usedAt: now.toISOString() }).where(eq(invites.id, inviteId)).run();
+}
+
+export function redeemCode(db: DB, input: RedeemInput, now: Date, limits: Limits): RedeemResult {
+  return db.transaction(() => {
     const inv = findUsableInvite(db, input.code, now);
 
     if (inv.kind === "login") {
-      const user = getUser(db, inv.target_user_id!);
-      if (!user || user.disabled_at) throw badRequest("invalid_code", "コードが無効か、期限が切れています");
-      // 古い User トークンは失効させる（なくした・漏れたトークンの無効化を兼ねる）
-      db.prepare("UPDATE credentials SET revoked_at = ? WHERE user_id = ? AND kind = 'user' AND revoked_at IS NULL").run(
-        now.toISOString(),
-        user.id,
-      );
+      const user = getUser(db, inv.targetUserId!);
+      if (!user || user.disabledAt) throw badRequest("invalid_code", "コードが無効か、期限が切れています");
+      // 古い User トークンは失効させる（なくした・漏れたトークンの無効化を兼ねる）。admin 専用トークンは別に管理する
+      db.update(credentials)
+        .set({ revokedAt: now.toISOString() })
+        .where(
+          and(
+            eq(credentials.userId, user.id),
+            eq(credentials.kind, "user"),
+            ne(credentials.scopes, ADMIN_SCOPE),
+            isNull(credentials.revokedAt),
+          ),
+        )
+        .run();
       // 移行前のユーザーは、ここで Identity 鍵を登録できる（未登録のときだけ）
-      if (!user.identity_key && input.identityKey) {
-        db.prepare("UPDATE users SET identity_key = ? WHERE id = ?").run(requireIdentityKey(input.identityKey), user.id);
+      if (!user.identityKey && input.identityKey) {
+        db.update(users)
+          .set({ identityKey: requireIdentityKey(input.identityKey) })
+          .where(eq(users.id, user.id))
+          .run();
       }
-      db.prepare("UPDATE invites SET used_by = ?, used_at = ? WHERE id = ?").run(user.id, now.toISOString(), inv.id);
+      markInviteUsed(db, inv.id, user.id, now);
       return { user: getUser(db, user.id)!, token: issueCredential(db, "user", user.id, null, now), group: null, inviter: null };
     }
 
     if (!input.handle || !input.displayName) throw badRequest("profile_required", "handle と displayName が必要です");
     const identityKey = requireIdentityKey(input.identityKey);
-    const user = createUser(db, { handle: input.handle, displayName: input.displayName, identityKey }, now);
+    const user = createUser(db, { handle: input.handle, displayName: input.displayName, identityKey }, now, limits);
     let joined: Pick<RedeemResult, "group" | "inviter"> = { group: null, inviter: null };
-    if (inv.group_id) {
-      joined = joinWithInvite(db, inv, { userId: user.id, identityKey, code: input.code, joinSig: input.joinSig }, now);
+    if (inv.groupId) {
+      joined = joinWithInvite(db, inv, { userId: user.id, identityKey, code: input.code, joinSig: input.joinSig }, now, limits);
     } else {
-      db.prepare("UPDATE invites SET used_by = ?, used_at = ? WHERE id = ?").run(user.id, now.toISOString(), inv.id);
+      markInviteUsed(db, inv.id, user.id, now);
     }
     return { user, token: issueCredential(db, "user", user.id, null, now), ...joined };
   });
 }
 
 /** 既存のユーザーが招待コードで別のグループに参加する */
-export function joinGroup(db: DB, userId: string, input: { code: string; joinSig?: string }, now: Date) {
-  return tx(db, () => {
+export function joinGroup(db: DB, userId: string, input: { code: string; joinSig?: string }, now: Date, limits: Limits) {
+  return db.transaction(() => {
     const inv = findUsableInvite(db, input.code, now);
-    if (inv.kind !== "invite" || !inv.group_id) throw badRequest("invalid_code", "コードが無効か、期限が切れています");
+    if (inv.kind !== "invite" || !inv.groupId) throw badRequest("invalid_code", "コードが無効か、期限が切れています");
     const user = getUser(db, userId)!;
-    if (!user.identity_key) throw conflict("identity_required", "Identity 鍵が未登録です");
-    return joinWithInvite(db, inv, { userId, identityKey: user.identity_key, code: input.code, joinSig: input.joinSig }, now);
+    if (!user.identityKey) throw conflict("identity_required", "Identity 鍵が未登録です");
+    return joinWithInvite(db, inv, { userId, identityKey: user.identityKey, code: input.code, joinSig: input.joinSig }, now, limits);
   });
 }
-
-export type AgentRow = {
-  id: string;
-  owner_id: string;
-  name: string;
-  provider: string | null;
-  enc_key: string | null;
-  sign_key: string | null;
-  cert: string | null;
-  revoked_at: string | null;
-  created_at: string;
-};
 
 export function publicAgent(a: AgentRow) {
   return {
     id: a.id,
     name: a.name,
     provider: a.provider,
-    encKey: a.enc_key,
-    signKey: a.sign_key,
+    encKey: a.encKey,
+    signKey: a.signKey,
     cert: a.cert,
-    revokedAt: a.revoked_at,
-    createdAt: a.created_at,
+    revokedAt: a.revokedAt,
+    createdAt: a.createdAt,
   };
 }
 
@@ -207,53 +264,71 @@ export function createAgent(
     throw badRequest("invalid_agent_keys", "Agent の鍵の形式が不正です");
   }
   const owner = getUser(db, ownerId)!;
-  if (!owner.identity_key) throw conflict("identity_required", "先に Identity 鍵を登録してください");
-  if (!verifyText(owner.identity_key, signedText.agentCert(ownerId, input.encKey, input.signKey), input.cert)) {
+  if (!owner.identityKey) throw conflict("identity_required", "先に Identity 鍵を登録してください");
+  if (!verifyText(owner.identityKey, signedText.agentCert(ownerId, input.encKey, input.signKey), input.cert)) {
     throw badRequest("invalid_signature", "Agent の証明書を検証できません");
   }
-  return tx(db, () => {
-    const id = newId("agt");
-    db.prepare(
-      "INSERT INTO agents (id, owner_id, name, provider, enc_key, sign_key, cert, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(id, ownerId, name, input.provider ?? null, input.encKey, input.signKey, input.cert, now.toISOString());
-    const token = issueCredential(db, "agent", ownerId, id, now);
-    return { agent: db.prepare("SELECT * FROM agents WHERE id = ?").get(id) as AgentRow, token };
+  return db.transaction(() => {
+    const agent = db
+      .insert(agents)
+      .values({
+        id: newId("agt"),
+        ownerId,
+        name,
+        provider: input.provider ?? null,
+        encKey: input.encKey,
+        signKey: input.signKey,
+        cert: input.cert,
+        createdAt: now.toISOString(),
+      })
+      .returning()
+      .get();
+    return { agent, token: issueCredential(db, "agent", ownerId, agent.id, now) };
   });
 }
 
 export function getAgent(db: DB, agentId: string): AgentRow | undefined {
-  return db.prepare("SELECT * FROM agents WHERE id = ?").get(agentId) as AgentRow | undefined;
+  return db.select().from(agents).where(eq(agents.id, agentId)).get();
 }
 
 export function listAgents(db: DB, ownerId: string): AgentRow[] {
-  return db.prepare("SELECT * FROM agents WHERE owner_id = ? ORDER BY created_at").all(ownerId) as AgentRow[];
+  return db.select().from(agents).where(eq(agents.ownerId, ownerId)).orderBy(agents.createdAt).all();
 }
 
 export function revokeAgent(db: DB, ownerId: string, agentId: string, now: Date): void {
-  tx(db, () => {
-    const r = db.prepare("UPDATE agents SET revoked_at = ? WHERE id = ? AND owner_id = ? AND revoked_at IS NULL").run(
-      now.toISOString(),
-      agentId,
-      ownerId,
-    );
-    if (r.changes === 0) throw notFound("Agent");
-    db.prepare("UPDATE credentials SET revoked_at = ? WHERE agent_id = ? AND revoked_at IS NULL").run(now.toISOString(), agentId);
+  db.transaction(() => {
+    const revoked = db
+      .update(agents)
+      .set({ revokedAt: now.toISOString() })
+      .where(and(eq(agents.id, agentId), eq(agents.ownerId, ownerId), isNull(agents.revokedAt)))
+      .returning({ id: agents.id })
+      .all();
+    if (revoked.length === 0) throw notFound("Agent");
+    db.update(credentials)
+      .set({ revokedAt: now.toISOString() })
+      .where(and(eq(credentials.agentId, agentId), isNull(credentials.revokedAt)))
+      .run();
   });
 }
 
 export function disableUser(db: DB, userId: string, now: Date): void {
-  const r = db.prepare("UPDATE users SET disabled_at = ? WHERE id = ? AND disabled_at IS NULL").run(now.toISOString(), userId);
-  if (r.changes === 0) throw notFound("ユーザー");
+  const disabled = db
+    .update(users)
+    .set({ disabledAt: now.toISOString() })
+    .where(and(eq(users.id, userId), isNull(users.disabledAt)))
+    .returning({ id: users.id })
+    .all();
+  if (disabled.length === 0) throw notFound("ユーザー");
 }
 
 /** アカウント削除。外部キーの ON DELETE CASCADE で投稿・配送状態・所属も物理削除される */
 export function deleteUser(db: DB, userId: string): void {
-  tx(db, () => {
-    db.prepare("DELETE FROM users WHERE id = ?").run(userId);
+  db.transaction(() => {
+    db.delete(users).where(eq(users.id, userId)).run();
     deleteEmptyGroups(db);
   });
 }
 
 export function listUsers(db: DB): UserRow[] {
-  return db.prepare("SELECT * FROM users ORDER BY created_at").all() as UserRow[];
+  return db.select().from(users).orderBy(users.createdAt).all();
 }

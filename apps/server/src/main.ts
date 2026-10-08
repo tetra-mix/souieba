@@ -1,12 +1,14 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
+import { getConnInfo } from "@hono/node-server/conninfo";
 import { createApp, VERSION } from "./app.ts";
 import { ConfigError, loadConfig } from "./config.ts";
-import { migrate, openDb, pendingMigrations, schemaVersion } from "./db.ts";
+import { isEmptyDb, migrate, pendingMigrations } from "./db/index.ts";
+import { openDb } from "./db/node.ts";
 import { runRetention } from "./retention.ts";
 
-function main() {
+async function main() {
   let config;
   try {
     config = loadConfig();
@@ -19,15 +21,15 @@ function main() {
   }
 
   mkdirSync(join(config.dataDir, "backups"), { recursive: true });
-  const db = openDb(join(config.dataDir, "souieba.db"));
+  const { db, storage } = openDb(join(config.dataDir, "souieba.db"));
   if (pendingMigrations(db) > 0) {
     // 既存の DB をマイグレーションする前に、必ずバックアップを取る
     let backup: string | null = null;
-    if (schemaVersion(db) > 0) {
+    if (!isEmptyDb(db)) {
       backup = join(config.dataDir, "backups", `pre-${VERSION}-${Date.now()}.db`);
-      db.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
+      await storage.backupTo(backup);
     }
-    migrate(db);
+    migrate(db, { legacyVersion: () => storage.legacyVersion() });
     console.log(JSON.stringify({ level: "info", msg: "migrated", backup }));
   }
 
@@ -42,10 +44,13 @@ function main() {
     console.warn(JSON.stringify({ level: "warn", msg: "http で動作しています（開発用）。公開するときは https にしてください" }));
   }
 
-  const app = createApp({ db, config });
+  const app = createApp({ db, config, remoteAddr: (c) => getConnInfo(c).remote.address ?? "" });
   serve({ fetch: app.fetch, hostname: config.bind, port: config.port }, (info) => {
     console.log(JSON.stringify({ level: "info", msg: "listening", address: info.address, port: info.port, version: VERSION }));
   });
 }
 
-main();
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

@@ -1,6 +1,8 @@
 import { type PostEnvelope, type PublishResult, validatePeriod, verifyPostSignature } from "@souieba/core";
 import { newId } from "../crypto.ts";
-import { type DB, tx } from "../db.ts";
+import { and, desc, eq } from "drizzle-orm";
+import type { DB } from "../db/index.ts";
+import { agents, postRecipients, posts } from "../db/schema.ts";
 import { badRequest, conflict, forbidden, notFound } from "../errors.ts";
 import { getAgent } from "./accounts.ts";
 import { allowedRecipientAgents } from "./groups.ts";
@@ -14,14 +16,20 @@ export const MAX_RECIPIENTS = 200;
  * 期間・署名（投稿した Agent 本人か）・宛先（同じグループの Agent か）だけ。
  * 秘密情報の検査と本文の正規化はクライアント側で行う。
  */
-export function upsertPost(db: DB, actor: { userId: string; agentId: string }, envelope: PostEnvelope, now: Date, graceMs: number): PublishResult {
+export function upsertPost(
+  db: DB,
+  actor: { userId: string; agentId: string },
+  envelope: PostEnvelope,
+  now: Date,
+  graceMs: number,
+): PublishResult {
   const periodError = validatePeriod(envelope.periodStart, envelope.periodEnd, now);
   if (periodError) throw badRequest(`period_${periodError}`, `期間が不正です（${periodError}）`);
   if (envelope.recipients.length > MAX_RECIPIENTS) throw badRequest("too_many_recipients", `宛先は ${MAX_RECIPIENTS} 件までです`);
 
   const agent = getAgent(db, actor.agentId);
-  if (!agent?.sign_key) throw conflict("agent_keys_required", "この Agent には鍵がありません。souieba agent add で登録し直してください");
-  if (!verifyPostSignature(envelope, { userId: actor.userId, agentId: actor.agentId }, agent.sign_key)) {
+  if (!agent?.signKey) throw conflict("agent_keys_required", "この Agent には鍵がありません。souieba agent add で登録し直してください");
+  if (!verifyPostSignature(envelope, { userId: actor.userId, agentId: actor.agentId }, agent.signKey)) {
     throw badRequest("invalid_signature", "投稿の署名を検証できません");
   }
 
@@ -39,75 +47,73 @@ export function upsertPost(db: DB, actor: { userId: string; agentId: string }, e
   const ts = now.toISOString();
   const body = JSON.stringify(envelope);
 
-  return tx(db, () => {
+  return db.transaction(() => {
     const existing = db
-      .prepare("SELECT id FROM posts WHERE author_agent_id = ? AND period_start = ?")
-      .get(actor.agentId, periodStart) as { id: string } | undefined;
+      .select({ id: posts.id })
+      .from(posts)
+      .where(and(eq(posts.authorAgentId, actor.agentId), eq(posts.periodStart, periodStart)))
+      .get();
     let postId: string;
     if (existing) {
       // 同じ時間帯の再投稿は上書きする（publisher の再実行やリトライで重複させない）
       postId = existing.id;
-      db.prepare("UPDATE posts SET envelope = ?, visibility = ?, visible_at = ?, updated_at = ? WHERE id = ?").run(
-        body,
-        envelope.visibility,
-        visibleAt,
-        ts,
-        postId,
-      );
-      db.prepare("DELETE FROM post_recipients WHERE post_id = ?").run(postId);
+      db.update(posts).set({ envelope: body, visibility: envelope.visibility, visibleAt, updatedAt: ts }).where(eq(posts.id, postId)).run();
+      db.delete(postRecipients).where(eq(postRecipients.postId, postId)).run();
     } else {
       postId = newId("pst");
-      db.prepare(
-        `INSERT INTO posts (id, owner_id, author_agent_id, period_start, period_end, visibility, envelope, visible_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(postId, actor.userId, actor.agentId, periodStart, periodEnd, envelope.visibility, body, visibleAt, ts, ts);
+      db.insert(posts)
+        .values({
+          id: postId,
+          ownerId: actor.userId,
+          authorAgentId: actor.agentId,
+          periodStart,
+          periodEnd,
+          visibility: envelope.visibility,
+          envelope: body,
+          visibleAt,
+          createdAt: ts,
+          updatedAt: ts,
+        })
+        .run();
     }
-    const insert = db.prepare("INSERT INTO post_recipients (post_id, agent_id) VALUES (?, ?)");
-    for (const id of recipients) insert.run(postId, id);
+    if (recipients.length > 0)
+      db.insert(postRecipients)
+        .values(recipients.map((agentId) => ({ postId, agentId })))
+        .run();
     return { postId, visibleAt, created: !existing };
   });
 }
 
 /** 削除は物理削除。配送状態も ON DELETE CASCADE で消え、受信側の受信箱からも消える */
 export function deletePost(db: DB, actor: Actor, postId: string): void {
-  const post = db.prepare("SELECT owner_id, author_agent_id FROM posts WHERE id = ?").get(postId) as
-    | { owner_id: string; author_agent_id: string }
-    | undefined;
+  const post = db.select({ ownerId: posts.ownerId, authorAgentId: posts.authorAgentId }).from(posts).where(eq(posts.id, postId)).get();
   if (!post) throw notFound("投稿");
-  const allowed = actor.agentId ? post.author_agent_id === actor.agentId : post.owner_id === actor.userId;
+  const allowed = actor.agentId ? post.authorAgentId === actor.agentId : post.ownerId === actor.userId;
   if (!allowed) {
-    if (post.owner_id !== actor.userId) throw notFound("投稿");
+    if (post.ownerId !== actor.userId) throw notFound("投稿");
     throw forbidden("自分の Agent が書いた投稿だけを削除できます");
   }
-  db.prepare("DELETE FROM posts WHERE id = ?").run(postId);
+  db.delete(posts).where(eq(posts.id, postId)).run();
 }
 
 /** 自分について書かれた投稿（全 Agent 分）。本文は暗号文のまま返し、CLI が手元の Agent の鍵で復号する */
 export function listMyPosts(db: DB, userId: string) {
   const rows = db
-    .prepare(
-      `SELECT p.*, a.name AS agent_name FROM posts p JOIN agents a ON a.id = p.author_agent_id
-       WHERE p.owner_id = ? ORDER BY p.period_start DESC, p.created_at DESC LIMIT 200`,
-    )
-    .all(userId) as {
-    id: string;
-    agent_name: string;
-    author_agent_id: string;
-    period_start: string;
-    period_end: string;
-    envelope: string;
-    visibility: string;
-    visible_at: string;
-    created_at: string;
-  }[];
-  return rows.map((r) => ({
+    .select({ post: posts, agentName: agents.name })
+    .from(posts)
+    .innerJoin(agents, eq(agents.id, posts.authorAgentId))
+    .where(eq(posts.ownerId, userId))
+    .orderBy(desc(posts.periodStart), desc(posts.createdAt))
+    .limit(200)
+    .all();
+  return rows.map(({ post: r, agentName }) => ({
     id: r.id,
-    author: { id: r.author_agent_id, name: r.agent_name },
-    periodStart: r.period_start,
-    periodEnd: r.period_end,
+    author: { id: r.authorAgentId, name: agentName },
+    periodStart: r.periodStart,
+    periodEnd: r.periodEnd,
     envelope: JSON.parse(r.envelope) as PostEnvelope,
     visibility: r.visibility,
-    visibleAt: r.visible_at,
-    createdAt: r.created_at,
+    visibleAt: r.visibleAt,
+    createdAt: r.createdAt,
   }));
 }

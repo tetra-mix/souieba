@@ -4,13 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.ts src/admin-cli.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --out-extension:.js=.mjs --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\""
+    "build": "esbuild src/main.ts src/admin-cli.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --out-extension:.js=.mjs --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
+    "db:generate": "drizzle-kit generate && node scripts/bundle-migrations.mjs",
+    "cf-typegen": "wrangler types",
+    "dev:worker": "wrangler dev",
+    "deploy:worker": "wrangler deploy"
   },
   "dependencies": {
-    "@souieba/core": "workspace:*",
     "@hono/node-server": "^1",
+    "@souieba/core": "workspace:*",
+    "drizzle-orm": "0.45.3",
     "hono": "^4",
     "zod": "^3.25"
   },
-  "devDependencies": { "esbuild": "^0.25" }
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260923.1",
+    "drizzle-kit": "0.31.11",
+    "esbuild": "^0.25",
+    "wrangler": "4.137.0"
+  }
 }

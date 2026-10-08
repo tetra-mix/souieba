@@ -8,7 +8,8 @@ import { serve } from "@hono/node-server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../../server/src/app.ts";
 import { loadConfig } from "../../server/src/config.ts";
-import { migrate, openDb } from "../../server/src/db.ts";
+import { migrate, schema } from "../../server/src/db/index.ts";
+import { openDb } from "../../server/src/db/node.ts";
 import * as accounts from "../../server/src/services/accounts.ts";
 
 const run = promisify(execFile);
@@ -19,7 +20,7 @@ const CLI = join(ROOT, "apps/cli/src/main.ts");
 let now = new Date("2026-10-05T13:10:00Z");
 let server: ReturnType<typeof serve>;
 let baseUrl: string;
-const db = openDb(":memory:");
+const { db } = openDb(":memory:");
 const tmp = mkdtempSync(join(tmpdir(), "souieba-skill-"));
 
 /** Skill から呼ばれるのと同じ形で CLI を実行する */
@@ -37,8 +38,12 @@ async function souieba(home: string, ...args: string[]) {
 
 beforeAll(async () => {
   migrate(db);
-  const config = { ...loadConfig({ SOUIEBA_PUBLIC_URL: "https://souieba.test", SOUIEBA_DATA_DIR: tmp }), logLevel: "error" as const, postGraceMs: 0 };
-  const app = createApp({ db, config, now: () => now, random: () => 0, log: () => {} });
+  const config = {
+    ...loadConfig({ SOUIEBA_PUBLIC_URL: "https://souieba.test", SOUIEBA_DATA_DIR: tmp }),
+    logLevel: "error" as const,
+    postGraceMs: 0,
+  };
+  const app = createApp({ db, config, now: () => now, random: () => 0, log: () => {}, remoteAddr: () => "127.0.0.1" });
   server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
   await new Promise((r) => server.once("listening", r));
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -91,7 +96,7 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     const pub = await souieba("alice", "publish", "--period", "2026-10-05T13:00:00.000Z", "主人はM5Stackを使ったロボットを作っていた。");
     expect(pub.out).toContain("投稿しました");
     // サーバの DB には本文が残らない
-    expect(JSON.stringify(db.prepare("SELECT * FROM posts").all())).not.toContain("M5Stack");
+    expect(JSON.stringify(db.select().from(schema.posts).all())).not.toContain("M5Stack");
     expect((await souieba("alice", "posts", "mine")).out).toContain("主人はM5Stackを使ったロボットを作っていた。");
     // 秘密情報は送る前に拒否する
     const leak = await souieba("alice", "publish", "--period", "2026-10-05T13:00:00.000Z", "主人は AKIAIOSFODNN7EXAMPLE を設定した");

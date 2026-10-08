@@ -13,7 +13,8 @@ import {
 } from "@souieba/core";
 import { createApp } from "../src/app.ts";
 import { type Config, loadConfig } from "../src/config.ts";
-import { type DB, migrate, openDb } from "../src/db.ts";
+import { migrate } from "../src/db/index.ts";
+import { openDb } from "../src/db/node.ts";
 import * as accounts from "../src/services/accounts.ts";
 
 export const T0 = new Date("2026-10-05T14:20:00Z");
@@ -40,7 +41,7 @@ export type TestUser = {
 };
 
 export function harness(opts: { config?: Partial<Config>; remoteAddr?: string } = {}) {
-  const db: DB = openDb(":memory:");
+  const { db } = openDb(":memory:");
   migrate(db);
   let now = new Date(T0);
   const clock = {

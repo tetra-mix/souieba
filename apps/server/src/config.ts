@@ -13,7 +13,19 @@ const EnvSchema = z.object({
   SOUIEBA_POST_GRACE_MINUTES: z.coerce.number().int().min(0).default(10),
   SOUIEBA_POST_RETENTION_DAYS: z.coerce.number().int().min(3).default(30),
   SOUIEBA_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
+  SOUIEBA_ADMIN_API: z.enum(["off", "on"]).default("off"),
+  SOUIEBA_BOOTSTRAP_TOKEN: z.string().min(24, "24文字以上にしてください").optional(),
+  SOUIEBA_MAX_USERS: z.coerce.number().int().min(1).default(500),
+  SOUIEBA_MAX_GROUP_MEMBERS: z.coerce.number().int().min(2).default(50),
+  SOUIEBA_MAX_GROUPS_PER_USER: z.coerce.number().int().min(1).default(20),
 });
+
+/** 1つのインスタンスに複数の集まりを載せるので、1つのグループや1人が資源を使い切らないようにする */
+export type Limits = {
+  maxUsers: number;
+  maxGroupMembers: number;
+  maxGroupsPerUser: number;
+};
 
 export type Config = {
   publicUrl: string;
@@ -29,6 +41,11 @@ export type Config = {
   postGraceMs: number;
   postRetentionMs: number;
   logLevel: "debug" | "info" | "warn" | "error";
+  /** HTTP の admin API（/v1/admin/*）。セルフホストでは既定で閉じ、souieba-admin で DB を直接操作する */
+  adminApi: boolean;
+  /** 最初の admin を作るための秘密。admin が1人もいないあいだだけ使える */
+  bootstrapToken: string | null;
+  limits: Limits;
 };
 
 export class ConfigError extends Error {}
@@ -37,7 +54,7 @@ export class ConfigError extends Error {}
  * 環境変数を検証する。サーバはインターネットに公開する前提で、通信路は https にする。
  * http は、手元で動かす開発用（PUBLIC_URL がループバック）のときだけ許す。
  */
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+export function loadConfig(env: Record<string, string | undefined> = process.env): Config {
   const parsed = EnvSchema.safeParse(env);
   if (!parsed.success) {
     const msg = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("\n  ");
@@ -63,5 +80,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     postGraceMs: e.SOUIEBA_POST_GRACE_MINUTES * 60_000,
     postRetentionMs: e.SOUIEBA_POST_RETENTION_DAYS * 86_400_000,
     logLevel: e.SOUIEBA_LOG_LEVEL,
+    adminApi: e.SOUIEBA_ADMIN_API === "on",
+    bootstrapToken: e.SOUIEBA_BOOTSTRAP_TOKEN ?? null,
+    limits: {
+      maxUsers: e.SOUIEBA_MAX_USERS,
+      maxGroupMembers: e.SOUIEBA_MAX_GROUP_MEMBERS,
+      maxGroupsPerUser: e.SOUIEBA_MAX_GROUPS_PER_USER,
+    },
   };
 }
