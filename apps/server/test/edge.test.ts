@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { edgeGuard } from "../src/edge.ts";
 
-const req = (path: string, init: RequestInit = {}) => new Request(`https://souieba.example.com${path}`, init);
+const req = (path: string, init: RequestInit & { headers?: Record<string, string> } = {}) =>
+  new Request(`https://souieba.example.com${path}`, { ...init, headers: { "cf-connecting-ip": "203.0.113.1", ...init.headers } });
 
 describe("Workers の入口での検査", () => {
   it("API 以外のパスは Durable Object に渡さない", () => {
@@ -11,6 +12,7 @@ describe("Workers の入口での検査", () => {
 
   it("認証の要らないエンドポイントは通す", () => {
     expect(edgeGuard(req("/healthz"))).toBeNull();
+    expect(edgeGuard(req("/healthz", { method: "HEAD" }))).toBeNull();
     expect(edgeGuard(req("/v1/instance"))).toBeNull();
     expect(edgeGuard(req("/v1/auth/redeem", { method: "POST" }))).toBeNull();
     expect(edgeGuard(req("/v1/admin/bootstrap", { method: "POST" }))).toBeNull();
@@ -26,5 +28,9 @@ describe("Workers の入口での検査", () => {
   it("大きすぎる本文は 413", () => {
     const r = req("/v1/posts", { method: "POST", headers: { authorization: "Bearer sou_a_x", "content-length": String(1024 * 1024) } });
     expect(edgeGuard(r)?.status).toBe(413);
+  });
+
+  it("CF-Connecting-IP のない要求は通さない（レート制限のキーを全員で共有しないため）", () => {
+    expect(edgeGuard(new Request("https://souieba.example.com/healthz"))?.status).toBe(400);
   });
 });

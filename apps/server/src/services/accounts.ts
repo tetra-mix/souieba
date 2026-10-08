@@ -105,9 +105,16 @@ function issueCredential(db: DB, kind: "user" | "agent", userId: string, agentId
  * Agent が読める ~/.souieba には保存しない前提（souieba-admin が環境変数で受け取る）。
  */
 export function issueAdminToken(db: DB, userId: string, now: Date): string {
-  const user = getUser(db, userId);
-  if (!user || user.disabledAt || user.role !== "admin") throw badRequest("not_admin", "admin のユーザーにだけ発行できます");
-  return insertCredential(db, { kind: "user", userId, agentId: null, scopes: ADMIN_SCOPE }, newToken("admin"), now);
+  return db.transaction(() => {
+    const user = getUser(db, userId);
+    if (!user || user.disabledAt || user.role !== "admin") throw badRequest("not_admin", "admin のユーザーにだけ発行できます");
+    // 有効な admin 専用トークンは1人1つ。再発行すると古いものは失効する（漏れたトークンの無効化を兼ねる）
+    db.update(credentials)
+      .set({ revokedAt: now.toISOString() })
+      .where(and(eq(credentials.userId, userId), eq(credentials.scopes, ADMIN_SCOPE), isNull(credentials.revokedAt)))
+      .run();
+    return insertCredential(db, { kind: "user", userId, agentId: null, scopes: ADMIN_SCOPE }, newToken("admin"), now);
+  });
 }
 
 export function hasAdmin(db: DB): boolean {

@@ -7,15 +7,20 @@ import { DurableObject } from "cloudflare:workers";
 import { createApp } from "./app.ts";
 import { type Config, loadConfig } from "./config.ts";
 import { type DB, createDb, migrate } from "./db/index.ts";
-import { clientIp, edgeGuard } from "./edge.ts";
+import { clientIp, edgeGuard, isPublicPost } from "./edge.ts";
 import { runRetention } from "./retention.ts";
 
 type RateLimit = { limit(options: { key: string }): Promise<{ success: boolean }> };
 
 export type WorkerEnv = {
   INSTANCE: DurableObjectNamespace<SouiebaInstance>;
-  /** Workers の Rate Limiting。wrangler.toml の [[ratelimits]] で設定する（なければ使わない） */
+  /** Workers の Rate Limiting。wrangler.toml の [[ratelimits]] で設定する（なければ警告を出して使わない） */
   RATE_LIMITER?: RateLimit;
+  /**
+   * 認証なしの POST（招待コードの使用・ブートストラップ）用の、より厳しい制限。
+   * Durable Object の中の制限はメモリ上にあり、Durable Object が入れ替わると数え直しになるので、入口でも数える
+   */
+  AUTH_RATE_LIMITER?: RateLimit;
 } & Record<string, unknown>;
 
 /** 将来インスタンスを分けるときは、ここで名前を引き分ける（今は1つだけ） */
@@ -58,16 +63,21 @@ export class SouiebaInstance extends DurableObject<WorkerEnv> {
 
 const instance = (env: WorkerEnv) => env.INSTANCE.get(env.INSTANCE.idFromName(INSTANCE_NAME));
 
+const tooMany = () => Response.json({ error: { code: "rate_limited", message: "リクエストが多すぎます" } }, { status: 429 });
+
+let warnedNoLimiter = false;
+
 export default {
   async fetch(req, env) {
     const blocked = edgeGuard(req);
     if (blocked) return blocked;
-    if (env.RATE_LIMITER) {
-      const { success } = await env.RATE_LIMITER.limit({ key: clientIp(req) });
-      if (!success) {
-        return Response.json({ error: { code: "rate_limited", message: "リクエストが多すぎます" } }, { status: 429 });
-      }
+    if (!env.RATE_LIMITER || !env.AUTH_RATE_LIMITER) {
+      if (!warnedNoLimiter) console.warn(JSON.stringify({ level: "warn", msg: "wrangler.toml の [[ratelimits]] がないため、入口のレート制限をしていません" }));
+      warnedNoLimiter = true;
     }
+    const key = clientIp(req);
+    if (env.RATE_LIMITER && !(await env.RATE_LIMITER.limit({ key })).success) return tooMany();
+    if (env.AUTH_RATE_LIMITER && isPublicPost(req) && !(await env.AUTH_RATE_LIMITER.limit({ key })).success) return tooMany();
     return instance(env).fetch(req);
   },
 

@@ -516,11 +516,38 @@ describe("admin API", () => {
     expect((await h.call("POST", "/v1/admin/users/alice/admin-token", adminToken)).status).toBe(400);
   });
 
+  it("admin 専用トークンを再発行すると、古いものは失効する", async () => {
+    const h = harness({ config: adminConfig });
+    const { adminToken } = (await h.call("POST", "/v1/admin/bootstrap", undefined, { token: BOOTSTRAP, handle: "root", displayName: "管理者" })).body;
+    const next = (await h.call("POST", "/v1/admin/users/root/admin-token", adminToken)).body.adminToken as string;
+    expect((await h.call("GET", "/v1/admin/users", adminToken)).status).toBe(401);
+    expect((await h.call("GET", "/v1/admin/users", next)).status).toBe(200);
+  });
+
   it("admin でなくなったユーザーの admin 専用トークンは使えない", async () => {
     const h = harness({ config: adminConfig });
     const { adminToken, user } = (await h.call("POST", "/v1/admin/bootstrap", undefined, { token: BOOTSTRAP, handle: "root", displayName: "管理者" })).body;
     h.db.update(schema.users).set({ role: "member" }).where(eq(schema.users.id, user.id)).run();
     expect((await h.call("GET", "/v1/admin/users", adminToken)).status).toBe(401);
+  });
+});
+
+describe("本文の大きさ", () => {
+  it("Content-Length のない（chunked の）本文も、上限を超えたら 413", async () => {
+    const { h, alice } = await twoMembers();
+    const big = new TextEncoder().encode(JSON.stringify({ name: "x".repeat(32 * 1024) }));
+    const res = await h.app.request("/v1/agents", {
+      method: "POST",
+      headers: { authorization: `Bearer ${alice.token}`, "content-type": "application/json" },
+      body: new ReadableStream({
+        start(c) {
+          c.enqueue(big);
+          c.close();
+        },
+      }),
+      duplex: "half",
+    } as RequestInit);
+    expect(res.status).toBe(413);
   });
 });
 

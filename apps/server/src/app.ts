@@ -1,9 +1,10 @@
 import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import { type Auth, type Env, authenticate, requireAgent, requireUser } from "./auth.ts";
+import { type Env, authenticate, requireAgent, requireUser } from "./auth.ts";
 import type { Config } from "./config.ts";
 import type { DB } from "./db/index.ts";
-import { sha256 } from "./crypto.ts";
+import { safeEqual } from "./crypto.ts";
 import { ApiError, badRequest, forbidden, notFound } from "./errors.ts";
 import { isLoopback, isPrivateOrLoopback, normalizeIp } from "./net.ts";
 import { RateLimiter } from "./ratelimit.ts";
@@ -12,7 +13,7 @@ import * as groups from "./services/groups.ts";
 import * as inboxSvc from "./services/inbox.ts";
 import * as posts from "./services/posts.ts";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.3.0";
 
 export type AppDeps = {
   db: DB;
@@ -109,12 +110,13 @@ export function createApp(deps: AppDeps) {
     }
   });
 
-  app.use("/v1/*", async (c, next) => {
-    const limit = c.req.method === "POST" && c.req.path === "/v1/posts" ? POST_BODY_LIMIT : BODY_LIMIT;
-    const len = Number(c.req.header("content-length") ?? 0);
-    if (len > limit) throw new ApiError(413, "payload_too_large", "リクエストが大きすぎます");
-    await next();
-  });
+  // Content-Length がない（chunked の）要求も、読みながら数えて上限を超えたところで打ち切る
+  const tooLarge = () => {
+    throw new ApiError(413, "payload_too_large", "リクエストが大きすぎます");
+  };
+  const limitBody = bodyLimit({ maxSize: BODY_LIMIT, onError: tooLarge });
+  const limitPostBody = bodyLimit({ maxSize: POST_BODY_LIMIT, onError: tooLarge });
+  app.use("/v1/*", (c, next) => (c.req.method === "POST" && c.req.path === "/v1/posts" ? limitPostBody : limitBody)(c, next));
 
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/v1/instance", (c) =>
@@ -153,12 +155,11 @@ export function createApp(deps: AppDeps) {
   // 最初の admin を作る。SOUIEBA_BOOTSTRAP_TOKEN を知っていて、admin が1人もいないときだけ使える
   app.post("/v1/admin/bootstrap", async (c) => {
     if (!config.bootstrapToken) throw notFound("ページ");
-    if (!redeemLimiter.take(`redeem:${c.get("clientIp")}`, now().getTime())) {
+    if (!redeemLimiter.take(`bootstrap:${c.get("clientIp")}`, now().getTime())) {
       throw new ApiError(429, "rate_limited", "試行回数が多すぎます。時間をおいてください");
     }
     const input = await body(c, z.object({ token: z.string().max(200), handle: z.string(), displayName: z.string() }));
-    // 長さや内容で時間差が出ないよう、ハッシュどうしを比べる
-    if (sha256(input.token) !== sha256(config.bootstrapToken)) throw new ApiError(401, "unauthorized", "認証に失敗しました");
+    if (!safeEqual(input.token, config.bootstrapToken)) throw new ApiError(401, "unauthorized", "認証に失敗しました");
     const r = accounts.bootstrapAdmin(db, input, now(), config.limits);
     log({ level: "info", msg: "admin", action: "bootstrap", user: r.user.id, ip: c.get("clientIp") });
     return c.json({ user: accounts.publicUser(r.user), adminToken: r.adminToken, loginCode: r.login.code, expiresAt: r.login.expiresAt }, 201);
@@ -308,8 +309,13 @@ export function createApp(deps: AppDeps) {
 
   // admin API（admin 専用トークン）。souieba-admin --url から使う
   const admin = new Hono<Env>();
+  // v1 の共通の検査でも弾いているが、admin API の中でも admin 専用トークンであることを確かめる
+  admin.use("*", async (c, next) => {
+    if (c.get("auth").kind !== "admin") throw forbidden("admin 専用トークンが必要です");
+    await next();
+  });
   const audit = (c: Context<Env>, action: string, extra: Record<string, unknown> = {}) =>
-    log({ level: "info", msg: "admin", action, by: (c.get("auth") as Auth).userId, ip: c.get("clientIp"), ...extra });
+    log({ level: "info", msg: "admin", action, by: c.get("auth").userId, ip: c.get("clientIp"), ...extra });
   const userByHandle = (handle: string) => {
     const u = accounts.getUserByHandle(db, handle);
     if (!u) throw notFound("ユーザー");

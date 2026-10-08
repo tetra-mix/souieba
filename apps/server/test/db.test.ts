@@ -21,11 +21,14 @@ function shape(raw: DatabaseSync) {
         fks: q(`PRAGMA foreign_key_list(${t})`)
           .map((f) => `${f.from}->${f.table}.${f.to} ${f.on_delete}`)
           .sort(),
-        // 旧スキーマの一意制約は無名（sqlite_autoindex_*）なので、名前ではなく列で比べる
-        unique: q(`PRAGMA index_list(${t})`)
-          .filter((i) => i.unique && i.origin !== "pk")
-          .map((i) => (q(`PRAGMA index_info(${i.name})`) as { name: string }[]).map((c) => c.name).join(","))
-          .sort(),
+        // 旧スキーマの一意制約は無名（sqlite_autoindex_*）で、引き継ぐときに同じ列の名前付きのものも作るので、列の組で比べる
+        unique: [
+          ...new Set(
+            q(`PRAGMA index_list(${t})`)
+              .filter((i) => i.unique && i.origin !== "pk")
+              .map((i) => (q(`PRAGMA index_info(${i.name})`) as { name: string }[]).map((c) => c.name).join(",")),
+          ),
+        ].sort(),
         indexes: q(`PRAGMA index_list(${t})`)
           .filter((i) => !i.unique)
           .map((i) => (q(`PRAGMA index_info(${i.name})`) as { name: string }[]).map((c) => c.name).join(","))
@@ -81,5 +84,41 @@ describe("マイグレーション", () => {
   it("Friend の時代の DB（v1）は、先に 0.2 系で移行するよう求める", () => {
     const { storage, db } = legacyDb(1);
     expect(() => migrate(db, { legacyVersion: () => storage.legacyVersion() })).toThrow(/0\.2 系/);
+  });
+
+  it("引き継いだ DB にも、ベースラインと同じ名前の一意インデックスがある（後のマイグレーションが名前で扱えるように）", () => {
+    const fresh = openDb(":memory:");
+    migrate(fresh.db);
+    const legacy = legacyDb(2);
+    migrate(legacy.db, { legacyVersion: () => legacy.storage.legacyVersion() });
+    const named = (raw: DatabaseSync) =>
+      (raw.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]).map(
+        (r) => r.name,
+      );
+    expect(named(legacy.raw)).toEqual(expect.arrayContaining(named(fresh.storage.raw)));
+  });
+
+  it("バージョンの記録がない DB（Souieba のものでない）は、そう伝えて止める", () => {
+    const raw = new DatabaseSync(":memory:");
+    raw.exec("CREATE TABLE users (id TEXT)");
+    const storage = new NodeSqlStorage(raw);
+    expect(() => migrate(createDb(storage), { legacyVersion: () => storage.legacyVersion() })).toThrow(/Souieba のものではない/);
+  });
+});
+
+describe("node:sqlite のトランザクション", () => {
+  it("COMMIT が失敗しても、トランザクションが開いたまま残らない", () => {
+    const { db, storage } = openDb(":memory:");
+    migrate(db);
+    // 外部キーの検査を COMMIT まで遅らせ、COMMIT を失敗させる
+    expect(() =>
+      storage.transactionSync(() => {
+        storage.raw.exec("PRAGMA defer_foreign_keys = ON");
+        storage.raw.exec("INSERT INTO agents (id, owner_id, name, created_at) VALUES ('a1', 'missing', 'x', 't')");
+      }),
+    ).toThrow(/FOREIGN KEY/);
+    expect(storage.raw.isTransaction).toBe(false);
+    // その後のトランザクションも普通に使える
+    expect(storage.transactionSync(() => 1)).toBe(1);
   });
 });

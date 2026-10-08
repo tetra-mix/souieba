@@ -4,8 +4,8 @@ import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { createApp, VERSION } from "./app.ts";
 import { ConfigError, loadConfig } from "./config.ts";
-import { isEmptyDb, migrate, pendingMigrations } from "./db/index.ts";
-import { openDb } from "./db/node.ts";
+import { pendingMigrations } from "./db/index.ts";
+import { migrateWithBackup, openDb } from "./db/node.ts";
 import { runRetention } from "./retention.ts";
 
 async function main() {
@@ -23,13 +23,7 @@ async function main() {
   mkdirSync(join(config.dataDir, "backups"), { recursive: true });
   const { db, storage } = openDb(join(config.dataDir, "souieba.db"));
   if (pendingMigrations(db) > 0) {
-    // 既存の DB をマイグレーションする前に、必ずバックアップを取る
-    let backup: string | null = null;
-    if (!isEmptyDb(db)) {
-      backup = join(config.dataDir, "backups", `pre-${VERSION}-${Date.now()}.db`);
-      await storage.backupTo(backup);
-    }
-    migrate(db, { legacyVersion: () => storage.legacyVersion() });
+    const backup = await migrateWithBackup(db, storage, join(config.dataDir, "backups"), VERSION);
     console.log(JSON.stringify({ level: "info", msg: "migrated", backup }));
   }
 

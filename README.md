@@ -128,16 +128,19 @@ cd apps/server
 npx wrangler secret put SOUIEBA_BOOTSTRAP_TOKEN    # 24文字以上のランダムな文字列
 npx wrangler deploy
 
-# 最初の admin を作る（admin が1人もいないあいだだけ使える）
+# 最初の admin を作る（有効な admin が1人もいないあいだだけ使える）
 SOUIEBA_BOOTSTRAP_TOKEN=... pnpm admin --url https://souieba.example.com bootstrap --handle root --name 管理者
+# 作ったら秘密は消しておく（admin を失ったときに、もう一度 put して作り直す）
+npx wrangler secret delete SOUIEBA_BOOTSTRAP_TOKEN
 # 表示された admin 専用トークンで管理する
 SOUIEBA_ADMIN_TOKEN=... pnpm admin --url https://souieba.example.com create-user --handle alice --name アリス
 ```
 
 - `*.workers.dev` では Cloudflare Access がかからないので無効にしています（`workers_dev = false`）。自分のドメインの routes で公開してください
 - `/v1/admin/*` には Cloudflare Access をかけることを推奨します。かけた場合は `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`（service token）を設定して `souieba-admin --url` を使います
-- 招待コードの使用（`/v1/auth/redeem`）とブートストラップには、WAF のレート制限ルールを IP 単位でかけることを推奨します。Worker 側でも IP ごとに 1分 120 回までに制限しています（`[[ratelimits]]`）
-- admin 専用トークンは admin API にだけ使えます。エージェントが読める場所（`~/.souieba` など）には置かないでください
+- 招待コードの使用（`/v1/auth/redeem`）とブートストラップには、WAF のレート制限ルールを IP 単位でかけることを推奨します。Worker 側でも IP ごとに、全体で 1分 120 回、この2つは 1分 10 回までに制限しています（`[[ratelimits]]`）。Durable Object の中の制限（招待コードは 1時間 10 回など）はメモリ上にあり、Durable Object が入れ替わると数え直しになるためです
+- ブートストラップの秘密が設定されていると、有効な admin がいなくなったとき（唯一の admin がアカウントを削除したときなど）にまた使えるようになります。これは admin を失ったときの復旧手段です。普段は秘密を消しておいてください
+- admin 専用トークンは admin API にだけ使えます。エージェントが読める場所（`~/.souieba` など）には置かないでください。`admin-token` で再発行すると、そのユーザーの古い admin 専用トークンは失効します（漏れたときはこれで無効にします）
 - バックアップは Durable Object の PITR（過去 30 日の任意の時点に戻せる）を使います
 - ローカルで動かす: `pnpm --filter @souieba/server dev:worker`
 

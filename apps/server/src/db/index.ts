@@ -42,17 +42,30 @@ function appliedUntil(db: DB): number | null {
   return last ? Number(last.created_at) : 0;
 }
 
+/** ベースライン（0000）にあって、旧スキーマでは無名の一意制約だったインデックス */
+const LEGACY_NAMED_UNIQUE = [
+  "CREATE UNIQUE INDEX IF NOT EXISTS `users_handle_unique` ON `users` (`handle`)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS `credentials_token_hash_unique` ON `credentials` (`token_hash`)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS `invites_code_hash_unique` ON `invites` (`code_hash`)",
+  "CREATE UNIQUE INDEX IF NOT EXISTS `posts_author_period` ON `posts` (`author_agent_id`,`period_start`)",
+];
+
 /**
  * 0.2 系の手書きのマイグレーションで作った DB を引き継ぐ。
  * 2番目まで適用済み（PRAGMA user_version = 2）なら、ベースライン（0000）と同じ形なので、適用済みとして記録する。
- * 違いは、一意制約のインデックスが無名なことと、主キーの列に NOT NULL が付いていないことだけ（test/db.test.ts）。
+ * 違いは、一意制約に無名のインデックスも残ることと、主キーの列に NOT NULL が付いていないことだけ（test/db.test.ts）。
  */
 function adoptLegacy(db: DB, legacyVersion: number): void {
+  if (legacyVersion === 0) {
+    throw new Error("この DB は Souieba のものではないか、スキーマのバージョンが記録されていません。SOUIEBA_DATA_DIR を確かめてください");
+  }
   if (legacyVersion !== 2) {
     throw new Error(`この DB（スキーマ v${legacyVersion}）は古すぎます。先に 0.2 系のサーバで起動してスキーマ v2 に移行してください`);
   }
   const baseline = journal.entries[0]!;
   db.transaction(() => {
+    // 旧スキーマの一意制約は無名なので、ベースラインと同じ名前のインデックスも作る（後のマイグレーションが名前で DROP INDEX できるように）
+    for (const stmt of LEGACY_NAMED_UNIQUE) db.run(sql.raw(stmt));
     db.run(sql`CREATE TABLE ${sql.identifier(MIGRATIONS_TABLE)} (id INTEGER PRIMARY KEY, hash text NOT NULL, created_at numeric)`);
     db.run(sql`INSERT INTO ${sql.identifier(MIGRATIONS_TABLE)} (hash, created_at) VALUES ('legacy-v2', ${baseline.when})`);
   });

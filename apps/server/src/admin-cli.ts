@@ -7,8 +7,8 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { migrate } from "./db/index.ts";
-import { openDb } from "./db/node.ts";
+import { VERSION } from "./app.ts";
+import { migrateWithBackup, openDb } from "./db/node.ts";
 import { ApiError } from "./errors.ts";
 import * as accounts from "./services/accounts.ts";
 import * as groups from "./services/groups.ts";
@@ -21,8 +21,8 @@ const USAGE = `使い方: souieba-admin [--url <サーバURL>] <command> [option
   list-groups                                         グループ一覧（名前・人数。投稿本文はサーバでは読めません）
   disable-user --handle <h>                           ユーザーを無効化
   list-users                                          ユーザー一覧
-  admin-token --handle <h>                            admin 専用トークンを発行（admin API 用。admin のユーザーだけ）
-  backup      [path]                                  DB のバックアップ（VACUUM INTO。--url なしのときだけ）
+  admin-token --handle <h>                            admin 専用トークンを発行（admin API 用。admin のユーザーだけ。古いものは失効）
+  backup      [path]                                  DB のバックアップ（SQLite のオンラインバックアップ。--url なしのときだけ）
   bootstrap   --handle <h> --name <表示名>             最初の admin を作る（--url のときだけ。admin が1人もいないあいだだけ）
 
 --url なし: 環境変数 SOUIEBA_DATA_DIR（既定 /data）の souieba.db を直接操作します。
@@ -48,11 +48,13 @@ type Backend = {
   backup(path?: string): Promise<string>;
 };
 
-function localBackend(): Backend {
+async function localBackend(): Promise<Backend> {
   const dataDir = process.env.SOUIEBA_DATA_DIR ?? "/data";
   mkdirSync(dataDir, { recursive: true });
   const { db, storage } = openDb(join(dataDir, "souieba.db"));
-  migrate(db, { legacyVersion: () => storage.legacyVersion() });
+  // サーバより先に新しい版の souieba-admin を実行した場合も、サーバの起動時と同じくバックアップしてから移行する
+  const backup = await migrateWithBackup(db, storage, join(dataDir, "backups"), VERSION);
+  if (backup) console.error(`DB を移行しました（移行前のバックアップ: ${backup}）`);
   const now = new Date();
   const userByHandle = (handle: string) => {
     const u = accounts.getUserByHandle(db, handle);
@@ -62,9 +64,11 @@ function localBackend(): Backend {
   const view = (u: accounts.UserRow): UserView => ({ ...accounts.publicUser(u), disabledAt: u.disabledAt });
   return {
     async createUser(handle, displayName, admin) {
-      const u = accounts.createUser(db, { handle, displayName, role: admin ? "admin" : "member" }, now);
-      const { code, expiresAt } = accounts.issueLoginCode(db, u.id, now);
-      return { user: view(u), loginCode: code, expiresAt };
+      return db.transaction(() => {
+        const u = accounts.createUser(db, { handle, displayName, role: admin ? "admin" : "member" }, now);
+        const { code, expiresAt } = accounts.issueLoginCode(db, u.id, now);
+        return { user: view(u), loginCode: code, expiresAt };
+      });
     },
     async loginCode(handle) {
       const { code, expiresAt } = accounts.issueLoginCode(db, userByHandle(handle).id, now);
@@ -160,7 +164,7 @@ async function main(argv: string[]) {
     return;
   }
   const url = values.url ?? process.env.SOUIEBA_ADMIN_URL;
-  const backend = url ? httpBackend(url) : localBackend();
+  const backend = url ? httpBackend(url) : await localBackend();
   const handle = () => {
     if (!values.handle) throw new Error("--handle が必要です");
     return values.handle;
@@ -210,6 +214,7 @@ async function main(argv: string[]) {
     case "admin-token": {
       const token = await backend.adminToken(handle());
       console.log(`admin 専用トークン: ${token}`);
+      console.log(`@${handle()} の古い admin 専用トークンは失効しました（自分のものなら SOUIEBA_ADMIN_TOKEN を差し替えてください）。`);
       console.log(
         "このトークンは admin API にだけ使えます。パスワードマネージャーなどに保管し、エージェントが読める場所には置かないでください。",
       );

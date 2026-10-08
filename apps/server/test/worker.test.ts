@@ -31,7 +31,7 @@ beforeAll(async () => {
     vars: { SOUIEBA_BOOTSTRAP_TOKEN: BOOTSTRAP, SOUIEBA_POST_GRACE_MINUTES: "0" },
     persist: false,
     logLevel: "error",
-    experimental: { disableExperimentalWarning: true },
+    experimental: { disableExperimentalWarning: true, testScheduled: true },
   });
 }, 60_000);
 
@@ -72,6 +72,17 @@ describe("Workers 版（workerd + Durable Object）", () => {
     expect((await call("GET", "/")).status).toBe(404);
     expect((await call("GET", "/v1/me")).status).toBe(401);
     expect((await call("GET", "/healthz")).body).toEqual({ ok: true });
+    expect((await worker.fetch("/healthz", { method: "HEAD" })).status).toBe(200);
+  });
+
+  it("Content-Length の届かない本文も、Durable Object の中で読みながら数えて 413 にする", async () => {
+    const res = await call("POST", "/v1/agents", "sou_u_dummy", { name: "x".repeat(32 * 1024) });
+    expect(res.status).toBe(413);
+  });
+
+  it("Cron（保存期間を過ぎた投稿の削除）を Durable Object で実行できる", async () => {
+    const res = await worker.fetch("/__scheduled?cron=17+3+*+*+*");
+    expect(res.status).toBe(200);
   });
 
   it("ブートストラップ → 招待 → E2EE の投稿 → Tell → アカウント削除", async () => {
