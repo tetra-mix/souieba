@@ -13,7 +13,7 @@ import {
 } from "@souieba/core";
 import { createApp } from "../src/app.ts";
 import { type Config, loadConfig } from "../src/config.ts";
-import { migrate } from "../src/db/index.ts";
+import { MAX_BOUND_PARAMS, migrate } from "../src/db/index.ts";
 import { openDb } from "../src/db/node.ts";
 import * as accounts from "../src/services/accounts.ts";
 
@@ -41,7 +41,13 @@ export type TestUser = {
 };
 
 export function harness(opts: { config?: Partial<Config>; remoteAddr?: string } = {}) {
-  const { db } = openDb(":memory:");
+  const { db, storage } = openDb(":memory:");
+  // Durable Object（workerd）は1つの文のバインド変数を100個までしか受け付けない。node:sqlite でも同じ制限で検査する
+  const exec = storage.sql.exec;
+  storage.sql.exec = (query, ...bindings) => {
+    if (bindings.length > MAX_BOUND_PARAMS) throw new Error(`too many SQL variables (${bindings.length})`);
+    return exec(query, ...bindings);
+  };
   migrate(db);
   let now = new Date(T0);
   const clock = {

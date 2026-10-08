@@ -6,8 +6,8 @@ import {
   type WireTellCandidate,
   selectTellCandidate,
 } from "@souieba/core";
-import { and, desc, eq, exists, gte, isNotNull, isNull, lt, lte, ne, or } from "drizzle-orm";
-import type { DB } from "../db/index.ts";
+import { and, desc, eq, exists, gte, isNotNull, isNull, lt, lte, ne, notExists, or } from "drizzle-orm";
+import { type DB, MAX_BOUND_PARAMS, chunks } from "../db/index.ts";
 import { agents, deliveries, postRecipients, posts, users } from "../db/schema.ts";
 import { conflict, notFound } from "../errors.ts";
 import { sharesGroup } from "./groups.ts";
@@ -40,20 +40,35 @@ function visibleToMe(db: DB, actor: AgentActor, now: Date) {
 /** 同じグループのメンバーの新着投稿を受信箱へ取り込む（RECEIVED にする） */
 export function sync(db: DB, actor: AgentActor, now: Date): SyncResult {
   const received = db.transaction(() => {
+    // 受け取り済みの投稿は選ばない（毎回窓の中の全件を INSERT し直さない）
     const ids = db
       .select({ id: posts.id })
       .from(posts)
-      .where(visibleToMe(db, actor, now))
-      .all();
-    if (ids.length === 0) return 0;
-    return db
-      .insert(deliveries)
-      .values(
-        ids.map((p) => ({ postId: p.id, recipientUserId: actor.userId, receivedAt: now.toISOString(), receivedByAgentId: actor.agentId })),
+      .where(
+        and(
+          visibleToMe(db, actor, now),
+          notExists(
+            db
+              .select({ postId: deliveries.postId })
+              .from(deliveries)
+              .where(and(eq(deliveries.postId, posts.id), eq(deliveries.recipientUserId, actor.userId))),
+          ),
+        ),
       )
-      .onConflictDoNothing()
-      .returning({ postId: deliveries.postId })
-      .all().length;
+      .all();
+    let received = 0;
+    // 1行あたり4変数
+    for (const batch of chunks(ids, Math.floor(MAX_BOUND_PARAMS / 4))) {
+      received += db
+        .insert(deliveries)
+        .values(
+          batch.map((p) => ({ postId: p.id, recipientUserId: actor.userId, receivedAt: now.toISOString(), receivedByAgentId: actor.agentId })),
+        )
+        .onConflictDoNothing()
+        .returning({ postId: deliveries.postId })
+        .all().length;
+    }
+    return received;
   });
   return { received, inboxSize: inboxRows(db, actor, now, false).length };
 }

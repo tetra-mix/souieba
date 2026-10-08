@@ -16,6 +16,16 @@ export type SqlStorageLike = {
   transactionSync<T>(fn: () => T): T;
 };
 
+/** Durable Object の SQLite は、1つの文のバインド変数を100個までしか受け付けない（node:sqlite はもっと多い） */
+export const MAX_BOUND_PARAMS = 100;
+
+/** 複数行の INSERT や inArray を、バインド変数の上限に収まる大きさに分ける */
+export function chunks<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
 export function createDb(storage: SqlStorageLike): DB {
   return drizzle(storage as never, { schema });
 }

@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { schema } from "../src/db/index.ts";
 import { runRetention } from "../src/retention.ts";
 import * as accounts from "../src/services/accounts.ts";
+import * as groups from "../src/services/groups.ts";
 import { harness, testConfig, twoMembers } from "./harness.ts";
 
 const MIN = 60_000;
@@ -537,6 +538,32 @@ describe("上限", () => {
     const carol = await h.user("carol", "キャロル");
     const other = await h.createGroup(carol, "別のグループ");
     expect((await h.join(carol, other, bob)).body.error.code).toBe("limit_groups_per_user");
+  });
+
+  it("宛先が多い投稿・受信箱にたまった投稿・大きなディレクトリでも、1つの文のバインド変数が100個を超えない", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    // 宛先が51件（2変数 × 51 > 100）の投稿
+    for (let i = 0; i < 49; i++) {
+      if (i === 25) h.clock.advance(MIN);
+      await h.addAgent(alice, `予備${i}`);
+    }
+    expect((await h.publish(alice, "宛先が多い")).status).toBe(201);
+    // 48時間の窓に30件（4変数 × 30 > 100）。sync を毎回呼んでも、すでに受け取った投稿で増えない
+    for (let i = 0; i < 29; i++) {
+      h.clock.advance(60 * MIN);
+      expect((await h.publish(bob, `近況${i}`)).status).toBe(201);
+    }
+    h.clock.advance(60 * MIN);
+    expect((await h.call("POST", "/v1/sync", alice.agentToken)).body).toEqual({ received: 29, inboxSize: 29 });
+    expect((await h.call("POST", "/v1/sync", alice.agentToken)).body.received).toBe(0);
+    // 101人以上が載るディレクトリと、101個以上のグループの一覧
+    for (let i = 0; i < 101; i++) {
+      const u = accounts.createUser(h.db, { handle: `u${i}`, displayName: `u${i}` }, h.clock.now);
+      h.db.insert(schema.groupMembers).values({ groupId, userId: u.id, role: "member", joinedAt: h.clock.now.toISOString() }).run();
+      h.db.insert(schema.groups).values({ id: `grp_extra${i}`, name: `g${i}`, createdBy: u.id, createSig: "x", createdAt: h.clock.now.toISOString() }).run();
+    }
+    expect(groups.directory(h.db, { userId: alice.id, agentId: null }).users).toHaveLength(103);
+    expect(groups.listAllGroups(h.db)).toHaveLength(102);
   });
 
   it("インスタンスのユーザー数の上限を超えて登録できない", async () => {

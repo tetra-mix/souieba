@@ -16,7 +16,7 @@ import { type SQLWrapper, and, count, eq, exists, inArray, isNotNull, isNull, no
 import { alias } from "drizzle-orm/sqlite-core";
 import type { Limits } from "../config.ts";
 import { codeHash, newId } from "../crypto.ts";
-import type { DB } from "../db/index.ts";
+import { type DB, MAX_BOUND_PARAMS, chunks } from "../db/index.ts";
 import { type InviteRow, type MemberRow, agents, groupMembers, groups, invites, users } from "../db/schema.ts";
 import { ApiError, badRequest, conflict, forbidden, notFound } from "../errors.ts";
 
@@ -102,13 +102,14 @@ export function createGroup(
 
 /** グループごとの今の人数 */
 function memberCounts(db: DB, groupIds: string[]): Map<string, number> {
-  if (groupIds.length === 0) return new Map();
-  const rows = db
-    .select({ groupId: groupMembers.groupId, n: count() })
-    .from(groupMembers)
-    .where(and(inArray(groupMembers.groupId, groupIds), isActive))
-    .groupBy(groupMembers.groupId)
-    .all();
+  const rows = chunks(groupIds, MAX_BOUND_PARAMS).flatMap((batch) =>
+    db
+      .select({ groupId: groupMembers.groupId, n: count() })
+      .from(groupMembers)
+      .where(and(inArray(groupMembers.groupId, batch), isActive))
+      .groupBy(groupMembers.groupId)
+      .all(),
+  );
   return new Map(rows.map((r) => [r.groupId, r.n]));
 }
 
@@ -321,25 +322,30 @@ export function directory(db: DB, me: { userId: string; agentId: string | null }
     };
   });
 
-  const ids = [...userIds];
-  const userRows = db
-    .select({ id: users.id, handle: users.handle, displayName: users.displayName, identityKey: users.identityKey })
-    .from(users)
-    .where(and(inArray(users.id, ids), isNull(users.disabledAt)))
-    .all();
-  const agentRows = db
-    .select({
-      id: agents.id,
-      ownerId: agents.ownerId,
-      name: agents.name,
-      encKey: agents.encKey,
-      signKey: agents.signKey,
-      cert: agents.cert,
-    })
-    .from(agents)
-    .where(and(inArray(agents.ownerId, ids), isNull(agents.revokedAt), isNotNull(agents.encKey)))
-    .orderBy(agents.createdAt)
-    .all();
+  // 同じ人の Agent は同じ塊に入るので、塊ごとの createdAt の順がそのまま使える
+  const batches = chunks([...userIds], MAX_BOUND_PARAMS);
+  const userRows = batches.flatMap((ids) =>
+    db
+      .select({ id: users.id, handle: users.handle, displayName: users.displayName, identityKey: users.identityKey })
+      .from(users)
+      .where(and(inArray(users.id, ids), isNull(users.disabledAt)))
+      .all(),
+  );
+  const agentRows = batches.flatMap((ids) =>
+    db
+      .select({
+        id: agents.id,
+        ownerId: agents.ownerId,
+        name: agents.name,
+        encKey: agents.encKey,
+        signKey: agents.signKey,
+        cert: agents.cert,
+      })
+      .from(agents)
+      .where(and(inArray(agents.ownerId, ids), isNull(agents.revokedAt), isNotNull(agents.encKey)))
+      .orderBy(agents.createdAt)
+      .all(),
+  );
 
   const directoryUsers: DirectoryUser[] = userRows.map((u) => ({
     ...u,

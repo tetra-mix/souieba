@@ -9,3 +9,4 @@ dist/
 *.tsbuildinfo
 .wrangler/
 .dev.vars*
+.reviews/

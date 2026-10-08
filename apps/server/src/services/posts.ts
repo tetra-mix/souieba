@@ -1,7 +1,7 @@
 import { type PostEnvelope, type PublishResult, validatePeriod, verifyPostSignature } from "@souieba/core";
 import { newId } from "../crypto.ts";
 import { and, desc, eq } from "drizzle-orm";
-import type { DB } from "../db/index.ts";
+import { type DB, MAX_BOUND_PARAMS, chunks } from "../db/index.ts";
 import { agents, postRecipients, posts } from "../db/schema.ts";
 import { badRequest, conflict, forbidden, notFound } from "../errors.ts";
 import { getAgent } from "./accounts.ts";
@@ -76,10 +76,12 @@ export function upsertPost(
         })
         .run();
     }
-    if (recipients.length > 0)
+    // 1行あたり2変数
+    for (const batch of chunks(recipients, Math.floor(MAX_BOUND_PARAMS / 2))) {
       db.insert(postRecipients)
-        .values(recipients.map((agentId) => ({ postId, agentId })))
+        .values(batch.map((agentId) => ({ postId, agentId })))
         .run();
+    }
     return { postId, visibleAt, created: !existing };
   });
 }
