@@ -1,6 +1,6 @@
-# インターネット公開の構成（VPS など）。Caddy が HTTPS を終端し、サーバはホストに公開しない。
-#   cp .env.public.example .env.public && 編集
-#   docker compose -f compose.public.yml --env-file .env.public up -d
+# セルフホストの構成（VPS や自宅のサーバ）。Caddy が HTTPS を終端し、サーバはホストに公開しない。
+#   cp .env.example .env && 編集
+#   docker compose up -d
 # 投稿本文は E2EE なので、サーバ（とその管理者・VPS 事業者）は本文を読めない。
 services:
   caddy:
@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     ports: ["80:80", "443:443", "443:443/udp"]
     environment:
-      SOUIEBA_DOMAIN: ${SOUIEBA_DOMAIN:?.env.public に SOUIEBA_DOMAIN を設定してください}
+      SOUIEBA_DOMAIN: ${SOUIEBA_DOMAIN:?.env に SOUIEBA_DOMAIN を設定してください}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -24,7 +24,6 @@ services:
     # ports は書かない。同じ Docker ネットワークの Caddy からだけ届く
     expose: ["8080"]
     environment:
-      SOUIEBA_EXPOSURE: public
       SOUIEBA_BIND: 0.0.0.0
       # Caddy は Docker のブリッジ（プライベート IP）から接続してくる
       SOUIEBA_TRUST_PROXY: private

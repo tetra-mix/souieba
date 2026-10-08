@@ -372,14 +372,12 @@ describe("認証", () => {
 
   it("失効した Agent・無効化されたユーザー・不正なトークンは 401", async () => {
     const h = harness();
-    const admin = await h.user("root", "管理者", "admin");
     const bob = await h.user("bob", "ボブ");
     expect((await h.call("GET", "/v1/me", "sou_a_nonexistenttoken")).status).toBe(401);
     expect((await h.call("GET", "/v1/me")).status).toBe(401);
     await h.call("DELETE", `/v1/agents/${bob.agentId}`, bob.token);
     expect((await h.call("POST", "/v1/sync", bob.agentToken)).status).toBe(401);
-    expect((await h.call("POST", `/v1/admin/users/${bob.id}/disable`, bob.token)).status).toBe(403);
-    expect((await h.call("POST", `/v1/admin/users/${bob.id}/disable`, admin.token)).status).toBe(204);
+    accounts.disableUser(h.db, bob.id, h.clock.now);
     expect((await h.call("GET", "/v1/me", bob.token)).status).toBe(401);
   });
 
@@ -397,13 +395,6 @@ describe("認証", () => {
 });
 
 describe("ネットワーク", () => {
-  it("ALLOWED_CIDRS の範囲外からの接続は 403", async () => {
-    const h = harness({ config: { allowedCidrs: [{ base: 0x0a080000, mask: 0xffffff00 }] }, remoteAddr: "10.8.0.5" });
-    expect((await h.call("GET", "/healthz")).status).toBe(200);
-    h.setIp("203.0.113.9");
-    expect((await h.call("GET", "/healthz")).status).toBe(403);
-  });
-
   it("信頼するプロキシが付けた X-Forwarded-For の末尾だけを使う（先頭は偽れる）", async () => {
     const h = harness({ remoteAddr: "127.0.0.1" });
     const redeem = (xff: string) => h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" }, { "x-forwarded-for": xff });
@@ -425,9 +416,9 @@ describe("ネットワーク", () => {
   });
 });
 
-describe("公開モード", () => {
+describe("公開", () => {
   it("admin API は HTTP からは使えず、インスタンス情報にバージョンを出さない", async () => {
-    const h = harness({ config: { exposure: "public", trustProxy: "private" } });
+    const h = harness();
     const admin = await h.user("root", "管理者", "admin");
     const bob = await h.user("bob", "ボブ");
     expect((await h.call("GET", "/v1/admin/users", admin.token)).status).toBe(404);

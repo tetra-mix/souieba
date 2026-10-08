@@ -65,12 +65,6 @@ export function requireUser(c: Context<Env>): Auth {
   return a;
 }
 
-export function requireAdmin(c: Context<Env>): Auth {
-  const a = requireUser(c);
-  if (a.role !== "admin") throw forbidden("管理者だけが実行できます");
-  return a;
-}
-
 export function requireAgent(c: Context<Env>, scope: string): Auth & { agentId: string } {
   const a = c.get("auth");
   if (a.kind !== "agent" || !a.agentId) throw forbidden("Agent トークンが必要です");

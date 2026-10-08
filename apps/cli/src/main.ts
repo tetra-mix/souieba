@@ -520,7 +520,7 @@ async function doctor() {
     return;
   }
   if (!cfg.serverUrl) return ng("サーバが未設定です");
-  if (!cfg.serverUrl.startsWith("https:")) warn("http で接続しています（VPN が暗号化している前提）");
+  if (!cfg.serverUrl.startsWith("https:")) warn("http で接続しています（開発用のローカルサーバ以外では使わないでください）");
   try {
     const started = Date.now();
     const inst = await publicGet<{ name: string; version?: string }>(cfg.serverUrl, "/v1/instance");

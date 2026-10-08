@@ -20,7 +20,7 @@ export const T0 = new Date("2026-10-05T14:20:00Z");
 
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
-    ...loadConfig({ SOUIEBA_PUBLIC_URL: "https://souieba.test.ts.net", SOUIEBA_DATA_DIR: "/tmp" }),
+    ...loadConfig({ SOUIEBA_PUBLIC_URL: "https://souieba.test", SOUIEBA_DATA_DIR: "/tmp" }),
     logLevel: "error",
     ...overrides,
   };

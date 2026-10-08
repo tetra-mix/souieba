@@ -121,7 +121,7 @@ export interface Db {
 | 接続元の IP | `getConnInfo` + `X-Forwarded-For`（`TRUST_PROXY`） | `CF-Connecting-IP`。`createApp` の `deps.remoteAddr` で差し替える |
 | レート制限 | メモリ上 | Worker の段階（§8）＋ Durable Object のメモリ上（今の `RateLimiter` がそのまま動く） |
 | 設定 | `process.env` | Worker の env bindings を `loadConfig(env)` に渡す |
-| 公開モード | `SOUIEBA_EXPOSURE=vpn\|public` | 常に public 相当。https は Cloudflare が終端する。`TRUST_PROXY` は使わない |
+| https の終端 | Caddy | Cloudflare。`TRUST_PROXY` は使わない |
 | `node:net`（`isIP` など） | そのまま | 自前の小さな関数に置き換える（両方とも） |
 | `node:crypto` | そのまま | サーバが使うのは sha256・乱数・Ed25519 の検証だけ。`nodejs_compat` で動くか確かめ、動かなければ WebCrypto に寄せる |
 | バックアップの取り出し | `souieba-admin backup` | admin API に export を足すか、PITR だけにするか（§12） |
@@ -143,9 +143,9 @@ B だけに頼らない。Access は自分のドメインにかける設定な�
 
 ### 7.2 admin API
 
-- 有効・無効を切り替えられるようにする。セルフホストは `SOUIEBA_ADMIN_API=off|on`（**既定は off**。今の「public モードでは `/v1/admin/*` を 404 にする」を引き継ぐ）。Workers ではシェルがないので常に on
+- 有効・無効を切り替えられるようにする。セルフホストは `SOUIEBA_ADMIN_API=off|on`（**既定は off**。今は HTTP の admin API がないので、既定の挙動は変わらない）。Workers ではシェルがないので常に on
 - 認証には、普段のユーザートークンとは別の **admin 専用トークン**（scope `admin`）を使う
-  - 今の admin API（VPN モードだけで使える）は、`role = admin` のユーザーのトークンで呼べる。これを admin 専用トークンに限る
+  - 以前の admin API（VPN モードだけで使えた）は `role = admin` のユーザーのトークンで呼べたが、VPN の廃止とともに削除した。作り直すときは admin 専用トークンに限る
   - Agent のトークンには admin の scope を付けられないようにする
 - `souieba-admin` の操作（create-user / login-code / invite / list-groups / disable-user / list-users）を API に揃える
 - admin API の呼び出しはすべてログに残す

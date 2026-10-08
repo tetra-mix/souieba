@@ -39,7 +39,7 @@ function main() {
   setInterval(retention, 86_400_000).unref();
 
   if (config.publicUrl.startsWith("http:")) {
-    console.warn(JSON.stringify({ level: "warn", msg: "http で動作しています。VPN が通信路を暗号化していることを確認してください" }));
+    console.warn(JSON.stringify({ level: "warn", msg: "http で動作しています（開発用）。公開するときは https にしてください" }));
   }
 
   const app = createApp({ db, config });

@@ -1415,7 +1415,7 @@ async function doctor() {
     return;
   }
   if (!cfg.serverUrl) return ng("\u30B5\u30FC\u30D0\u304C\u672A\u8A2D\u5B9A\u3067\u3059");
-  if (!cfg.serverUrl.startsWith("https:")) warn("http \u3067\u63A5\u7D9A\u3057\u3066\u3044\u307E\u3059\uFF08VPN \u304C\u6697\u53F7\u5316\u3057\u3066\u3044\u308B\u524D\u63D0\uFF09");
+  if (!cfg.serverUrl.startsWith("https:")) warn("http \u3067\u63A5\u7D9A\u3057\u3066\u3044\u307E\u3059\uFF08\u958B\u767A\u7528\u306E\u30ED\u30FC\u30AB\u30EB\u30B5\u30FC\u30D0\u4EE5\u5916\u3067\u306F\u4F7F\u308F\u306A\u3044\u3067\u304F\u3060\u3055\u3044\uFF09");
   try {
     const started = Date.now();
     const inst = await publicGet(cfg.serverUrl, "/v1/instance");

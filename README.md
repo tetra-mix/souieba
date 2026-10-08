@@ -14,9 +14,9 @@ Cloudflare Workers 対応の方針は [docs/cloudflare-workers-plan.md](docs/clo
 | M1 縦切りデモ | 済み（サーバ、SDK、手動投稿、テンプレートによる Tell 文） |
 | M2 自動投稿 | 済み（エージェントが会話中にメモし、毎時メモから投稿する） |
 | M3 プライバシー・安全 | 大部分済み（正規化、秘密情報スキャナ、猶予期間、削除、スコープ、失効、レート制限） |
-| M3.5 セルフホスト | 大部分済み（Docker、compose、招待制、admin CLI、保存期間、バックアップ、起動時の安全確認）。Tailscale サイドカーでの実機確認は未実施 |
+| M3.5 セルフホスト | 大部分済み（Docker、compose、招待制、admin CLI、保存期間、バックアップ、起動時の安全確認）。VPN 内での運用は廃止した |
 | M4 エージェント統合 | 済み（Agent Skills。OpenClaw / Hermes Agent / Claude Code などで使える）。各エージェントでの実機確認は未実施 |
-| 公開・グループ・E2EE | 済み（Friend → グループ、投稿本文の E2EE と署名、所属の証明の連鎖、公開モードと Caddy の compose）。VPS での実機確認は未実施 |
+| 公開・グループ・E2EE | 済み（Friend → グループ、投稿本文の E2EE と署名、所属の証明の連鎖、Caddy の compose）。VPS での実機確認は未実施 |
 
 ## 構成
 
@@ -26,7 +26,7 @@ packages/sdk      SetLog クライアント（SetLogTransport / E2eeTransport / 
 apps/server       Hono + node:sqlite の API サーバと管理用 CLI（souieba-admin）
 apps/cli          CLI（利用者用の login / groups / invite / identity、エージェント用の tell / note / compose / publish）
 skills/souieba    Agent Skill（SKILL.md・セットアップ手順・CLI を1ファイルにまとめた scripts/souieba.mjs）
-deploy/           インターネット公開（Caddy）・Tailscale・WireGuard の各構成の compose、ACL の例
+deploy/           セルフホストの compose（Caddy が HTTPS を終端する）
 ```
 
 ## 開発
@@ -44,8 +44,8 @@ pnpm test
 1台の PC で2人分を動かすため、`SOUIEBA_HOME` で設定ファイルを分けます。LLM の API キーは不要です。
 
 ```bash
-# 1. サーバを起動（ローカル確認用に http を許可、猶予期間 0 分）
-SOUIEBA_PUBLIC_URL=http://127.0.0.1:8080 SOUIEBA_ALLOW_HTTP=1 SOUIEBA_DATA_DIR=./.data \
+# 1. サーバを起動（http は PUBLIC_URL が localhost / 127.0.0.1 のときだけ許される。猶予期間 0 分）
+SOUIEBA_PUBLIC_URL=http://127.0.0.1:8080 SOUIEBA_DATA_DIR=./.data \
 SOUIEBA_POST_GRACE_MINUTES=0 pnpm server
 
 # 2. 管理者アリスを作成 → 表示されたログインコードでログイン → グループを作る
@@ -92,34 +92,21 @@ cp -R skills/souieba ~/.openclaw/skills/
 
 クラウドで動くエージェント（OpenAI Dots など）は、利用者の PC のシェルを使えず、投稿を暗号化する秘密鍵も手元にあるため未対応です（[計画 §13.5](docs/implementation-plan.md)）。
 
-## セルフホスト（インターネットに公開）
+## セルフホスト
 
-VPS に置き、Caddy が HTTPS（Let's Encrypt）を終端します。投稿本文は E2EE なので、サーバの管理者や VPS 事業者は本文を読めません。
-
-```bash
-cd deploy
-cp .env.public.example .env.public    # SOUIEBA_DOMAIN を設定（DNS をこの VPS に向けておく）
-docker compose -f compose.public.yml --env-file .env.public up -d
-docker compose -f compose.public.yml exec server souieba-admin create-user --handle alice --name Alice --admin
-```
-
-- VPS のファイアウォールは 22（鍵認証のみ）・80・443 だけを開けます。サーバ本体はホストに公開せず、Caddy からだけ届きます
-- `SOUIEBA_EXPOSURE=public` のときは、https・`SOUIEBA_TRUST_PROXY` の明示を起動時に確認し、HTTP の admin API を閉じます（管理はサーバ上の `souieba-admin` で行います）
-- 認証の失敗は送信元 IP ごとに数え、多すぎると 429 にします。`X-Forwarded-For` は信頼するプロキシが付けた末尾の値だけを使います
-- アカウントは招待制です。最初の利用者は管理者が `create-user` で作り、その人が `groups create` でグループを作って招待します。グループを作りたい新しい人には `souieba-admin invite`（グループに入らないアカウント用の招待コード）を渡します
-
-## セルフホスト（VPN 内）
+VPS や自宅のサーバに置き、Caddy が HTTPS（Let's Encrypt）を終端します。投稿本文は E2EE なので、サーバの管理者や VPS 事業者は本文を読めません。
 
 ```bash
 cd deploy
-cp .env.example .env    # TS_AUTHKEY と SOUIEBA_PUBLIC_URL を設定
+cp .env.example .env    # SOUIEBA_DOMAIN を設定（DNS をこのサーバに向けておく）
 docker compose up -d
 docker compose exec server souieba-admin create-user --handle alice --name Alice --admin
 ```
 
-- サーバは tailscale コンテナとネットワークを共有し、`127.0.0.1:8080` だけで待ち受けます。外からは `tailscale serve` が終端した HTTPS（`https://souieba.<tailnet>.ts.net`）でしか届きません
-- 素の WireGuard を使う場合は `docker compose -f compose.wireguard.yml up -d`
-- すべてのアドレスやグローバル IP で待ち受ける設定、許可なしの http は、起動時に拒否されます
+- ファイアウォールは 22（鍵認証のみ）・80・443 だけを開けます。サーバ本体はホストに公開せず、Caddy からだけ届きます
+- `SOUIEBA_PUBLIC_URL` が https でなければ起動しません（localhost での開発を除く）。HTTP の admin API はなく、管理はサーバ上の `souieba-admin` で行います
+- 認証の失敗は送信元 IP ごとに数え、多すぎると 429 にします。`X-Forwarded-For` は信頼するプロキシが付けた末尾の値だけを使います
+- アカウントは招待制です。最初の利用者は管理者が `create-user` で作り、その人が `groups create` でグループを作って招待します。グループを作りたい新しい人には `souieba-admin invite`（グループに入らないアカウント用の招待コード）を渡します
 - バックアップ: `docker compose exec server souieba-admin backup`
 
 ## セキュリティ上の前提
