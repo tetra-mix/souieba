@@ -1,29 +1,7 @@
-import { isIP, isIPv4 } from "node:net";
-
-export type Cidr = { base: number; mask: number };
-
-function ipv4ToInt(ip: string): number {
-  return ip.split(".").reduce((acc, oct) => (acc << 8) + Number(oct), 0) >>> 0;
-}
-
-/** IPv4 の CIDR だけに対応する（VPN のアドレス範囲を指定する用途で十分なため） */
-export function parseCidr(cidr: string): Cidr | null {
-  const [ip, bitsStr = "32"] = cidr.split("/");
-  const bits = Number(bitsStr);
-  if (!ip || !isIPv4(ip) || !Number.isInteger(bits) || bits < 0 || bits > 32) return null;
-  const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
-  return { base: ipv4ToInt(ip) & mask, mask };
-}
+import { isIP } from "node:net";
 
 export function normalizeIp(ip: string): string {
   return ip.startsWith("::ffff:") ? ip.slice(7) : ip;
-}
-
-export function ipInCidrs(ip: string, cidrs: Cidr[]): boolean {
-  const v4 = normalizeIp(ip);
-  if (!isIPv4(v4)) return false;
-  const n = ipv4ToInt(v4);
-  return cidrs.some((c) => (n & c.mask) === c.base);
 }
 
 export function isLoopback(ip: string): boolean {
@@ -31,7 +9,7 @@ export function isLoopback(ip: string): boolean {
   return v === "::1" || v.startsWith("127.");
 }
 
-/** プライベート・ループバック・CGNAT（Tailscale）・リンクローカルのアドレスか */
+/** プライベート・ループバック・CGNAT・リンクローカルのアドレスか（TRUST_PROXY=private の判定に使う） */
 export function isPrivateOrLoopback(ip: string): boolean {
   const v = normalizeIp(ip);
   if (v === "::1" || v === "localhost") return true;
@@ -43,6 +21,6 @@ export function isPrivateOrLoopback(ip: string): boolean {
     a === 10 ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127) // CGNAT（Tailscale）
+    (a === 100 && b >= 64 && b <= 127) // CGNAT
   );
 }

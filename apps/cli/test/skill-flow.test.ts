@@ -37,7 +37,7 @@ async function souieba(home: string, ...args: string[]) {
 
 beforeAll(async () => {
   migrate(db);
-  const config = { ...loadConfig({ SOUIEBA_PUBLIC_URL: "https://x.ts.net", SOUIEBA_DATA_DIR: tmp }), logLevel: "error" as const, postGraceMs: 0 };
+  const config = { ...loadConfig({ SOUIEBA_PUBLIC_URL: "https://souieba.test", SOUIEBA_DATA_DIR: tmp }), logLevel: "error" as const, postGraceMs: 0 };
   const app = createApp({ db, config, now: () => now, random: () => 0, log: () => {} });
   server = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" });
   await new Promise((r) => server.once("listening", r));

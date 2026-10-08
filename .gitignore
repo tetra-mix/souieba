@@ -6,4 +6,3 @@ dist/
 .env
 .souieba*/
 .data/
-deploy/.env.public

@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { z } from "zod";
-import { type Env, authenticate, requireAdmin, requireAgent, requireUser } from "./auth.ts";
+import { type Env, authenticate, requireAgent, requireUser } from "./auth.ts";
 import type { Config } from "./config.ts";
 import type { DB } from "./db.ts";
 import { ApiError, badRequest, notFound } from "./errors.ts";
-import { ipInCidrs, isLoopback, isPrivateOrLoopback, normalizeIp } from "./net.ts";
+import { isLoopback, isPrivateOrLoopback, normalizeIp } from "./net.ts";
 import { RateLimiter } from "./ratelimit.ts";
 import * as accounts from "./services/accounts.ts";
 import * as groups from "./services/groups.ts";
@@ -64,7 +64,6 @@ export function createApp(deps: AppDeps) {
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line) => console.log(JSON.stringify(line)));
   const remoteAddr = deps.remoteAddr ?? ((c) => getConnInfo(c).remote.address ?? "");
-  const isPublic = config.exposure === "public";
 
   const redeemLimiter = new RateLimiter(10, 60 * 60_000);
   const authFailLimiter = new RateLimiter(30, 10 * 60_000);
@@ -83,7 +82,7 @@ export function createApp(deps: AppDeps) {
   });
   app.notFound((c) => c.json({ error: { code: "not_found", message: "Not Found" } }, 404));
 
-  // 送信元 IP の判定・許可範囲の検査・アクセスログ（本文やトークンは記録しない）
+  // 送信元 IP の判定とアクセスログ（本文やトークンは記録しない）
   app.use("*", async (c, next) => {
     const started = Date.now();
     const peer = normalizeIp(remoteAddr(c));
@@ -91,21 +90,18 @@ export function createApp(deps: AppDeps) {
     const forwarded = c.req.header("x-forwarded-for")?.split(",").at(-1)?.trim();
     const ip = trustsForwarded(peer) && forwarded ? normalizeIp(forwarded) : peer;
     c.set("clientIp", ip);
-    if (config.allowedCidrs.length > 0 && !isLoopback(peer) && !ipInCidrs(peer, config.allowedCidrs)) {
-      throw new ApiError(403, "forbidden", "許可されていないネットワークからの接続です");
-    }
     await next();
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Cache-Control", "no-store");
     if (config.logLevel !== "error") {
-      // 公開モードでは不正アクセスの調査のために送信元 IP を残す
+      // 不正アクセスの調査のために送信元 IP を残す
       log({
         level: "info",
         method: c.req.method,
         route: c.req.routePath,
         status: c.res.status,
         ms: Date.now() - started,
-        ...(isPublic ? { ip } : {}),
+        ip,
       });
     }
   });
@@ -121,8 +117,6 @@ export function createApp(deps: AppDeps) {
   app.get("/v1/instance", (c) =>
     c.json({
       name: config.instanceName,
-      // 公開モードでは、脆弱なバージョンを探すスキャナに手がかりを与えない
-      ...(isPublic ? {} : { version: VERSION }),
       registration: "invite",
       inviteBy: config.inviteBy,
     }),
@@ -283,26 +277,6 @@ export function createApp(deps: AppDeps) {
     inboxSvc.dismiss(db, c.get("auth").userId, c.req.param("postId"), now());
     return c.body(null, 204);
   });
-
-  // 管理（公開モードでは HTTP からは使えない。サーバ上の souieba-admin で操作する）
-  const admin = new Hono<Env>();
-  admin.use("*", async (_c, next) => {
-    if (isPublic) throw notFound("ページ");
-    await next();
-  });
-  admin.get("/users", (c) => {
-    requireAdmin(c);
-    return c.json({
-      users: accounts.listUsers(db).map((u) => ({ ...accounts.publicUser(u), disabledAt: u.disabled_at })),
-    });
-  });
-  admin.post("/users/:id/disable", (c) => {
-    const a = requireAdmin(c);
-    if (c.req.param("id") === a.userId) throw badRequest("self_disable", "自分自身は無効化できません");
-    accounts.disableUser(db, c.req.param("id"), now());
-    return c.body(null, 204);
-  });
-  v1.route("/admin", admin);
 
   app.route("/v1", v1);
   return app;

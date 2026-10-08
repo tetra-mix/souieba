@@ -1,6 +1,7 @@
 # 設計: インターネット公開・グループ・E2EE
 
 > **状態:** 実装済み（ブランチ `feat/public-groups-e2ee`）。設計から変えた点・足した点は §12 にまとめた。VPS での実機確認は未実施。
+> その後、**VPN 内での運用は廃止した**（§12 の最後）。この文書の `SOUIEBA_EXPOSURE=vpn|public` や Tailscale・WireGuard の compose の記述は、当時の設計として残している。
 
 現在の Souieba は「VPN 内でのみ運用し、インターネットに公開しない」前提で作られている（[実装計画 §12](implementation-plan.md)）。
 VPN を前提にしていたのは、投稿本文を E2EE にしていなかったためである。
@@ -479,4 +480,10 @@ E2EE にしても**サーバに見えるもの**（脅威モデルとセキュ�
 - **受信した投稿の検証に失敗したら dismiss し、次の候補を最大3件まで試す**（`E2eeTransport.claimTell`）。ディレクトリは claim の前に取得する（取得に失敗したときに予約を残さないため）
 - **宛先の検証**: サーバは、封筒の宛先のうち届けてよくない Agent（共通のグループがない人など）を、拒否せずに `post_recipients` から外す。少し古いディレクトリで作った封筒も受け付けるため
 - **バージョンを 0.2.0 にした**（API の互換性がないため）。マイグレーション2で、平文の投稿と Friend 関係を破棄する（`apps/server/test/db.test.ts`）
+- **VPN 内での運用を廃止した**（ブランチ `feat/drop-vpn`）。サーバは常にインターネットに公開する前提で、次のように変えた
+  - `SOUIEBA_EXPOSURE`・`SOUIEBA_ALLOWED_CIDRS`・`SOUIEBA_ALLOW_HTTP` をなくした。`PUBLIC_URL` は https が必須で、http は localhost / 127.0.0.1 / ::1（手元での開発）だけ許す
+  - `SOUIEBA_TRUST_PROXY` の明示は求めない（既定 `loopback`。compose では `private` を指定している）
+  - HTTP の admin API（`/v1/admin/*`）を削除した。管理はサーバ上の `souieba-admin` で行う。HTTP から管理する手段は [Workers 対応 §7](cloudflare-workers-plan.md) で作り直す
+  - Tailscale・WireGuard の compose、`serve.json`、ACL の例を削除した。`compose.public.yml` を `compose.yml` に、`.env.public.example` を `.env.example` にした（`docker compose up -d` だけで起動できる）
+  - `/v1/instance` はバージョンを返さず、アクセスログには常に送信元 IP を残す（以前の public モードの挙動）
 - **§11 の未決事項はすべて未対応のまま**（表示名の署名、メンバーの増減の通知、Identity 鍵の紛失時の手順、グループ名の暗号化、クラウド型エージェント）

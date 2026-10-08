@@ -14,7 +14,7 @@ export type HttpOptions = {
   baseUrl: string;
   token: string;
   timeoutMs?: number;
-  /** 会話の途中で呼ぶ sync / claim のタイムアウト。VPN が切れているときはすぐ諦める */
+  /** 会話の途中で呼ぶ sync / claim のタイムアウト。ネットワークが切れているときはすぐ諦める */
   interactiveTimeoutMs?: number;
   fetch?: typeof fetch;
 };
