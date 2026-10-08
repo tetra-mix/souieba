@@ -6,7 +6,7 @@ import {
   type WireTellCandidate,
   selectTellCandidate,
 } from "@souieba/core";
-import { and, desc, eq, exists, gte, isNotNull, isNull, lt, lte, ne, notExists, or } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or } from "drizzle-orm";
 import { type DB, MAX_BOUND_PARAMS, chunks } from "../db/index.ts";
 import { agents, deliveries, postRecipients, posts, users } from "../db/schema.ts";
 import { conflict, notFound } from "../errors.ts";
@@ -28,11 +28,11 @@ function visibleToMe(db: DB, actor: AgentActor, now: Date) {
     lte(posts.visibleAt, now.toISOString()),
     gte(posts.createdAt, new Date(now.getTime() - TELL_WINDOW_MS).toISOString()),
     sharesGroup(db, posts.ownerId, actor.userId),
-    exists(
-      db
-        .select({ postId: postRecipients.postId })
-        .from(postRecipients)
-        .where(and(eq(postRecipients.postId, posts.id), eq(postRecipients.agentId, actor.agentId))),
+    // EXISTS（相関サブクエリ）にすると posts を全件読むので、宛先の索引（post_recipients_agent）から投稿を引く。
+    // Durable Object の SQLite は読んだ行数で課金される
+    inArray(
+      posts.id,
+      db.select({ postId: postRecipients.postId }).from(postRecipients).where(eq(postRecipients.agentId, actor.agentId)),
     ),
   );
 }

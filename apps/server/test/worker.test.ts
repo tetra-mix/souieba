@@ -155,4 +155,16 @@ describe("Workers 版（workerd + Durable Object）", () => {
     expect((await call("GET", "/v1/inbox", bob.agent.token)).body.items).toEqual([]);
     expect((await call("GET", "/v1/admin/groups", adminToken)).body.groups).toMatchObject([{ id: groupId, memberCount: 1 }]);
   }, 60_000);
+
+  // 送信元 IP ごとの回数を使い切るので最後に置く
+  it("認証なしの POST は、% でエンコードしたパスでも入口の AUTH_RATE_LIMITER（10回/分）で数える", async () => {
+    let res: Awaited<ReturnType<typeof call>> | undefined;
+    for (let i = 0; i < 12; i++) {
+      res = await call("POST", "/v1/auth/re%64eem", undefined, { code: "x" });
+      if (res.status === 429) break;
+      expect(res.status).toBe(400);
+    }
+    // Durable Object の中の制限（「試行回数が多すぎます」）より先に、入口で止まる
+    expect(res).toMatchObject({ status: 429, body: { error: { message: "リクエストが多すぎます" } } });
+  });
 });

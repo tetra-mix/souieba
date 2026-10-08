@@ -597,4 +597,10 @@ describe("上限", () => {
     const { h, alice, groupId } = await twoMembers({ config: { limits: { maxUsers: 2, maxGroupMembers: 50, maxGroupsPerUser: 10 } } });
     await expect(h.joinNew(alice, groupId, "carol", "キャロル")).rejects.toThrow(/limit_users/);
   });
+
+  it("無効化したユーザーはユーザー数に数えない", async () => {
+    const { h, alice, bob, groupId } = await twoMembers({ config: { limits: { maxUsers: 2, maxGroupMembers: 50, maxGroupsPerUser: 10 } } });
+    accounts.disableUser(h.db, bob.id, h.clock.now);
+    await h.joinNew(alice, groupId, "carol", "キャロル");
+  });
 });

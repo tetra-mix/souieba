@@ -21,14 +21,15 @@ export type WorkerEnv = {
    * Durable Object の中の制限はメモリ上にあり、Durable Object が入れ替わると数え直しになるので、入口でも数える
    */
   AUTH_RATE_LIMITER?: RateLimit;
-} & Record<string, unknown>;
+};
 
 /** 将来インスタンスを分けるときは、ここで名前を引き分ける（今は1つだけ） */
 const INSTANCE_NAME = "default";
 
 function workerConfig(env: WorkerEnv): Config {
   const vars: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) if (typeof v === "string") vars[k] = v;
+  // wrangler.toml の [vars] と secret（SOUIEBA_*）は文字列で届く。綴りの誤りを型で拾えるよう、WorkerEnv には書かない
+  for (const [k, v] of Object.entries(env as Record<string, unknown>)) if (typeof v === "string") vars[k] = v;
   return loadConfig({
     ...vars,
     // https は Cloudflare が終端し、送信元は CF-Connecting-IP で分かるので、X-Forwarded-For は使わない

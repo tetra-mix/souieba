@@ -31,6 +31,8 @@ const USAGE = `使い方: souieba-admin [--url <サーバURL>] <command> [option
   SOUIEBA_BOOTSTRAP_TOKEN   サーバに設定したブートストラップ用の秘密（bootstrap のとき）
   CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET   Cloudflare Access の service token（かけている場合）`;
 
+const COMMANDS = ["create-user", "login-code", "invite", "list-groups", "disable-user", "list-users", "admin-token", "backup", "bootstrap"];
+
 type UserView = { id: string; handle: string; displayName: string; role: string; disabledAt?: string | null };
 type GroupView = { id: string; name: string; memberCount: number; createdAt: string };
 type Login = { loginCode: string; expiresAt: string };
@@ -119,10 +121,21 @@ function httpBackend(baseUrl: string): Backend {
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      // Access のログイン画面へのリダイレクトは追わず、JSON 以外の応答として扱う
+      redirect: "manual",
       signal: AbortSignal.timeout(15_000),
     });
     const text = await res.text();
-    const data = text ? (JSON.parse(text) as Record<string, any>) : {};
+    let data: Record<string, any> = {};
+    try {
+      if (text) data = JSON.parse(text);
+    } catch {
+      // Cloudflare Access のログイン画面や、Cloudflare のエラーページ（HTML）が返ってきた場合
+      throw new Error(`${method} ${path}: HTTP ${res.status}（JSON 以外の応答。URL と Cloudflare Access の service token を確かめてください）`);
+    }
+    if (res.status >= 300 && res.status < 400) {
+      throw new Error(`${method} ${path}: HTTP ${res.status}（リダイレクトされました。Cloudflare Access の service token を確かめてください）`);
+    }
     if (!res.ok) throw new Error(`${method} ${path}: ${data.error?.message ?? `HTTP ${res.status}`}`);
     return data as T;
   }
@@ -164,6 +177,13 @@ async function main(argv: string[]) {
     return;
   }
   const url = values.url ?? process.env.SOUIEBA_ADMIN_URL;
+  // DB を開く（必要なら移行する）前に、打ち間違いや、使えない組み合わせを弾く
+  if (!COMMANDS.includes(command)) {
+    console.log(USAGE);
+    process.exitCode = 1;
+    return;
+  }
+  if (command === "bootstrap" && !url) throw new Error("bootstrap は --url と使います。サーバ上では create-user --admin と admin-token を使ってください");
   const backend = url ? httpBackend(url) : await localBackend();
   const handle = () => {
     if (!values.handle) throw new Error("--handle が必要です");

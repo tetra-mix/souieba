@@ -321,9 +321,10 @@ export function createApp(deps: AppDeps) {
     if (!u) throw notFound("ユーザー");
     return u;
   };
-  admin.get("/users", (c) =>
-    c.json({ users: accounts.listUsers(db).map((u) => ({ ...accounts.publicUser(u), disabledAt: u.disabledAt })) }),
-  );
+  admin.get("/users", (c) => {
+    audit(c, "list-users");
+    return c.json({ users: accounts.listUsers(db).map((u) => ({ ...accounts.publicUser(u), disabledAt: u.disabledAt })) });
+  });
   admin.post("/users", async (c) => {
     const input = await body(c, z.object({ handle: z.string(), displayName: z.string(), admin: z.boolean().optional() }));
     const result = db.transaction(() => {
@@ -357,7 +358,10 @@ export function createApp(deps: AppDeps) {
     audit(c, "invite");
     return c.json({ code, expiresAt }, 201);
   });
-  admin.get("/groups", (c) => c.json({ groups: groups.listAllGroups(db) }));
+  admin.get("/groups", (c) => {
+    audit(c, "list-groups");
+    return c.json({ groups: groups.listAllGroups(db) });
+  });
   v1.route("/admin", admin);
 
   app.route("/v1", v1);

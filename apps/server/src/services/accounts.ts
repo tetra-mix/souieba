@@ -52,7 +52,8 @@ export function createUser(
 ): UserRow {
   const displayName = validateProfile(input.handle, input.displayName);
   if (getUserByHandle(db, input.handle)) throw conflict("handle_taken", "その handle は使われています");
-  if (limits && db.select({ n: count() }).from(users).get()!.n >= limits.maxUsers) {
+  // 無効化したユーザーは数えない（無効化すれば枠が空く）
+  if (limits && db.select({ n: count() }).from(users).where(isNull(users.disabledAt)).get()!.n >= limits.maxUsers) {
     throw conflict("limit_users", "このインスタンスのユーザー数が上限に達しています。管理者に連絡してください");
   }
   return db

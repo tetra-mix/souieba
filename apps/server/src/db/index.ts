@@ -30,7 +30,10 @@ export function createDb(storage: SqlStorageLike): DB {
   return drizzle(storage as never, { schema });
 }
 
-/** drizzle-kit と同じ記録の仕方（__drizzle_migrations の created_at に、journal の when を入れる） */
+/**
+ * drizzle-kit と同じ表（__drizzle_migrations）に、同じく journal の when を created_at として記録する。
+ * hash には SQL のハッシュではなくタグ（0.2 系から引き継いだ DB は legacy-v2）を入れる。適用済みかは created_at だけで判断する
+ */
 const MIGRATIONS_TABLE = "__drizzle_migrations";
 
 function appliedUntil(db: DB): number | null {
@@ -64,11 +67,17 @@ function adoptLegacy(db: DB, legacyVersion: number): void {
   }
   const baseline = journal.entries[0]!;
   db.transaction(() => {
+    // 同時に起動した別のプロセス（サーバと souieba-admin）が先に引き継いでいれば何もしない
+    if (appliedUntil(db) !== null) return;
     // 旧スキーマの一意制約は無名なので、ベースラインと同じ名前のインデックスも作る（後のマイグレーションが名前で DROP INDEX できるように）
     for (const stmt of LEGACY_NAMED_UNIQUE) db.run(sql.raw(stmt));
-    db.run(sql`CREATE TABLE ${sql.identifier(MIGRATIONS_TABLE)} (id INTEGER PRIMARY KEY, hash text NOT NULL, created_at numeric)`);
+    createMigrationsTable(db);
     db.run(sql`INSERT INTO ${sql.identifier(MIGRATIONS_TABLE)} (hash, created_at) VALUES ('legacy-v2', ${baseline.when})`);
   });
+}
+
+function createMigrationsTable(db: DB): void {
+  db.run(sql`CREATE TABLE IF NOT EXISTS ${sql.identifier(MIGRATIONS_TABLE)} (id INTEGER PRIMARY KEY, hash text NOT NULL, created_at numeric)`);
 }
 
 function statements(text: string): string[] {
@@ -80,25 +89,20 @@ function statements(text: string): string[] {
 
 /**
  * 未適用のマイグレーションを順に適用する（drizzle-orm の migrator と同じ記録の仕方を、同期で行う）。
+ * セルフホストではサーバと souieba-admin が同時に移行することがあるので、適用済みかはトランザクションの中で確かめ直す。
  * legacyVersion は、0.2 系の DB の PRAGMA user_version（node:sqlite だけ。Durable Object には旧 DB がない）。
  */
 export function migrate(db: DB, opts: { legacyVersion?: () => number } = {}): void {
-  let applied = appliedUntil(db);
-  if (applied === null) {
-    const hasTables = db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'`);
-    if (hasTables) {
-      adoptLegacy(db, opts.legacyVersion?.() ?? 0);
-      applied = appliedUntil(db);
-    } else {
-      db.run(sql`CREATE TABLE ${sql.identifier(MIGRATIONS_TABLE)} (id INTEGER PRIMARY KEY, hash text NOT NULL, created_at numeric)`);
-      applied = 0;
-    }
+  if (appliedUntil(db) === null) {
+    if (isEmptyDb(db)) createMigrationsTable(db);
+    else adoptLegacy(db, opts.legacyVersion?.() ?? 0);
   }
   for (const entry of journal.entries) {
-    if (entry.when <= applied!) continue;
+    if (entry.when <= (appliedUntil(db) ?? 0)) continue;
     const text = migrations[`m${String(entry.idx).padStart(4, "0")}`];
     if (!text) throw new Error(`マイグレーション ${entry.tag} がありません`);
     db.transaction(() => {
+      if (entry.when <= (appliedUntil(db) ?? 0)) return;
       for (const stmt of statements(text)) db.run(sql.raw(stmt));
       db.run(sql`INSERT INTO ${sql.identifier(MIGRATIONS_TABLE)} (hash, created_at) VALUES (${entry.tag}, ${entry.when})`);
     });
