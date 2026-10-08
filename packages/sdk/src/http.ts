@@ -1,5 +1,4 @@
-import type { CreatePostInput, InboxItem, PublishResult, SyncResult, TellCandidate } from "@souieba/core";
-import type { SetLogTransport } from "./transport.ts";
+import type { KeyDirectory, PostEnvelope, PublishResult, SyncResult, WireInboxItem, WireTellCandidate } from "@souieba/core";
 
 export class SetLogApiError extends Error {
   constructor(
@@ -48,7 +47,11 @@ export class HttpClient {
   }
 }
 
-export class HttpTransport implements SetLogTransport {
+/**
+ * サーバの API をそのまま呼ぶ通信層。本文は暗号文（封筒）のまま扱う。
+ * Agent からは、検証と復号を行う E2eeTransport を通して使う。
+ */
+export class HttpTransport {
   readonly client: HttpClient;
   private readonly interactiveMs: number;
 
@@ -57,22 +60,31 @@ export class HttpTransport implements SetLogTransport {
     this.interactiveMs = opts.interactiveTimeoutMs ?? 1500;
   }
 
-  publish(post: CreatePostInput) {
-    return this.client.request<PublishResult>("POST", "/v1/posts", post, 15_000);
+  publishEnvelope(envelope: PostEnvelope) {
+    return this.client.request<PublishResult>("POST", "/v1/posts", { envelope }, 15_000);
+  }
+  /** 公開鍵ディレクトリ。会話の始め（tell）でも呼ぶので、短いタイムアウトにする */
+  keys() {
+    return this.client.request<KeyDirectory>("GET", "/v1/keys", undefined, this.interactiveMs);
   }
   sync() {
     return this.client.request<SyncResult>("POST", "/v1/sync", {}, this.interactiveMs);
   }
   async inbox() {
-    return (await this.client.request<{ items: InboxItem[] }>("GET", "/v1/inbox")).items;
+    return (await this.client.request<{ items: WireInboxItem[] }>("GET", "/v1/inbox")).items;
   }
   async claimTell(opts: { leaseSec?: number } = {}) {
-    return (await this.client.request<{ candidate: TellCandidate | null }>("POST", "/v1/tell/claim", opts, this.interactiveMs)).candidate;
+    return (await this.client.request<{ candidate: WireTellCandidate | null }>("POST", "/v1/tell/claim", opts, this.interactiveMs))
+      .candidate;
   }
   markAsTold(postId: string) {
     return this.client.request<void>("POST", `/v1/deliveries/${encodeURIComponent(postId)}/told`);
   }
   release(postId: string) {
     return this.client.request<void>("POST", `/v1/deliveries/${encodeURIComponent(postId)}/release`);
+  }
+  /** 検証・復号できなかった投稿を、二度と候補にならないようにする */
+  dismiss(postId: string) {
+    return this.client.request<void>("POST", `/v1/deliveries/${encodeURIComponent(postId)}/dismiss`);
   }
 }

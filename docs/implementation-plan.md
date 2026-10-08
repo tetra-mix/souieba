@@ -451,7 +451,7 @@ volumes:
 | `SOUIEBA_DATA_DIR` | `/data` | DB とバックアップの置き場所 |
 | `SOUIEBA_INVITE_BY` | `member` | `admin` にすると管理者だけが招待できる |
 | `SOUIEBA_POST_GRACE_MINUTES` | `10` | 投稿してから公開するまでの猶予 |
-| `SOUIEBA_POST_RETENTION_DAYS` | `14` | これを過ぎた投稿と配送状態を物理削除する（Tell の対象は48時間以内なので短くてよい） |
+| `SOUIEBA_POST_RETENTION_DAYS` | `30` | これを過ぎた投稿と配送状態を物理削除する（Tell の対象は48時間以内。`posts mine` や `export` で振り返れるよう1ヶ月残す） |
 | `SOUIEBA_LOG_LEVEL` | `info` | |
 
 **起動時の安全確認**（zod で検証し、問題があれば原因を表示して終了する）:

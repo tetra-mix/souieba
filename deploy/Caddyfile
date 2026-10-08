@@ -1,0 +1,12 @@
+# Let's Encrypt の証明書を自動で取得・更新する（80・443 番を開けておく）
+{$SOUIEBA_DOMAIN} {
+	request_body {
+		max_size 64KB
+	}
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+	}
+	# X-Forwarded-For は Caddy が実際の接続元で付け直す（クライアントが送った値は信頼しない）
+	reverse_proxy server:8080
+}

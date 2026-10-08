@@ -6,7 +6,7 @@ services:
     hostname: ${TS_HOSTNAME:-souieba}        # → https://souieba.<tailnet>.ts.net
     restart: unless-stopped
     environment:
-      TS_AUTHKEY: ${TS_AUTHKEY}              # tag:souieba を付けた事前認証キー
+      TS_AUTHKEY: ${TS_AUTHKEY:?.env に TS_AUTHKEY を設定してください}  # tag:souieba を付けた事前認証キー
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
     volumes:
@@ -16,7 +16,7 @@ services:
     devices: ["/dev/net/tun:/dev/net/tun"]
 
   server:
-    image: ${SOUIEBA_IMAGE:-ghcr.io/OWNER/souieba-server:0.1}
+    image: ${SOUIEBA_IMAGE:-souieba-server:local}
     build:
       context: ..
       dockerfile: apps/server/Dockerfile
@@ -24,9 +24,14 @@ services:
     # tailscale コンテナとネットワーク名前空間を共有し、127.0.0.1:8080 だけで待ち受ける
     network_mode: service:tailscale
     depends_on: [tailscale]
-    env_file: .env
+    # .env を丸ごと渡さず、必要な変数だけを渡す（TS_AUTHKEY をサーバのコンテナに入れないため）
     environment:
       SOUIEBA_BIND: 127.0.0.1
+      SOUIEBA_PUBLIC_URL: ${SOUIEBA_PUBLIC_URL:?.env に SOUIEBA_PUBLIC_URL を設定してください}
+      SOUIEBA_INSTANCE_NAME: ${SOUIEBA_INSTANCE_NAME:-Souieba}
+      SOUIEBA_INVITE_BY: ${SOUIEBA_INVITE_BY:-member}
+      SOUIEBA_POST_GRACE_MINUTES: ${SOUIEBA_POST_GRACE_MINUTES:-10}
+      SOUIEBA_POST_RETENTION_DAYS: ${SOUIEBA_POST_RETENTION_DAYS:-30}
     volumes:
       - souieba-data:/data
 

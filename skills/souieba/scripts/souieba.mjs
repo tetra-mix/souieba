@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 // apps/cli/src/main.ts
+import { randomBytes as randomBytes2 } from "node:crypto";
 import { statSync } from "node:fs";
 import { parseArgs } from "node:util";
 
 // apps/cli/src/agent.ts
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 
 // packages/core/src/period.ts
 var HOUR_MS = 60 * 60 * 1e3;
@@ -48,6 +49,7 @@ function scanSecrets(text) {
 
 // packages/core/src/sanitize.ts
 var MAX_CONTENT_LENGTH = 300;
+var MIN_TELL_CONTENT_LENGTH = 10;
 function sanitizeContent(input) {
   return input.normalize("NFKC").replace(/https?:\/\/\S+/gi, "").replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, " ").replace(/[`<>{}[\]#*_|\\]/g, "").replace(/\s+/g, " ").trim().slice(0, MAX_CONTENT_LENGTH);
 }
@@ -80,6 +82,302 @@ function validateTellText(text, displayName) {
 function formatTellText(displayName, content) {
   const body = content.replace(/^主人は/, "").replace(/(らしい|ようだ|みたいだ)?[。.!！]*$/, "");
   return `\u3042\u3001\u305D\u3046\u3044\u3048\u3070${displayName}\u3055\u3093\u3001${body}\u307F\u305F\u3044\u3067\u3059\u3088\u3002`;
+}
+
+// packages/core/src/code.ts
+import { createHash, randomInt } from "node:crypto";
+var CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+var LOGIN_CODE_LENGTH = 12;
+var GROUP_INVITE_CODE_LENGTH = 20;
+function newCode(length = LOGIN_CODE_LENGTH) {
+  const chars = Array.from({ length }, () => CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]).join("");
+  return chars.replace(/(.{4})(?=.)/g, "$1-");
+}
+function normalizeCode(code) {
+  return code.toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/(.{4})(?=.)/g, "$1-");
+}
+function sha256Hex(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+function codeHash(code) {
+  return sha256Hex(normalizeCode(code));
+}
+
+// packages/core/src/crypto.ts
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash as createHash2,
+  createPrivateKey,
+  createPublicKey,
+  diffieHellman,
+  generateKeyPairSync,
+  hkdfSync,
+  randomBytes,
+  sign,
+  verify
+} from "node:crypto";
+var CURVE = { ed25519: "Ed25519", x25519: "X25519" };
+var b64 = (b) => Buffer.from(b).toString("base64url");
+var unb64 = (s) => Buffer.from(s, "base64url");
+function generate(kind) {
+  const { privateKey: privateKey2 } = generateKeyPairSync(kind);
+  const jwk = privateKey2.export({ format: "jwk" });
+  return { pub: jwk.x, priv: jwk.d };
+}
+var generateSigningKey = () => generate("ed25519");
+var generateEncryptionKey = () => generate("x25519");
+function privateKey(kind, kp) {
+  return createPrivateKey({ key: { kty: "OKP", crv: CURVE[kind], x: kp.pub, d: kp.priv }, format: "jwk" });
+}
+function publicKey(kind, x) {
+  return createPublicKey({ key: { kty: "OKP", crv: CURVE[kind], x }, format: "jwk" });
+}
+function signText(kp, text) {
+  return b64(sign(null, Buffer.from(text, "utf8"), privateKey("ed25519", kp)));
+}
+function verifyText(pub, text, sig) {
+  try {
+    return verify(null, Buffer.from(text, "utf8"), publicKey("ed25519", pub), unb64(sig));
+  } catch {
+    return false;
+  }
+}
+function fingerprint(identityKey) {
+  const hex = createHash2("sha256").update(unb64(identityKey)).digest("hex").slice(0, 12).toUpperCase();
+  return hex.replace(/(.{4})(?=.)/g, "$1-");
+}
+function normalizeFingerprint(fp) {
+  return fp.toUpperCase().replace(/[^0-9A-F]/g, "").replace(/(.{4})(?=.)/g, "$1-");
+}
+var signedText = {
+  agentCert: (userId, encKey, signKey) => `souieba/agent/v1
+${userId}
+${encKey}
+${signKey}`,
+  groupCreate: (groupId, userId) => `souieba/group-create/v1
+${groupId}
+${userId}`,
+  invite: (groupId, inviterId, commit) => `souieba/invite/v1
+${groupId}
+${inviterId}
+${commit}`,
+  join: (code) => `souieba/join/v1
+${normalizeCode(code)}`
+};
+function inviteCommit(groupId, code) {
+  return b64(createHash2("sha256").update(`souieba/invite-code/v1
+${groupId}
+${normalizeCode(code)}`).digest());
+}
+function aad(author, env) {
+  return Buffer.from(
+    `souieba/post-aad/v1
+${author.userId}
+${author.agentId}
+${env.periodStart}
+${env.periodEnd}
+${env.visibility}`,
+    "utf8"
+  );
+}
+function sortRecipients(rs) {
+  return [...rs].sort((a, b) => a.agentId < b.agentId ? -1 : a.agentId > b.agentId ? 1 : 0);
+}
+function postSigningText(author, env) {
+  const rs = sortRecipients(env.recipients).map((r) => `${r.agentId}.${r.iv}.${r.wrapped}`);
+  return [
+    "souieba/post/v1",
+    author.userId,
+    author.agentId,
+    env.v,
+    env.periodStart,
+    env.periodEnd,
+    env.visibility,
+    env.epk,
+    env.iv,
+    env.ciphertext,
+    rs.join(",")
+  ].join("\n");
+}
+function wrapKey(shared, epkPub, agentId) {
+  return Buffer.from(hkdfSync("sha256", shared, unb64(epkPub), `souieba/wrap/v1
+${agentId}`, 32));
+}
+function gcmEncrypt(key, plain, additional) {
+  const iv = randomBytes(12);
+  const c = createCipheriv("aes-256-gcm", key, iv);
+  if (additional) c.setAAD(additional);
+  const data = Buffer.concat([c.update(plain), c.final(), c.getAuthTag()]);
+  return { iv: b64(iv), data: b64(data) };
+}
+function gcmDecrypt(key, iv, data, additional) {
+  const buf = unb64(data);
+  if (buf.length < 16) throw new Error("ciphertext too short");
+  const d = createDecipheriv("aes-256-gcm", key, unb64(iv));
+  if (additional) d.setAAD(additional);
+  d.setAuthTag(buf.subarray(buf.length - 16));
+  return Buffer.concat([d.update(buf.subarray(0, buf.length - 16)), d.final()]);
+}
+function sealPost(post, author, recipients) {
+  const header = { periodStart: post.periodStart, periodEnd: post.periodEnd, visibility: post.visibility };
+  const cek = randomBytes(32);
+  const body = gcmEncrypt(cek, Buffer.from(post.content, "utf8"), aad(author, header));
+  const eph = generateEncryptionKey();
+  const ephKey = privateKey("x25519", eph);
+  const seen = /* @__PURE__ */ new Set();
+  const wrapped = [];
+  for (const r of recipients) {
+    if (seen.has(r.agentId)) continue;
+    seen.add(r.agentId);
+    const shared = diffieHellman({ privateKey: ephKey, publicKey: publicKey("x25519", r.encKey) });
+    const w = gcmEncrypt(wrapKey(shared, eph.pub, r.agentId), cek);
+    wrapped.push({ agentId: r.agentId, iv: w.iv, wrapped: w.data });
+  }
+  const unsigned = {
+    v: 1,
+    ...header,
+    epk: eph.pub,
+    iv: body.iv,
+    ciphertext: body.data,
+    recipients: sortRecipients(wrapped)
+  };
+  return { ...unsigned, sig: signText(author.signKey, postSigningText(author, unsigned)) };
+}
+function verifyPostSignature(env, author, signKey) {
+  const { sig, ...unsigned } = env;
+  return verifyText(signKey, postSigningText(author, unsigned), sig);
+}
+var DecryptError = class extends Error {
+};
+function openPost(env, author, me) {
+  const mine = env.recipients.find((r) => r.agentId === me.agentId);
+  if (!mine) throw new DecryptError("\u3053\u306E Agent \u5B9B\u3066\u3067\u306F\u3042\u308A\u307E\u305B\u3093");
+  try {
+    const shared = diffieHellman({ privateKey: privateKey("x25519", me.encKey), publicKey: publicKey("x25519", env.epk) });
+    const cek = gcmDecrypt(wrapKey(shared, env.epk, me.agentId), mine.iv, mine.wrapped);
+    return gcmDecrypt(cek, env.iv, env.ciphertext, aad(author, env)).toString("utf8");
+  } catch {
+    throw new DecryptError("\u5FA9\u53F7\u3067\u304D\u307E\u305B\u3093");
+  }
+}
+
+// packages/core/src/trust.ts
+var emptyPins = () => ({ identities: {}, members: {} });
+function evaluateTrust(dir, pinsIn, selfIdentityKey) {
+  const pins = {
+    identities: { ...pinsIn.identities },
+    members: Object.fromEntries(Object.entries(pinsIn.members).map(([k, v]) => [k, [...v]]))
+  };
+  const problems = [];
+  const usersById = new Map(dir.users.map((u) => [u.id, u]));
+  const meId = dir.me.userId;
+  const reported = /* @__PURE__ */ new Set();
+  const identityOf = (userId) => {
+    if (userId === meId) {
+      const listed = usersById.get(meId)?.identityKey;
+      if (listed && listed !== selfIdentityKey && !reported.has(meId)) {
+        reported.add(meId);
+        problems.push({ kind: "self_identity_mismatch" });
+      }
+      return selfIdentityKey;
+    }
+    const u = usersById.get(userId);
+    if (!u?.identityKey) return null;
+    const pinned = pins.identities[userId];
+    if (pinned && pinned !== u.identityKey) {
+      if (!reported.has(userId)) {
+        reported.add(userId);
+        problems.push({ kind: "identity_changed", userId, handle: u.handle });
+      }
+      return null;
+    }
+    return u.identityKey;
+  };
+  const groups = [];
+  const shareActiveGroup = /* @__PURE__ */ new Set();
+  for (const g of dir.groups) {
+    const verified = verifyGroup(g, identityOf, new Set(pins.members[g.id] ?? []));
+    const meActive = g.members.some((m) => m.userId === meId && !m.leftAt);
+    pins.members[g.id] = [.../* @__PURE__ */ new Set([...pins.members[g.id] ?? [], ...verified])];
+    for (const m of g.members) {
+      const key = identityOf(m.userId);
+      if (verified.has(m.userId) && key && m.userId !== meId) pins.identities[m.userId] ??= key;
+    }
+    groups.push({
+      id: g.id,
+      name: g.name,
+      members: g.members.map((m) => {
+        const u = usersById.get(m.userId);
+        return {
+          userId: m.userId,
+          handle: u?.handle ?? "?",
+          displayName: u?.displayName ?? "?",
+          role: m.role,
+          identityKey: u?.identityKey ?? null,
+          verified: verified.has(m.userId),
+          active: !m.leftAt
+        };
+      })
+    });
+    if (!meActive) continue;
+    for (const m of g.members) {
+      if (m.leftAt || m.userId === meId) continue;
+      if (verified.has(m.userId)) shareActiveGroup.add(m.userId);
+      else problems.push({ kind: "unverified_member", groupId: g.id, groupName: g.name, userId: m.userId, handle: usersById.get(m.userId)?.handle ?? "?" });
+    }
+  }
+  const users = /* @__PURE__ */ new Map();
+  const agents = /* @__PURE__ */ new Map();
+  for (const userId of [meId, ...shareActiveGroup]) {
+    const u = usersById.get(userId);
+    const key = identityOf(userId);
+    if (!u || !key) continue;
+    users.set(userId, u);
+    for (const a of u.agents) {
+      if (verifyText(key, signedText.agentCert(userId, a.encKey, a.signKey), a.cert)) {
+        agents.set(a.id, { ...a, user: u });
+      } else {
+        problems.push({ kind: "invalid_agent_cert", userId, handle: u.handle, agentId: a.id, agentName: a.name });
+      }
+    }
+  }
+  return { users, agents, groups, problems, pins };
+}
+function verifyGroup(g, identityOf, pinned) {
+  const byUser = new Map(g.members.map((m) => [m.userId, m]));
+  const codeUses = /* @__PURE__ */ new Map();
+  for (const m of g.members) if (m.inviteCode) codeUses.set(m.inviteCode, (codeUses.get(m.inviteCode) ?? 0) + 1);
+  const memo = /* @__PURE__ */ new Map();
+  const check = (m, visiting) => {
+    const cached = memo.get(m.userId);
+    if (cached !== void 0) return cached;
+    if (visiting.has(m.userId)) return false;
+    visiting.add(m.userId);
+    const result = checkMember(m, visiting);
+    visiting.delete(m.userId);
+    memo.set(m.userId, result);
+    return result;
+  };
+  const checkMember = (m, visiting) => {
+    const key = identityOf(m.userId);
+    if (!key) return false;
+    if (pinned.has(m.userId)) return true;
+    if (!m.invitedBy) {
+      return g.createdBy === m.userId && verifyText(key, signedText.groupCreate(g.id, m.userId), g.createSig);
+    }
+    if (!m.inviteCode || !m.inviteSig || !m.joinSig) return false;
+    if (codeUses.get(m.inviteCode) !== 1) return false;
+    const inviter = byUser.get(m.invitedBy);
+    if (!inviter || !check(inviter, visiting)) return false;
+    const inviterKey = identityOf(inviter.userId);
+    if (!inviterKey) return false;
+    const commit = inviteCommit(g.id, m.inviteCode);
+    return verifyText(inviterKey, signedText.invite(g.id, inviter.userId, commit), m.inviteSig) && verifyText(key, signedText.join(m.inviteCode), m.joinSig);
+  };
+  const verified = /* @__PURE__ */ new Set();
+  for (const m of g.members) if (check(m, /* @__PURE__ */ new Set())) verified.add(m.userId);
+  return verified;
 }
 
 // packages/sdk/src/http.ts
@@ -123,8 +421,12 @@ var HttpTransport = class {
     this.client = new HttpClient(opts);
     this.interactiveMs = opts.interactiveTimeoutMs ?? 1500;
   }
-  publish(post) {
-    return this.client.request("POST", "/v1/posts", post, 15e3);
+  publishEnvelope(envelope) {
+    return this.client.request("POST", "/v1/posts", { envelope }, 15e3);
+  }
+  /** 公開鍵ディレクトリ。会話の始め（tell）でも呼ぶので、短いタイムアウトにする */
+  keys() {
+    return this.client.request("GET", "/v1/keys", void 0, this.interactiveMs);
   }
   sync() {
     return this.client.request("POST", "/v1/sync", {}, this.interactiveMs);
@@ -140,6 +442,10 @@ var HttpTransport = class {
   }
   release(postId) {
     return this.client.request("POST", `/v1/deliveries/${encodeURIComponent(postId)}/release`);
+  }
+  /** 検証・復号できなかった投稿を、二度と候補にならないようにする */
+  dismiss(postId) {
+    return this.client.request("POST", `/v1/deliveries/${encodeURIComponent(postId)}/dismiss`);
   }
 };
 
@@ -176,9 +482,6 @@ function resolveAgent(name) {
   const cfg = loadClientConfig();
   const serverUrl = process.env.SOUIEBA_SERVER ?? cfg.serverUrl;
   if (!serverUrl) throw new Error("\u30B5\u30FC\u30D0\u304C\u672A\u8A2D\u5B9A\u3067\u3059\u3002`souieba login <URL> --code <\u30B3\u30FC\u30C9>` \u3092\u5B9F\u884C\u3057\u3066\u304F\u3060\u3055\u3044");
-  if (process.env.SOUIEBA_AGENT_TOKEN) {
-    return { serverUrl, agentId: null, token: process.env.SOUIEBA_AGENT_TOKEN, name: name ?? "env" };
-  }
   const names = Object.keys(cfg.agents);
   const key = name ?? (names.length === 1 ? names[0] : void 0);
   const agent = key ? cfg.agents[key] : void 0;
@@ -187,7 +490,15 @@ function resolveAgent(name) {
       names.length === 0 ? "Agent \u304C\u672A\u767B\u9332\u3067\u3059\u3002`souieba agent add <\u540D\u524D>` \u3092\u5B9F\u884C\u3057\u3066\u304F\u3060\u3055\u3044" : key ? `Agent\u300C${key}\u300D\u306F\u672A\u767B\u9332\u3067\u3059\u3002\u767B\u9332\u6E08\u307F: ${names.join(", ")}` : `Agent \u3092\u6307\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\uFF08--agent \u307E\u305F\u306F\u74B0\u5883\u5909\u6570 SOUIEBA_AGENT\uFF09\u3002\u767B\u9332\u6E08\u307F: ${names.join(", ")}`
     );
   }
-  return { serverUrl, agentId: agent.id, token: agent.token, name: key };
+  return {
+    serverUrl,
+    agentId: agent.id,
+    token: agent.token,
+    name: key,
+    keys: agent.keys,
+    userId: cfg.user?.id,
+    identityKey: cfg.identity?.userId === cfg.user?.id ? cfg.identity?.pub : void 0
+  };
 }
 
 // packages/sdk/src/setlog.ts
@@ -354,22 +665,191 @@ var NotesStore = class {
   }
 };
 
+// packages/sdk/src/keyring.ts
+import { existsSync as existsSync4, readFileSync as readFileSync4 } from "node:fs";
+import { join as join4 } from "node:path";
+var Keyring = class {
+  constructor(path = join4(souiebaHome(), "known_keys.json")) {
+    this.path = path;
+  }
+  load() {
+    if (!existsSync4(this.path)) return emptyPins();
+    const p = JSON.parse(readFileSync4(this.path, "utf8"));
+    return { identities: p.identities ?? {}, members: p.members ?? {} };
+  }
+  save(pins) {
+    writeSecretJson(this.path, pins);
+  }
+  /** ディレクトリを検証し、新しく信頼したものを記録する */
+  evaluate(dir, selfIdentityKey) {
+    const result = evaluateTrust(dir, this.load(), selfIdentityKey);
+    const latest = this.load();
+    for (const [u, k] of Object.entries(result.pins.identities)) latest.identities[u] ??= k;
+    for (const [g, ms] of Object.entries(result.pins.members)) latest.members[g] = [.../* @__PURE__ */ new Set([...latest.members[g] ?? [], ...ms])];
+    this.save(latest);
+    return result;
+  }
+  /** 招待者の指紋をサーバの外で確認できたときに、その鍵を記録する */
+  pinIdentity(userId, identityKey) {
+    const pins = this.load();
+    pins.identities[userId] = identityKey;
+    this.save(pins);
+  }
+  /** 記録した鍵を忘れる（相手が鍵を作り直したことを、サーバの外で確認できたとき） */
+  forgetIdentity(userId) {
+    const pins = this.load();
+    delete pins.identities[userId];
+    for (const g of Object.keys(pins.members)) pins.members[g] = pins.members[g].filter((u) => u !== userId);
+    this.save(pins);
+  }
+};
+
+// packages/sdk/src/e2ee.ts
+var SecretInPostError = class extends Error {
+  constructor(rules) {
+    super(`\u79D8\u5BC6\u60C5\u5831\u306E\u53EF\u80FD\u6027\u304C\u3042\u308B\u305F\u3081\u6295\u7A3F\u3067\u304D\u307E\u305B\u3093\uFF08${rules.join(", ")}\uFF09`);
+    this.rules = rules;
+  }
+};
+var E2eeTransport = class {
+  constructor(inner, opts) {
+    this.inner = inner;
+    this.opts = opts;
+    this.keyring = opts.keyring ?? new Keyring();
+  }
+  trust = null;
+  keyring;
+  /** 公開鍵ディレクトリを取得して検証する。1つのインスタンス（＝1回のコマンド）の中だけキャッシュする */
+  directory() {
+    this.trust ??= this.inner.keys().then((dir) => {
+      if (dir.me.userId !== this.opts.userId || dir.me.agentId !== this.opts.agentId) {
+        throw new Error("\u30B5\u30FC\u30D0\u304C\u8FD4\u3057\u305F\u30C7\u30A3\u30EC\u30AF\u30C8\u30EA\u306E\u6301\u3061\u4E3B\u304C\u3001\u3053\u306E Agent \u3068\u4E00\u81F4\u3057\u307E\u305B\u3093");
+      }
+      const result = this.keyring.evaluate(dir, this.opts.identityKey);
+      for (const p of result.problems) this.opts.onProblem?.(p);
+      return result;
+    });
+    this.trust.catch(() => {
+      this.trust = null;
+    });
+    return this.trust;
+  }
+  async publish(post) {
+    const content = sanitizeContent(post.content);
+    const rules = [...new Set([...scanSecrets(post.content), ...scanSecrets(content)].map((f) => f.rule))];
+    if (rules.length > 0) throw new SecretInPostError(rules);
+    if (content.length === 0) throw new Error("\u672C\u6587\u304C\u7A7A\u3067\u3059");
+    const visibility = post.visibility ?? "groups";
+    const { userId, agentId, keys } = this.opts;
+    const trust = await this.directory();
+    const recipients = [...trust.agents.values()].filter((a) => visibility === "groups" || a.user.id === userId).map((a) => ({ agentId: a.id, encKey: a.encKey }));
+    if (!recipients.some((r) => r.agentId === agentId)) recipients.push({ agentId, encKey: keys.enc.pub });
+    const envelope = sealPost(
+      { periodStart: post.periodStart, periodEnd: post.periodEnd, visibility, content },
+      { userId, agentId, signKey: keys.sign },
+      recipients
+    );
+    return this.inner.publishEnvelope(envelope);
+  }
+  sync() {
+    return this.inner.sync();
+  }
+  async inbox() {
+    const trust = await this.directory();
+    const items = await this.inner.inbox();
+    return items.flatMap((item) => {
+      const r = this.open(item, trust);
+      return r.ok ? [{ ...r.item, receivedAt: item.receivedAt }] : [];
+    });
+  }
+  /**
+   * サーバが予約した候補を検証・復号して返す。検証や復号に失敗したものは dismiss して、
+   * 次の候補を試す（何度も同じ壊れた投稿が候補にならないように）。
+   */
+  async claimTell(opts = {}) {
+    const trust = await this.directory();
+    for (let i = 0; i < 3; i++) {
+      const c = await this.inner.claimTell(opts);
+      if (!c) return null;
+      const r = this.open(c, trust);
+      if (r.ok) return { ...r.item, reservedUntil: c.reservedUntil };
+      this.opts.onReject?.(c.postId, r.reason);
+      await this.inner.dismiss(c.postId).catch(() => {
+      });
+    }
+    return null;
+  }
+  markAsTold(postId) {
+    return this.inner.markAsTold(postId);
+  }
+  release(postId) {
+    return this.inner.release(postId);
+  }
+  /** 受け取った投稿の検証と復号（docs/public-deployment-plan.md §6.3） */
+  open(item, trust) {
+    const owner = trust.users.get(item.owner.id);
+    if (!owner || owner.id === this.opts.userId) return { ok: false, reason: "untrusted_author" };
+    const agent = trust.agents.get(item.authorAgentId);
+    if (!agent || agent.user.id !== owner.id) return { ok: false, reason: "untrusted_agent" };
+    const env = item.envelope;
+    if (env.periodStart !== item.periodStart || env.periodEnd !== item.periodEnd || env.visibility !== "groups") {
+      return { ok: false, reason: "header_mismatch" };
+    }
+    const author = { userId: owner.id, agentId: agent.id };
+    if (!verifyPostSignature(env, author, agent.signKey)) return { ok: false, reason: "bad_signature" };
+    let plain;
+    try {
+      plain = openPost(env, author, { agentId: this.opts.agentId, encKey: this.opts.keys.enc });
+    } catch (err) {
+      if (err instanceof DecryptError) return { ok: false, reason: "decrypt_failed" };
+      throw err;
+    }
+    const content = sanitizeContent(plain);
+    if (content.length < MIN_TELL_CONTENT_LENGTH) return { ok: false, reason: "too_short" };
+    return {
+      ok: true,
+      item: {
+        postId: item.postId,
+        owner: { id: owner.id, handle: owner.handle, displayName: owner.displayName },
+        authorAgentName: agent.name,
+        periodStart: item.periodStart,
+        periodEnd: item.periodEnd,
+        content
+      }
+    };
+  }
+};
+
 // apps/cli/src/agent.ts
 function context(flags) {
   const a = resolveAgent(flags.agent);
-  const key = a.agentId ?? a.name;
-  const dir = join4(souiebaHome(), "agents", key);
-  const transport = new HttpTransport({ baseUrl: a.serverUrl, token: a.token });
+  const dir = join5(souiebaHome(), "agents", a.agentId);
+  if (!a.keys || !a.userId || !a.identityKey) {
+    throw new Error(
+      `Agent\u300C${a.name}\u300D\u306E\u9375\u304C\u3042\u308A\u307E\u305B\u3093\uFF08E2EE \u306B\u5BFE\u5FDC\u3059\u308B\u524D\u306B\u767B\u9332\u3057\u305F Agent \u304B\u3001Identity \u9375\u304C\u3053\u306E PC \u306B\u3042\u308A\u307E\u305B\u3093\uFF09\u3002souieba doctor \u3067\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044`
+    );
+  }
+  const debug = (msg) => {
+    if (flags.debug) console.error(`[souieba] ${msg}`);
+  };
+  const transport = new E2eeTransport(new HttpTransport({ baseUrl: a.serverUrl, token: a.token }), {
+    userId: a.userId,
+    agentId: a.agentId,
+    keys: a.keys,
+    identityKey: a.identityKey,
+    onProblem: (p) => debug(`\u4FE1\u983C\u3067\u304D\u306A\u3044\u9375: ${JSON.stringify(p)}`),
+    onReject: (postId, reason) => debug(`${postId} \u3092\u53D7\u3051\u53D6\u308A\u307E\u305B\u3093\u3067\u3057\u305F\uFF08${reason}\uFF09`)
+  });
   const setlog = new SetLog({
     transport,
-    statePath: join4(dir, "session.json"),
+    statePath: join5(dir, "session.json"),
     sessionGapMs: Number(process.env.SOUIEBA_SESSION_GAP_MIN ?? 30) * 6e4,
     now: flags.now,
     onError: (op, err) => {
       if (flags.debug) console.error(`[souieba] ${op} \u5931\u6557: ${err instanceof Error ? err.message : err}`);
     }
   });
-  return { agent: a, transport, setlog, notes: new NotesStore(key, dir) };
+  return { agent: a, transport, setlog, notes: new NotesStore(a.agentId, dir) };
 }
 var fmt = new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 var hm = new Intl.DateTimeFormat("ja-JP", { hour: "2-digit", minute: "2-digit" });
@@ -428,12 +908,22 @@ async function publish(flags, content, periodArg = "previous") {
     if (Number.isNaN(start.getTime())) throw new Error(`--period \u306E\u5024\u304C\u4E0D\u6B63\u3067\u3059: ${periodArg}`);
     period = { periodStart: start.toISOString(), periodEnd: new Date(start.getTime() + 36e5).toISOString() };
   }
-  const r = await transport.publish({ ...period, content });
+  let r;
+  try {
+    r = await transport.publish({ ...period, content });
+  } catch (err) {
+    if (err instanceof SecretInPostError) {
+      out(flags, { ok: false, error: "secret_detected", rules: err.rules }, `souieba: ${err.message}\u3002\u79D8\u5BC6\u60C5\u5831\u3092\u9664\u3044\u3066\u66F8\u304D\u76F4\u3057\u3066\u304F\u3060\u3055\u3044\u3002`);
+      process.exitCode = 2;
+      return;
+    }
+    throw err;
+  }
   notes.mark(period.periodStart, "published");
   out(
     flags,
     { ok: true, ...r, ...period },
-    `souieba: ${r.created ? "\u6295\u7A3F" : "\u4E0A\u66F8\u304D"}\u3057\u307E\u3057\u305F\uFF08${fmt.format(new Date(period.periodStart))}\u301C\u306E1\u6642\u9593\u3001${hm.format(new Date(r.visibleAt))} \u304B\u3089\u53CB\u4EBA\u306B\u516C\u958B\uFF09\u3002`
+    `souieba: ${r.created ? "\u6295\u7A3F" : "\u4E0A\u66F8\u304D"}\u3057\u307E\u3057\u305F\uFF08${fmt.format(new Date(period.periodStart))}\u301C\u306E1\u6642\u9593\u3001${hm.format(new Date(r.visibleAt))} \u304B\u3089\u30B0\u30EB\u30FC\u30D7\u306E\u30E1\u30F3\u30D0\u30FC\u306B\u516C\u958B\uFF09\u3002`
   );
 }
 async function tell(flags, reserve) {
@@ -482,18 +972,24 @@ async function release(flags, postId) {
 // apps/cli/src/main.ts
 var USAGE = `\u4F7F\u3044\u65B9: souieba <command>
 
-  login <\u30B5\u30FC\u30D0URL> --code <\u30B3\u30FC\u30C9> [--handle <h> --name <\u8868\u793A\u540D>]
+  login <\u30B5\u30FC\u30D0URL> --code <\u30B3\u30FC\u30C9> [--verify <\u6307\u7D0B>] [--handle <h> --name <\u8868\u793A\u540D>]
                                    \u30ED\u30B0\u30A4\u30F3\u30B3\u30FC\u30C9\u307E\u305F\u306F\u62DB\u5F85\u30B3\u30FC\u30C9\u3067\u53C2\u52A0\u3059\u308B
-  whoami                           \u30ED\u30B0\u30A4\u30F3\u4E2D\u306E\u30E6\u30FC\u30B6\u30FC
-  invite [--no-auto-friend]        \u62DB\u5F85\u30B3\u30FC\u30C9\u3092\u767A\u884C\u3059\u308B
-  agent add <\u540D\u524D> [--provider <p>]  Agent \u3092\u767B\u9332\u3057\u3001\u30C8\u30FC\u30AF\u30F3\u3092\u4FDD\u5B58\u3059\u308B
+  whoami                           \u30ED\u30B0\u30A4\u30F3\u4E2D\u306E\u30E6\u30FC\u30B6\u30FC\u3068\u3001\u81EA\u5206\u306E\u9375\u306E\u6307\u7D0B
+  groups                           \u6240\u5C5E\u3057\u3066\u3044\u308B\u30B0\u30EB\u30FC\u30D7\u306E\u4E00\u89A7
+  groups create <\u540D\u524D>             \u30B0\u30EB\u30FC\u30D7\u3092\u4F5C\u308B
+  groups join <\u30B3\u30FC\u30C9> [--verify <\u6307\u7D0B>]   \u62DB\u5F85\u30B3\u30FC\u30C9\u3067\u5225\u306E\u30B0\u30EB\u30FC\u30D7\u306B\u53C2\u52A0\u3059\u308B
+  groups members [<\u30B0\u30EB\u30FC\u30D7>]      \u30E1\u30F3\u30D0\u30FC\u3068\u6307\u7D0B\u30FB\u691C\u8A3C\u306E\u72B6\u614B
+  groups leave <\u30B0\u30EB\u30FC\u30D7> | remove <\u30B0\u30EB\u30FC\u30D7> <handle> | rename <\u30B0\u30EB\u30FC\u30D7> <\u65B0\u3057\u3044\u540D\u524D>
+  invite [--group <\u30B0\u30EB\u30FC\u30D7>]      \u30B0\u30EB\u30FC\u30D7\u3078\u306E\u62DB\u5F85\u30B3\u30FC\u30C9\u3092\u767A\u884C\u3059\u308B
+  identity                         \u81EA\u5206\u306E Identity \u9375\u306E\u6307\u7D0B
+  identity export | import <\u6587\u5B57\u5217>  Identity \u9375\u3092\u5225\u306E PC \u3078\u79FB\u3059
+  identity accept <handle> --verify <\u6307\u7D0B>   \u9375\u3092\u4F5C\u308A\u76F4\u3057\u305F\u76F8\u624B\u3092\u3001\u6307\u7D0B\u3092\u78BA\u8A8D\u3057\u305F\u3046\u3048\u3067\u4FE1\u983C\u3057\u76F4\u3059
+  agent add <\u540D\u524D> [--provider <p>]  Agent \u3092\u767B\u9332\u3057\u3001\u30C8\u30FC\u30AF\u30F3\u3068\u9375\u3092\u4FDD\u5B58\u3059\u308B
   agent list | agent revoke <id>
-  friends                          Friend \u4E00\u89A7
-  friends add <handle> | accept <id> | remove <id> | block <id>
-  posts mine                       \u81EA\u5206\u306B\u3064\u3044\u3066\u66F8\u304B\u308C\u305F\u6295\u7A3F
+  posts mine                       \u81EA\u5206\u306B\u3064\u3044\u3066\u66F8\u304B\u308C\u305F\u6295\u7A3F\uFF08\u3053\u306E PC \u306E Agent \u306E\u9375\u3067\u5FA9\u53F7\u3059\u308B\uFF09
   posts delete <id>
   export                           \u81EA\u5206\u306E\u30C7\u30FC\u30BF\u3092 JSON \u3067\u51FA\u529B\u3059\u308B
-  doctor                           \u63A5\u7D9A\u30FB\u30C8\u30FC\u30AF\u30F3\u30FB\u8A2D\u5B9A\u30D5\u30A1\u30A4\u30EB\u306E\u6A29\u9650\u3092\u78BA\u8A8D\u3059\u308B
+  doctor                           \u63A5\u7D9A\u30FB\u30C8\u30FC\u30AF\u30F3\u30FB\u9375\u30FB\u8A2D\u5B9A\u30D5\u30A1\u30A4\u30EB\u306E\u6A29\u9650\u3092\u78BA\u8A8D\u3059\u308B
 
 \u30A8\u30FC\u30B8\u30A7\u30F3\u30C8\u7528\uFF08Skill \u304B\u3089\u547C\u3076\u3002--agent \u307E\u305F\u306F\u74B0\u5883\u5909\u6570 SOUIEBA_AGENT \u3067 Agent \u3092\u9078\u3076\u3002--json \u3067 JSON \u51FA\u529B\uFF09:
   tell [--reserve]                 \u4F1A\u8A71\u306E\u59CB\u3081\u306B\u547C\u3076\u3002\u4F1D\u3048\u308B\u8FD1\u6CC1\u304C1\u4EF6\u3042\u308C\u3070\u8868\u793A\u3059\u308B
@@ -502,7 +998,7 @@ var USAGE = `\u4F7F\u3044\u65B9: souieba <command>
   compose [--skip <periodStart>]   \u6295\u7A3F\u5F85\u3061\u306E\u6642\u9593\u5E2F\u3068\u30E1\u30E2\u3092\u8868\u793A\u3059\u308B
   publish [--period previous|current|<ISO>] <\u672C\u6587>   1\u6642\u9593\u5206\u306E\u6295\u7A3F\u3092\u3059\u308B
 
-\u8A2D\u5B9A\u30D5\u30A1\u30A4\u30EB: ${configPath()}\uFF08\u74B0\u5883\u5909\u6570 SOUIEBA_HOME \u3067\u5834\u6240\u3092\u5909\u66F4\u3067\u304D\u307E\u3059\uFF09`;
+<\u30B0\u30EB\u30FC\u30D7> \u306F\u540D\u524D\u304B ID\u3002\u8A2D\u5B9A\u30D5\u30A1\u30A4\u30EB: ${configPath()}\uFF08\u74B0\u5883\u5909\u6570 SOUIEBA_HOME \u3067\u5834\u6240\u3092\u5909\u66F4\u3067\u304D\u307E\u3059\uFF09`;
 function userClient() {
   const cfg = loadClientConfig();
   if (!cfg.serverUrl || !cfg.userToken) throw new Error("\u672A\u30ED\u30B0\u30A4\u30F3\u3067\u3059\u3002`souieba login` \u3092\u5B9F\u884C\u3057\u3066\u304F\u3060\u3055\u3044");
@@ -513,6 +1009,63 @@ async function publicGet(baseUrl, path) {
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
   return await res.json();
 }
+function localIdentity(cfg) {
+  if (!cfg.user) throw new Error("\u672A\u30ED\u30B0\u30A4\u30F3\u3067\u3059\u3002`souieba login` \u3092\u5B9F\u884C\u3057\u3066\u304F\u3060\u3055\u3044");
+  if (!cfg.identity || cfg.identity.userId !== cfg.user.id) {
+    throw new Error(
+      "\u3053\u306E PC \u306B\u306F Identity \u9375\u304C\u3042\u308A\u307E\u305B\u3093\u3002\u5143\u306E PC \u3067 `souieba identity export` \u3092\u5B9F\u884C\u3057\u3001\u3053\u3053\u3067 `souieba identity import <\u6587\u5B57\u5217>` \u3092\u5B9F\u884C\u3057\u3066\u304F\u3060\u3055\u3044"
+    );
+  }
+  return cfg.identity;
+}
+async function ensureServerIdentity(client, identity) {
+  const { user } = await client.request("GET", "/v1/me");
+  if (!user.identityKey) {
+    await client.request("PUT", "/v1/me/identity", { identityKey: identity.pub });
+  } else if (user.identityKey !== identity.pub) {
+    throw new Error(
+      "\u30B5\u30FC\u30D0\u306B\u767B\u9332\u3055\u308C\u3066\u3044\u308B Identity \u9375\u304C\u3001\u3053\u306E PC \u306E\u3082\u306E\u3068\u9055\u3044\u307E\u3059\u3002\u30B5\u30FC\u30D0\u304C\u9375\u3092\u3059\u308A\u66FF\u3048\u3066\u3044\u308B\u53EF\u80FD\u6027\u304C\u3042\u308A\u307E\u3059\u3002\u7BA1\u7406\u8005\u306B\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044"
+    );
+  }
+}
+async function resolveGroup(client, ref) {
+  const { groups } = await client.request("GET", "/v1/groups");
+  if (groups.length === 0) throw new Error("\u3069\u306E\u30B0\u30EB\u30FC\u30D7\u306B\u3082\u5165\u3063\u3066\u3044\u307E\u305B\u3093\u3002`souieba groups create <\u540D\u524D>` \u3067\u4F5C\u308B\u304B\u3001\u62DB\u5F85\u30B3\u30FC\u30C9\u3067\u53C2\u52A0\u3057\u3066\u304F\u3060\u3055\u3044");
+  if (!ref) {
+    if (groups.length === 1) return groups[0];
+    throw new Error(`\u30B0\u30EB\u30FC\u30D7\u3092\u6307\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044\uFF08--group\uFF09\u3002\u6240\u5C5E: ${groups.map((g) => g.name).join(", ")}`);
+  }
+  const hits = groups.filter((g) => g.id === ref || g.name === ref);
+  if (hits.length === 1) return hits[0];
+  throw new Error(hits.length === 0 ? `\u30B0\u30EB\u30FC\u30D7\u300C${ref}\u300D\u306B\u6240\u5C5E\u3057\u3066\u3044\u307E\u305B\u3093` : `\u300C${ref}\u300D\u3068\u3044\u3046\u540D\u524D\u306E\u30B0\u30EB\u30FC\u30D7\u304C\u8907\u6570\u3042\u308A\u307E\u3059\u3002ID \u3067\u6307\u5B9A\u3057\u3066\u304F\u3060\u3055\u3044`);
+}
+async function trustReport(client, cfg) {
+  const identity = localIdentity(cfg);
+  const dir = await client.request("GET", "/v1/keys");
+  return { dir, trust: new Keyring().evaluate(dir, identity.pub) };
+}
+function describeProblem(p) {
+  switch (p.kind) {
+    case "identity_changed":
+      return `@${p.handle} \u306E Identity \u9375\u304C\u3001\u4EE5\u524D\u306B\u898B\u305F\u3082\u306E\u304B\u3089\u5909\u308F\u3063\u3066\u3044\u307E\u3059\u3002\u672C\u4EBA\u306B\u6307\u7D0B\u3092\u78BA\u8A8D\u3057\u3001\u6B63\u3057\u3051\u308C\u3070 souieba identity accept ${p.handle} --verify <\u6307\u7D0B> \u3092\u5B9F\u884C\u3057\u3066\u304F\u3060\u3055\u3044\u3002\u305D\u308C\u307E\u3067 @${p.handle} \u3068\u306F\u8FD1\u6CC1\u3092\u3084\u308A\u53D6\u308A\u3057\u307E\u305B\u3093`;
+    case "self_identity_mismatch":
+      return "\u30B5\u30FC\u30D0\u304C\u914D\u3063\u3066\u3044\u308B\u81EA\u5206\u306E Identity \u9375\u304C\u3001\u3053\u306E PC \u306E\u3082\u306E\u3068\u9055\u3044\u307E\u3059\u3002\u30B5\u30FC\u30D0\u304C\u9375\u3092\u3059\u308A\u66FF\u3048\u3066\u3044\u308B\u53EF\u80FD\u6027\u304C\u3042\u308A\u307E\u3059";
+    case "unverified_member":
+      return `\u30B0\u30EB\u30FC\u30D7\u300C${p.groupName}\u300D\u306E @${p.handle} \u306F\u3001\u6240\u5C5E\u3092\u8A3C\u660E\u3067\u304D\u307E\u305B\u3093\uFF08\u62DB\u5F85\u306E\u7F72\u540D\u3092\u305F\u3069\u308C\u306A\u3044\uFF09\u3002@${p.handle} \u306B\u306F\u8FD1\u6CC1\u3092\u9001\u308A\u307E\u305B\u3093`;
+    case "invalid_agent_cert":
+      return `@${p.handle} \u306E Agent\u300C${p.agentName}\u300D\u306E\u8A3C\u660E\u66F8\u3092\u691C\u8A3C\u3067\u304D\u307E\u305B\u3093\u3002\u3053\u306E Agent \u306B\u306F\u8FD1\u6CC1\u3092\u9001\u308A\u307E\u305B\u3093`;
+  }
+}
+function checkInviter(inviter, verify2) {
+  if (!verify2) return;
+  if (!inviter) throw new Error("--verify \u3092\u6307\u5B9A\u3057\u307E\u3057\u305F\u304C\u3001\u3053\u306E\u30B3\u30FC\u30C9\u306B\u306F\u62DB\u5F85\u8005\u304C\u3044\u307E\u305B\u3093");
+  const actual = fingerprint(inviter.identityKey);
+  if (actual !== normalizeFingerprint(verify2)) {
+    throw new Error(
+      `\u62DB\u5F85\u8005 @${inviter.handle} \u306E\u6307\u7D0B\u304C\u4E00\u81F4\u3057\u307E\u305B\u3093\uFF08\u53D7\u3051\u53D6\u3063\u305F\u6307\u7D0B: ${normalizeFingerprint(verify2)}\u3001\u30B5\u30FC\u30D0\u304C\u8FD4\u3057\u305F\u9375\u306E\u6307\u7D0B: ${actual}\uFF09\u3002\u30B5\u30FC\u30D0\u304C\u9375\u3092\u3059\u308A\u66FF\u3048\u3066\u3044\u308B\u53EF\u80FD\u6027\u304C\u3042\u308A\u307E\u3059\u3002\u62DB\u5F85\u3057\u305F\u4EBA\u306B\u9023\u7D61\u3057\u3066\u304F\u3060\u3055\u3044`
+    );
+  }
+}
 var testableNow = () => process.env.SOUIEBA_NOW ? new Date(process.env.SOUIEBA_NOW) : /* @__PURE__ */ new Date();
 async function main(argv) {
   const { values, positionals } = parseArgs({
@@ -520,17 +1073,18 @@ async function main(argv) {
     allowPositionals: true,
     options: {
       code: { type: "string" },
+      verify: { type: "string" },
       handle: { type: "string" },
       name: { type: "string" },
       provider: { type: "string" },
+      group: { type: "string" },
       agent: { type: "string" },
       current: { type: "boolean", default: false },
       period: { type: "string" },
       skip: { type: "string" },
       reserve: { type: "boolean", default: false },
       json: { type: "boolean", default: false },
-      debug: { type: "boolean", default: false },
-      "no-auto-friend": { type: "boolean", default: false }
+      debug: { type: "boolean", default: false }
     }
   });
   const [cmd, sub, ...rest] = positionals;
@@ -541,32 +1095,75 @@ async function main(argv) {
       if (!url || !values.code) throw new Error("souieba login <\u30B5\u30FC\u30D0URL> --code <\u30B3\u30FC\u30C9>");
       const baseUrl = new URL(url).origin;
       const instance = await publicGet(baseUrl, "/v1/instance");
+      const cfg = loadClientConfig();
+      const reuse = !values.handle && cfg.serverUrl === baseUrl && cfg.identity;
+      const candidate = reuse ? { pub: cfg.identity.pub, priv: cfg.identity.priv } : generateSigningKey();
       const res = await fetch(`${baseUrl}/v1/auth/redeem`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ code: values.code, handle: values.handle, displayName: values.name }),
+        body: JSON.stringify({
+          code: values.code,
+          handle: values.handle,
+          displayName: values.name,
+          identityKey: candidate.pub,
+          joinSig: signText(candidate, signedText.join(values.code))
+        }),
         signal: AbortSignal.timeout(1e4)
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error?.message ?? `HTTP ${res.status}`);
-      const cfg = loadClientConfig();
+      checkInviter(data.inviter, values.verify);
+      let identity;
+      if (data.user.identityKey === candidate.pub) identity = { userId: data.user.id, ...candidate };
+      else if (cfg.identity?.userId === data.user.id && cfg.identity.pub === data.user.identityKey) identity = cfg.identity;
       const agents = cfg.serverUrl === baseUrl && cfg.user?.id === data.user.id ? cfg.agents : {};
-      saveClientConfig({ serverUrl: baseUrl, userToken: data.token, user: data.user, agents });
-      console.log(`${instance.name}\uFF08v${instance.version}\uFF09\u306B @${data.user.handle} \u3068\u3057\u3066\u30ED\u30B0\u30A4\u30F3\u3057\u307E\u3057\u305F`);
-      console.log(`\u6B21\u306B: souieba agent add <Agent\u540D>`);
+      const user = { id: data.user.id, handle: data.user.handle, displayName: data.user.displayName };
+      saveClientConfig({ serverUrl: baseUrl, userToken: data.token, user, identity, agents });
+      if (data.inviter && values.verify) new Keyring().pinIdentity(data.inviter.id, data.inviter.identityKey);
+      console.log(`${instance.name}${instance.version ? `\uFF08v${instance.version}\uFF09` : ""} \u306B @${user.handle} \u3068\u3057\u3066\u30ED\u30B0\u30A4\u30F3\u3057\u307E\u3057\u305F`);
+      if (data.group) console.log(`\u30B0\u30EB\u30FC\u30D7\u300C${data.group.name}\u300D\u306B\u53C2\u52A0\u3057\u307E\u3057\u305F\uFF08\u62DB\u5F85\u3057\u305F\u4EBA: @${data.inviter?.handle}\uFF09`);
+      if (identity) {
+        console.log(`\u3042\u306A\u305F\u306E Identity \u9375\u306E\u6307\u7D0B: ${fingerprint(identity.pub)}`);
+        console.log("\u6B21\u306B: souieba agent add <Agent\u540D>");
+      } else {
+        console.log(
+          "\u3053\u306E PC \u306B\u306F Identity \u9375\u304C\u3042\u308A\u307E\u305B\u3093\u3002\u5143\u306E PC \u3067 `souieba identity export` \u3092\u5B9F\u884C\u3057\u3001\u3053\u3053\u3067 `souieba identity import <\u6587\u5B57\u5217>` \u3092\u5B9F\u884C\u3057\u3066\u304F\u3060\u3055\u3044"
+        );
+      }
       break;
     }
     case "whoami": {
       const me = await userClient().request("GET", "/v1/me");
       console.log(`@${me.user.handle}\uFF08${me.user.displayName}\u3001${me.user.role}\uFF09`);
+      if (me.user.identityKey) console.log(`Identity \u9375\u306E\u6307\u7D0B: ${fingerprint(me.user.identityKey)}`);
+      break;
+    }
+    case "groups": {
+      await groupsCommand(sub, rest, values);
       break;
     }
     case "invite": {
-      const r = await userClient().request("POST", "/v1/invites", {
-        autoFriend: !values["no-auto-friend"]
+      const cfg = loadClientConfig();
+      const identity = localIdentity(cfg);
+      const client = userClient();
+      await ensureServerIdentity(client, identity);
+      const group = await resolveGroup(client, values.group);
+      const code = newCode(GROUP_INVITE_CODE_LENGTH);
+      const commit = inviteCommit(group.id, code);
+      const r = await client.request("POST", `/v1/groups/${encodeURIComponent(group.id)}/invites`, {
+        codeHash: codeHash(code),
+        commit,
+        inviteSig: signText(identity, signedText.invite(group.id, identity.userId, commit))
       });
-      console.log(`\u62DB\u5F85\u30B3\u30FC\u30C9: ${r.code}\uFF08${r.expiresAt} \u307E\u3067\u6709\u52B9\u30011\u56DE\u9650\u308A\uFF09`);
-      console.log(`\u76F8\u624B\u306E PC \u3067: souieba login ${loadClientConfig().serverUrl} --code ${r.code} --handle <handle> --name <\u8868\u793A\u540D>`);
+      const fp = fingerprint(identity.pub);
+      console.log(`\u30B0\u30EB\u30FC\u30D7\u300C${group.name}\u300D\u3078\u306E\u62DB\u5F85\u30B3\u30FC\u30C9: ${code}\uFF08${r.expiresAt} \u307E\u3067\u6709\u52B9\u30011\u56DE\u9650\u308A\uFF09`);
+      console.log(`\u3042\u306A\u305F\u306E\u6307\u7D0B: ${fp}\uFF08\u30B3\u30FC\u30C9\u3068\u4E00\u7DD2\u306B\u3001\u30B5\u30FC\u30D0\u3092\u901A\u3055\u305A\u306B\u76F8\u624B\u3078\u4F1D\u3048\u3066\u304F\u3060\u3055\u3044\uFF09`);
+      console.log(`\u521D\u3081\u3066\u306E\u4EBA: souieba login ${cfg.serverUrl} --code ${code} --verify ${fp} --handle <handle> --name <\u8868\u793A\u540D>`);
+      console.log(`\u767B\u9332\u6E08\u307F\u306E\u4EBA: souieba groups join ${code} --verify ${fp}`);
+      break;
+    }
+    case "identity": {
+      await identityCommand(sub, rest, values);
       break;
     }
     case "agent": {
@@ -574,14 +1171,21 @@ async function main(argv) {
       if (sub === "add") {
         const name = rest.join(" ");
         if (!name) throw new Error("souieba agent add <\u540D\u524D>");
+        const cfg = loadClientConfig();
+        const identity = localIdentity(cfg);
+        await ensureServerIdentity(client, identity);
+        const enc = generateEncryptionKey();
+        const sign2 = generateSigningKey();
         const r = await client.request("POST", "/v1/agents", {
           name,
-          provider: values.provider
+          provider: values.provider,
+          encKey: enc.pub,
+          signKey: sign2.pub,
+          cert: signText(identity, signedText.agentCert(identity.userId, enc.pub, sign2.pub))
         });
-        const cfg = loadClientConfig();
-        cfg.agents[name] = { id: r.agent.id, token: r.token };
+        cfg.agents[name] = { id: r.agent.id, token: r.token, keys: { enc, sign: sign2 } };
         saveClientConfig(cfg);
-        console.log(`Agent\u300C${name}\u300D\u3092\u767B\u9332\u3057\u307E\u3057\u305F\uFF08${r.agent.id}\uFF09\u3002\u30C8\u30FC\u30AF\u30F3\u306F ${configPath()} \u306B\u4FDD\u5B58\u3057\u307E\u3057\u305F`);
+        console.log(`Agent\u300C${name}\u300D\u3092\u767B\u9332\u3057\u307E\u3057\u305F\uFF08${r.agent.id}\uFF09\u3002\u30C8\u30FC\u30AF\u30F3\u3068\u9375\u306F ${configPath()} \u306B\u4FDD\u5B58\u3057\u307E\u3057\u305F`);
       } else if (sub === "revoke") {
         if (!rest[0]) throw new Error("souieba agent revoke <id>");
         await client.request("DELETE", `/v1/agents/${encodeURIComponent(rest[0])}`);
@@ -590,27 +1194,12 @@ async function main(argv) {
         saveClientConfig(cfg);
         console.log("\u5931\u52B9\u3055\u305B\u307E\u3057\u305F");
       } else {
-        const r = await client.request("GET", "/v1/agents");
-        for (const a of r.agents) console.log(`${a.id}	${a.name}${a.revokedAt ? "	(revoked)" : ""}`);
-      }
-      break;
-    }
-    case "friends": {
-      const client = userClient();
-      if (sub === "add") {
-        const r = await client.request("POST", "/v1/friends", { handle: rest[0] });
-        console.log(r.status === "accepted" ? "Friend \u306B\u306A\u308A\u307E\u3057\u305F" : "\u7533\u8ACB\u3057\u307E\u3057\u305F");
-      } else if (sub && ["accept", "remove", "block"].includes(sub)) {
-        if (!rest[0]) throw new Error(`souieba friends ${sub} <id>`);
-        const id = encodeURIComponent(rest[0]);
-        if (sub === "remove") await client.request("DELETE", `/v1/friends/${id}`);
-        else await client.request("POST", `/v1/friends/${id}/${sub}`);
-        console.log("\u5B8C\u4E86\u3057\u307E\u3057\u305F");
-      } else {
-        const r = await client.request("GET", "/v1/friends");
-        if (r.friends.length === 0) console.log("\uFF08Friend \u306F\u3044\u307E\u305B\u3093\uFF09");
-        for (const f of r.friends) {
-          console.log(`${f.id}	@${f.user.handle}	${f.user.displayName}	${f.status}${f.direction ? ` (${f.direction})` : ""}`);
+        const r = await client.request(
+          "GET",
+          "/v1/agents"
+        );
+        for (const a of r.agents) {
+          console.log(`${a.id}	${a.name}${a.revokedAt ? "	(revoked)" : !a.encKey ? "	(\u9375\u306A\u3057\u3002\u767B\u9332\u3057\u76F4\u3057\u3066\u304F\u3060\u3055\u3044)" : ""}`);
         }
       }
       break;
@@ -622,10 +1211,14 @@ async function main(argv) {
         await client.request("DELETE", `/v1/posts/${encodeURIComponent(rest[0])}`);
         console.log("\u524A\u9664\u3057\u307E\u3057\u305F");
       } else {
+        const cfg = loadClientConfig();
         const r = await client.request("GET", "/v1/posts/mine");
         if (r.posts.length === 0) console.log("\uFF08\u6295\u7A3F\u306F\u3042\u308A\u307E\u305B\u3093\uFF09");
+        const local = Object.values(cfg.agents).filter((a) => a.keys);
         for (const p of r.posts) {
-          console.log(`${p.id}	${new Date(p.periodStart).toLocaleString()}	[${p.author.name}]	${p.content}${p.visibility === "private" ? " (private)" : ""}`);
+          console.log(
+            `${p.id}	${new Date(p.periodStart).toLocaleString()}	[${p.author.name}]	${decryptOwn(p, cfg.user.id, local)}${p.visibility === "private" ? " (private)" : ""}`
+          );
         }
       }
       break;
@@ -667,9 +1260,148 @@ async function main(argv) {
       process.exitCode = cmd ? 1 : 0;
   }
 }
+function decryptOwn(p, userId, local) {
+  for (const a of local) {
+    if (!a.keys || !p.envelope.recipients.some((r) => r.agentId === a.id)) continue;
+    try {
+      return openPost(p.envelope, { userId, agentId: p.author.id }, { agentId: a.id, encKey: a.keys.enc });
+    } catch {
+    }
+  }
+  return "\uFF08\u3053\u306E PC \u306E Agent \u3067\u306F\u8AAD\u3081\u307E\u305B\u3093\uFF09";
+}
+async function groupsCommand(sub, rest, values) {
+  const client = userClient();
+  const cfg = loadClientConfig();
+  switch (sub) {
+    case void 0:
+    case "list": {
+      const { groups } = await client.request("GET", "/v1/groups");
+      if (groups.length === 0) console.log("\uFF08\u3069\u306E\u30B0\u30EB\u30FC\u30D7\u306B\u3082\u5165\u3063\u3066\u3044\u307E\u305B\u3093\uFF09");
+      for (const g of groups) console.log(`${g.id}	${g.name}	${g.role}	${g.memberCount}\u4EBA`);
+      return;
+    }
+    case "create": {
+      const name = rest.join(" ");
+      if (!name) throw new Error("souieba groups create <\u540D\u524D>");
+      const identity = localIdentity(cfg);
+      await ensureServerIdentity(client, identity);
+      const id = `grp_${randomBytes2(16).toString("base64url")}`;
+      await client.request("POST", "/v1/groups", {
+        id,
+        name,
+        createSig: signText(identity, signedText.groupCreate(id, identity.userId))
+      });
+      console.log(`\u30B0\u30EB\u30FC\u30D7\u300C${name}\u300D\u3092\u4F5C\u308A\u307E\u3057\u305F\uFF08${id}\uFF09`);
+      console.log(`\u6B21\u306B: souieba invite --group ${JSON.stringify(name)}`);
+      return;
+    }
+    case "join": {
+      const code = rest[0];
+      if (!code) throw new Error("souieba groups join <\u30B3\u30FC\u30C9> [--verify <\u6307\u7D0B>]");
+      const identity = localIdentity(cfg);
+      await ensureServerIdentity(client, identity);
+      const r = await client.request("POST", "/v1/groups/join", { code, joinSig: signText(identity, signedText.join(code)) });
+      try {
+        checkInviter(r.inviter, values.verify);
+      } catch (err) {
+        if (r.group) await client.request("DELETE", `/v1/groups/${encodeURIComponent(r.group.id)}/members/${encodeURIComponent(identity.userId)}`);
+        throw err;
+      }
+      if (r.inviter && values.verify) new Keyring().pinIdentity(r.inviter.id, r.inviter.identityKey);
+      console.log(`\u30B0\u30EB\u30FC\u30D7\u300C${r.group?.name}\u300D\u306B\u53C2\u52A0\u3057\u307E\u3057\u305F\uFF08\u62DB\u5F85\u3057\u305F\u4EBA: @${r.inviter?.handle}\uFF09`);
+      return;
+    }
+    case "members": {
+      const group = await resolveGroup(client, rest[0]);
+      const { trust } = await trustReport(client, cfg);
+      const view = trust.groups.find((g) => g.id === group.id);
+      for (const m of view?.members ?? []) {
+        if (!m.active) continue;
+        const state = m.userId === cfg.user?.id ? "\u81EA\u5206" : m.verified ? "\u691C\u8A3C\u6E08\u307F" : "\u672A\u691C\u8A3C";
+        console.log(`@${m.handle}	${m.displayName}	${m.role}	${m.identityKey ? fingerprint(m.identityKey) : "\uFF08\u9375\u306A\u3057\uFF09"}	${state}`);
+      }
+      for (const p of trust.problems) console.log(`! ${describeProblem(p)}`);
+      return;
+    }
+    case "leave": {
+      const group = await resolveGroup(client, rest[0]);
+      await client.request("DELETE", `/v1/groups/${encodeURIComponent(group.id)}/members/${encodeURIComponent(cfg.user.id)}`);
+      console.log(`\u30B0\u30EB\u30FC\u30D7\u300C${group.name}\u300D\u3092\u629C\u3051\u307E\u3057\u305F`);
+      return;
+    }
+    case "remove": {
+      const [ref, handle] = rest;
+      if (!ref || !handle) throw new Error("souieba groups remove <\u30B0\u30EB\u30FC\u30D7> <handle>");
+      const group = await resolveGroup(client, ref);
+      const dir = await client.request("GET", "/v1/keys");
+      const target = dir.users.find((u) => u.handle === handle.replace(/^@/, ""));
+      if (!target) throw new Error(`@${handle} \u306F\u3053\u306E\u30B0\u30EB\u30FC\u30D7\u306B\u3044\u307E\u305B\u3093`);
+      await client.request("DELETE", `/v1/groups/${encodeURIComponent(group.id)}/members/${encodeURIComponent(target.id)}`);
+      console.log(`@${target.handle} \u3092\u30B0\u30EB\u30FC\u30D7\u300C${group.name}\u300D\u304B\u3089\u5916\u3057\u307E\u3057\u305F`);
+      return;
+    }
+    case "rename": {
+      const [ref, ...nameParts] = rest;
+      if (!ref || nameParts.length === 0) throw new Error("souieba groups rename <\u30B0\u30EB\u30FC\u30D7> <\u65B0\u3057\u3044\u540D\u524D>");
+      const group = await resolveGroup(client, ref);
+      await client.request("PATCH", `/v1/groups/${encodeURIComponent(group.id)}`, { name: nameParts.join(" ") });
+      console.log("\u5909\u66F4\u3057\u307E\u3057\u305F");
+      return;
+    }
+    default:
+      throw new Error(`\u4E0D\u660E\u306A\u30B5\u30D6\u30B3\u30DE\u30F3\u30C9\u3067\u3059: groups ${sub}`);
+  }
+}
+var EXPORT_PREFIX = "souieba-identity:";
+async function identityCommand(sub, rest, values) {
+  const cfg = loadClientConfig();
+  switch (sub) {
+    case void 0: {
+      const identity = localIdentity(cfg);
+      console.log(`@${cfg.user.handle} \u306E Identity \u9375\u306E\u6307\u7D0B: ${fingerprint(identity.pub)}`);
+      return;
+    }
+    case "export": {
+      const identity = localIdentity(cfg);
+      console.error("\u203B \u3053\u308C\u306F\u79D8\u5BC6\u9375\u3067\u3059\u3002\u81EA\u5206\u306E\u5225\u306E PC \u306B\u79FB\u3059\u76EE\u7684\u4EE5\u5916\u3067\u3001\u4ED6\u4EBA\u3084\u30C1\u30E3\u30C3\u30C8\u306B\u8CBC\u3089\u306A\u3044\u3067\u304F\u3060\u3055\u3044\u3002");
+      console.log(`${EXPORT_PREFIX}${Buffer.from(JSON.stringify(identity)).toString("base64url")}`);
+      return;
+    }
+    case "import": {
+      const blob = rest[0];
+      if (!blob?.startsWith(EXPORT_PREFIX)) throw new Error(`souieba identity import ${EXPORT_PREFIX}\u2026`);
+      const identity = JSON.parse(Buffer.from(blob.slice(EXPORT_PREFIX.length), "base64url").toString());
+      if (!identity || !cfg.user || identity.userId !== cfg.user.id) throw new Error("\u30ED\u30B0\u30A4\u30F3\u4E2D\u306E\u30E6\u30FC\u30B6\u30FC\u306E\u9375\u3067\u306F\u3042\u308A\u307E\u305B\u3093");
+      if (!verifyText(identity.pub, "check", signText(identity, "check"))) throw new Error("\u9375\u304C\u58CA\u308C\u3066\u3044\u307E\u3059");
+      await ensureServerIdentity(userClient(), identity);
+      saveClientConfig({ ...cfg, identity });
+      console.log(`Identity \u9375\u3092\u53D6\u308A\u8FBC\u307F\u307E\u3057\u305F\uFF08\u6307\u7D0B: ${fingerprint(identity.pub)}\uFF09\u3002\u6B21\u306B: souieba agent add <Agent\u540D>`);
+      return;
+    }
+    case "accept": {
+      const handle = rest[0]?.replace(/^@/, "");
+      if (!handle || !values.verify) throw new Error("souieba identity accept <handle> --verify <\u6307\u7D0B>");
+      const dir = await userClient().request("GET", "/v1/keys");
+      const u = dir.users.find((x) => x.handle === handle);
+      if (!u?.identityKey) throw new Error(`@${handle} \u306F\u540C\u3058\u30B0\u30EB\u30FC\u30D7\u306B\u3044\u307E\u305B\u3093`);
+      if (fingerprint(u.identityKey) !== normalizeFingerprint(values.verify)) {
+        throw new Error(`\u6307\u7D0B\u304C\u4E00\u81F4\u3057\u307E\u305B\u3093\uFF08\u30B5\u30FC\u30D0\u304C\u8FD4\u3057\u305F\u9375\u306E\u6307\u7D0B: ${fingerprint(u.identityKey)}\uFF09`);
+      }
+      const keyring = new Keyring();
+      keyring.forgetIdentity(u.id);
+      keyring.pinIdentity(u.id, u.identityKey);
+      console.log(`@${handle} \u306E\u65B0\u3057\u3044\u9375\u3092\u4FE1\u983C\u3057\u307E\u3057\u305F`);
+      return;
+    }
+    default:
+      throw new Error(`\u4E0D\u660E\u306A\u30B5\u30D6\u30B3\u30DE\u30F3\u30C9\u3067\u3059: identity ${sub}`);
+  }
+}
 async function doctor() {
   const cfg = loadClientConfig();
   const ok = (m) => console.log(`  \u2713 ${m}`);
+  const warn = (m) => console.log(`  ! ${m}`);
   const ng = (m) => {
     console.log(`  \u2717 ${m}`);
     process.exitCode = 1;
@@ -683,26 +1415,45 @@ async function doctor() {
     return;
   }
   if (!cfg.serverUrl) return ng("\u30B5\u30FC\u30D0\u304C\u672A\u8A2D\u5B9A\u3067\u3059");
-  if (!cfg.serverUrl.startsWith("https:")) console.log("  ! http \u3067\u63A5\u7D9A\u3057\u3066\u3044\u307E\u3059\uFF08VPN \u304C\u6697\u53F7\u5316\u3057\u3066\u3044\u308B\u524D\u63D0\uFF09");
+  if (!cfg.serverUrl.startsWith("https:")) warn("http \u3067\u63A5\u7D9A\u3057\u3066\u3044\u307E\u3059\uFF08VPN \u304C\u6697\u53F7\u5316\u3057\u3066\u3044\u308B\u524D\u63D0\uFF09");
   try {
     const started = Date.now();
     const inst = await publicGet(cfg.serverUrl, "/v1/instance");
-    ok(`\u30B5\u30FC\u30D0\u306B\u5230\u9054\u3067\u304D\u307E\u3059: ${inst.name} v${inst.version}\uFF08${Date.now() - started}ms\uFF09`);
+    ok(`\u30B5\u30FC\u30D0\u306B\u5230\u9054\u3067\u304D\u307E\u3059: ${inst.name}${inst.version ? ` v${inst.version}` : ""}\uFF08${Date.now() - started}ms\uFF09`);
   } catch (err) {
-    return ng(`\u30B5\u30FC\u30D0\u306B\u5230\u9054\u3067\u304D\u307E\u305B\u3093\u3002VPN \u306B\u63A5\u7D9A\u3057\u3066\u3044\u308B\u304B\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\uFF08${err instanceof Error ? err.message : err}\uFF09`);
+    return ng(`\u30B5\u30FC\u30D0\u306B\u5230\u9054\u3067\u304D\u307E\u305B\u3093\u3002URL \u3068\u30CD\u30C3\u30C8\u30EF\u30FC\u30AF\u3092\u78BA\u8A8D\u3057\u3066\u304F\u3060\u3055\u3044\uFF08${err instanceof Error ? err.message : err}\uFF09`);
   }
+  const client = userClient();
   try {
-    await userClient().request("GET", "/v1/me");
+    await client.request("GET", "/v1/me");
     ok("User \u30C8\u30FC\u30AF\u30F3\u306F\u6709\u52B9\u3067\u3059");
   } catch (err) {
-    ng(`User \u30C8\u30FC\u30AF\u30F3\u304C\u7121\u52B9\u3067\u3059: ${err instanceof Error ? err.message : err}`);
+    return ng(`User \u30C8\u30FC\u30AF\u30F3\u304C\u7121\u52B9\u3067\u3059: ${err instanceof Error ? err.message : err}`);
+  }
+  try {
+    const identity = localIdentity(cfg);
+    await ensureServerIdentity(client, identity);
+    ok(`Identity \u9375\uFF08\u6307\u7D0B ${fingerprint(identity.pub)}\uFF09`);
+  } catch (err) {
+    ng(err instanceof Error ? err.message : String(err));
   }
   for (const [name, a] of Object.entries(cfg.agents)) {
     try {
       await new HttpClient({ baseUrl: cfg.serverUrl, token: a.token }).request("GET", "/v1/me");
-      ok(`Agent\u300C${name}\u300D\u306E\u30C8\u30FC\u30AF\u30F3\u306F\u6709\u52B9\u3067\u3059`);
+      if (a.keys) ok(`Agent\u300C${name}\u300D\u306E\u30C8\u30FC\u30AF\u30F3\u3068\u9375\u306F\u6709\u52B9\u3067\u3059`);
+      else ng(`Agent\u300C${name}\u300D\u306B\u306F\u9375\u304C\u3042\u308A\u307E\u305B\u3093\u3002souieba agent add ${JSON.stringify(name)} \u3067\u767B\u9332\u3057\u76F4\u3057\u3066\u304F\u3060\u3055\u3044`);
     } catch (err) {
       ng(`Agent\u300C${name}\u300D\u306E\u30C8\u30FC\u30AF\u30F3\u304C\u7121\u52B9\u3067\u3059: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  if (cfg.identity) {
+    try {
+      const { trust } = await trustReport(client, cfg);
+      const others = trust.users.size - 1;
+      ok(`\u30B0\u30EB\u30FC\u30D7 ${trust.groups.length} \u4EF6\u3001\u8FD1\u6CC1\u3092\u3084\u308A\u53D6\u308A\u3059\u308B\u76F8\u624B ${others} \u4EBA\uFF08\u7F72\u540D\u3092\u691C\u8A3C\u6E08\u307F\uFF09`);
+      for (const p of trust.problems) warn(describeProblem(p));
+    } catch (err) {
+      ng(`\u516C\u958B\u9375\u30C7\u30A3\u30EC\u30AF\u30C8\u30EA\u3092\u691C\u8A3C\u3067\u304D\u307E\u305B\u3093: ${err instanceof Error ? err.message : err}`);
     }
   }
 }

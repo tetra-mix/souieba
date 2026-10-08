@@ -4,7 +4,16 @@
  */
 import { join } from "node:path";
 import { formatTellText, periodOf, validateTellText } from "@souieba/core";
-import { HttpTransport, NotesStore, SecretInNoteError, SetLog, resolveAgent, souiebaHome } from "@souieba/sdk";
+import {
+  E2eeTransport,
+  HttpTransport,
+  NotesStore,
+  SecretInNoteError,
+  SecretInPostError,
+  SetLog,
+  resolveAgent,
+  souiebaHome,
+} from "@souieba/sdk";
 
 export type AgentFlags = {
   agent?: string;
@@ -15,9 +24,23 @@ export type AgentFlags = {
 
 function context(flags: AgentFlags) {
   const a = resolveAgent(flags.agent);
-  const key = a.agentId ?? a.name;
-  const dir = join(souiebaHome(), "agents", key);
-  const transport = new HttpTransport({ baseUrl: a.serverUrl, token: a.token });
+  const dir = join(souiebaHome(), "agents", a.agentId);
+  if (!a.keys || !a.userId || !a.identityKey) {
+    throw new Error(
+      `Agent「${a.name}」の鍵がありません（E2EE に対応する前に登録した Agent か、Identity 鍵がこの PC にありません）。souieba doctor で確認してください`,
+    );
+  }
+  const debug = (msg: string) => {
+    if (flags.debug) console.error(`[souieba] ${msg}`);
+  };
+  const transport = new E2eeTransport(new HttpTransport({ baseUrl: a.serverUrl, token: a.token }), {
+    userId: a.userId,
+    agentId: a.agentId,
+    keys: a.keys,
+    identityKey: a.identityKey,
+    onProblem: (p) => debug(`信頼できない鍵: ${JSON.stringify(p)}`),
+    onReject: (postId, reason) => debug(`${postId} を受け取りませんでした（${reason}）`),
+  });
   const setlog = new SetLog({
     transport,
     statePath: join(dir, "session.json"),
@@ -27,7 +50,7 @@ function context(flags: AgentFlags) {
       if (flags.debug) console.error(`[souieba] ${op} 失敗: ${err instanceof Error ? err.message : err}`);
     },
   });
-  return { agent: a, transport, setlog, notes: new NotesStore(key, dir) };
+  return { agent: a, transport, setlog, notes: new NotesStore(a.agentId, dir) };
 }
 
 const fmt = new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -95,12 +118,22 @@ export async function publish(flags: AgentFlags, content: string, periodArg = "p
     if (Number.isNaN(start.getTime())) throw new Error(`--period の値が不正です: ${periodArg}`);
     period = { periodStart: start.toISOString(), periodEnd: new Date(start.getTime() + 3_600_000).toISOString() };
   }
-  const r = await transport.publish({ ...period, content });
+  let r;
+  try {
+    r = await transport.publish({ ...period, content });
+  } catch (err) {
+    if (err instanceof SecretInPostError) {
+      out(flags, { ok: false, error: "secret_detected", rules: err.rules }, `souieba: ${err.message}。秘密情報を除いて書き直してください。`);
+      process.exitCode = 2;
+      return;
+    }
+    throw err;
+  }
   notes.mark(period.periodStart, "published");
   out(
     flags,
     { ok: true, ...r, ...period },
-    `souieba: ${r.created ? "投稿" : "上書き"}しました（${fmt.format(new Date(period.periodStart))}〜の1時間、${hm.format(new Date(r.visibleAt))} から友人に公開）。`,
+    `souieba: ${r.created ? "投稿" : "上書き"}しました（${fmt.format(new Date(period.periodStart))}〜の1時間、${hm.format(new Date(r.visibleAt))} からグループのメンバーに公開）。`,
   );
 }
 

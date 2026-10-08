@@ -21,7 +21,6 @@ describe("selectTellCandidate", () => {
     ownerId,
     periodStart,
     createdAt: ago(minAgo),
-    content: "主人は京都へ遊びに行っていた。",
   });
   const first = () => 0;
 
@@ -29,10 +28,9 @@ describe("selectTellCandidate", () => {
     expect(selectTellCandidate([], { now: NOW, lastToldOwnerId: null })).toBeNull();
   });
 
-  it("48時間より古い投稿と短すぎる投稿は除く", () => {
+  it("48時間より古い投稿は除く", () => {
     const old = row("old", "a", 49 * 60);
-    const short = { ...row("short", "a", 10), content: "寝てた" };
-    expect(selectTellCandidate([old, short], { now: NOW, lastToldOwnerId: null })).toBeNull();
+    expect(selectTellCandidate([old], { now: NOW, lastToldOwnerId: null })).toBeNull();
   });
 
   it("新しい順の先頭を選ぶ（random=0）", () => {

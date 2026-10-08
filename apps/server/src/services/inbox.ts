@@ -1,4 +1,4 @@
-import { type InboxItem, type SyncResult, type TellCandidate, TELL_WINDOW_MS, selectTellCandidate } from "@souieba/core";
+import { type PostEnvelope, type SyncResult, TELL_WINDOW_MS, type WireInboxItem, type WireTellCandidate, selectTellCandidate } from "@souieba/core";
 import { type DB, tx } from "../db.ts";
 import { conflict, notFound } from "../errors.ts";
 
@@ -6,31 +6,39 @@ export type AgentActor = { userId: string; agentId: string };
 
 export const DEFAULT_LEASE_MS = 10 * 60_000;
 
-/** 「今この瞬間に受信者が見てよい投稿」の条件。Friend 状態は毎回その時点で判定する */
+/**
+ * 「今この瞬間にこの Agent が見てよい投稿」の条件。
+ * 所属は毎回その時点で判定し（抜けたら受信済みでも候補から消える）、
+ * この Agent が復号できる（宛先に含まれる）投稿だけに絞る。
+ */
 const VISIBLE_TO_ME = `
   p.owner_id != :me
-  AND p.visibility = 'friends'
+  AND p.visibility = 'groups'
   AND p.visible_at <= :now
   AND p.created_at >= :minCreated
   AND EXISTS (
-    SELECT 1 FROM friendships f
-    WHERE f.status = 'accepted'
-      AND f.user_low_id = min(p.owner_id, :me)
-      AND f.user_high_id = max(p.owner_id, :me)
-  )`;
+    SELECT 1 FROM group_members x JOIN group_members y ON x.group_id = y.group_id
+    WHERE x.user_id = p.owner_id AND y.user_id = :me AND x.left_at IS NULL AND y.left_at IS NULL
+  )
+  AND EXISTS (SELECT 1 FROM post_recipients r WHERE r.post_id = p.id AND r.agent_id = :agent)`;
 
-function params(me: string, now: Date) {
-  return { me, now: now.toISOString(), minCreated: new Date(now.getTime() - TELL_WINDOW_MS).toISOString() };
+function params(actor: AgentActor, now: Date) {
+  return {
+    me: actor.userId,
+    agent: actor.agentId,
+    now: now.toISOString(),
+    minCreated: new Date(now.getTime() - TELL_WINDOW_MS).toISOString(),
+  };
 }
 
-/** 友人の新着投稿を受信箱へ取り込む（RECEIVED にする） */
+/** 同じグループのメンバーの新着投稿を受信箱へ取り込む（RECEIVED にする） */
 export function sync(db: DB, actor: AgentActor, now: Date): SyncResult {
   const r = db
     .prepare(
       `INSERT OR IGNORE INTO deliveries (post_id, recipient_user_id, received_at, received_by_agent_id)
        SELECT p.id, :me, :now, :agent FROM posts p WHERE ${VISIBLE_TO_ME}`,
     )
-    .run({ ...params(actor.userId, now), agent: actor.agentId });
+    .run(params(actor, now));
   return { received: Number(r.changes), inboxSize: inboxRows(db, actor, now, false).length };
 }
 
@@ -39,10 +47,11 @@ type InboxRow = {
   owner_id: string;
   owner_handle: string;
   owner_name: string;
+  author_agent_id: string;
   agent_name: string;
   period_start: string;
   period_end: string;
-  content: string;
+  envelope: string;
   created_at: string;
   received_at: string;
   reserved_by_agent_id: string | null;
@@ -55,8 +64,8 @@ function inboxRows(db: DB, actor: AgentActor, now: Date, onlyClaimable: boolean)
     : "";
   return db
     .prepare(
-      `SELECT d.post_id, p.owner_id, u.handle AS owner_handle, u.display_name AS owner_name, a.name AS agent_name,
-              p.period_start, p.period_end, p.content, p.created_at, d.received_at,
+      `SELECT d.post_id, p.owner_id, u.handle AS owner_handle, u.display_name AS owner_name, p.author_agent_id, a.name AS agent_name,
+              p.period_start, p.period_end, p.envelope, p.created_at, d.received_at,
               d.reserved_by_agent_id, d.reserved_until
        FROM deliveries d
        JOIN posts p ON p.id = d.post_id
@@ -67,22 +76,23 @@ function inboxRows(db: DB, actor: AgentActor, now: Date, onlyClaimable: boolean)
          AND ${VISIBLE_TO_ME}
        ORDER BY p.created_at DESC`,
     )
-    .all(onlyClaimable ? { ...params(actor.userId, now), agent: actor.agentId } : params(actor.userId, now)) as InboxRow[];
+    .all(params(actor, now)) as InboxRow[];
 }
 
-function toItem(r: InboxRow): InboxItem {
+function toItem(r: InboxRow): WireInboxItem {
   return {
     postId: r.post_id,
     owner: { id: r.owner_id, handle: r.owner_handle, displayName: r.owner_name },
+    authorAgentId: r.author_agent_id,
     authorAgentName: r.agent_name,
     periodStart: r.period_start,
     periodEnd: r.period_end,
-    content: r.content,
+    envelope: JSON.parse(r.envelope) as PostEnvelope,
     receivedAt: r.received_at,
   };
 }
 
-export function inbox(db: DB, actor: AgentActor, now: Date): InboxItem[] {
+export function inbox(db: DB, actor: AgentActor, now: Date): WireInboxItem[] {
   return inboxRows(db, actor, now, false).map(toItem);
 }
 
@@ -95,7 +105,7 @@ export function claimTell(
   actor: AgentActor,
   now: Date,
   opts: { leaseMs?: number; random?: () => number } = {},
-): TellCandidate | null {
+): WireTellCandidate | null {
   return tx(db, () => {
     const rows = inboxRows(db, actor, now, true);
     const last = db
@@ -115,7 +125,7 @@ export function claimTell(
     db.prepare(
       "UPDATE deliveries SET reserved_by_agent_id = ?, reserved_until = ? WHERE post_id = ? AND recipient_user_id = ?",
     ).run(actor.agentId, reservedUntil, pick.post_id, actor.userId);
-    return { ...toItem(pick), reservedUntil } satisfies TellCandidate & { receivedAt: string };
+    return { ...toItem(pick), reservedUntil };
   });
 }
 

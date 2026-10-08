@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 export type DB = DatabaseSync;
 
 /** 前進のみのマイグレーション。追加するときは末尾に足す */
-const MIGRATIONS: string[] = [
+export const MIGRATIONS: string[] = [
   `
   CREATE TABLE instance_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -78,6 +78,79 @@ const MIGRATIONS: string[] = [
     UNIQUE (author_agent_id, period_start)
   );
   CREATE INDEX posts_owner_created ON posts (owner_id, created_at);
+
+  CREATE TABLE deliveries (
+    post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    recipient_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    received_at TEXT NOT NULL,
+    received_by_agent_id TEXT NOT NULL,
+    reserved_by_agent_id TEXT,
+    reserved_until TEXT,
+    told_at TEXT,
+    told_by_agent_id TEXT,
+    dismissed_at TEXT,
+    PRIMARY KEY (post_id, recipient_user_id)
+  );
+  CREATE INDEX deliveries_recipient ON deliveries (recipient_user_id, told_at);
+  `,
+  // 2: Friend → グループ、投稿本文 → E2EE の封筒。平文の投稿と Friend 関係は破棄する（docs/public-deployment-plan.md §8.3）
+  `
+  DROP TABLE deliveries;
+  DROP TABLE posts;
+  DROP TABLE friendships;
+
+  ALTER TABLE users ADD COLUMN identity_key TEXT;
+  ALTER TABLE agents ADD COLUMN enc_key TEXT;
+  ALTER TABLE agents ADD COLUMN sign_key TEXT;
+  ALTER TABLE agents ADD COLUMN cert TEXT;
+
+  CREATE TABLE groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    create_sig TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE group_members (
+    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('owner','member')),
+    invited_by TEXT,
+    invite_code TEXT,
+    invite_sig TEXT,
+    join_sig TEXT,
+    joined_at TEXT NOT NULL,
+    left_at TEXT,
+    PRIMARY KEY (group_id, user_id)
+  );
+  CREATE INDEX group_members_user ON group_members (user_id, left_at);
+
+  ALTER TABLE invites ADD COLUMN group_id TEXT REFERENCES groups(id) ON DELETE CASCADE;
+  ALTER TABLE invites ADD COLUMN invite_commit TEXT;
+  ALTER TABLE invites ADD COLUMN invite_sig TEXT;
+
+  CREATE TABLE posts (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    author_agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    visibility TEXT NOT NULL CHECK (visibility IN ('groups','private')),
+    envelope TEXT NOT NULL,
+    visible_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (author_agent_id, period_start)
+  );
+  CREATE INDEX posts_owner_created ON posts (owner_id, created_at);
+
+  CREATE TABLE post_recipients (
+    post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    agent_id TEXT NOT NULL,
+    PRIMARY KEY (post_id, agent_id)
+  );
+  CREATE INDEX post_recipients_agent ON post_recipients (agent_id);
 
   CREATE TABLE deliveries (
     post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,

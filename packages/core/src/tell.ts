@@ -1,5 +1,3 @@
-import { MIN_TELL_CONTENT_LENGTH } from "./sanitize.ts";
-
 export const TELL_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 export type TellRow = {
@@ -7,7 +5,6 @@ export type TellRow = {
   ownerId: string;
   periodStart: string;
   createdAt: string;
-  content: string;
 };
 
 /** 上位から選ぶときの重み（1位 0.6 / 2位 0.3 / 3位 0.1） */
@@ -15,7 +12,8 @@ const WEIGHTS = [0.6, 0.3, 0.1];
 
 /**
  * Tell する1件を選ぶ。行は SQL 側で「未 TOLD・予約なし・削除なし・公開済み・
- * 現在も Friend」に絞り込まれている前提。
+ * 現在も同じグループ・この Agent 宛て」に絞り込まれている前提。
+ * 本文は暗号化されていてサーバからは見えないため、本文の長さによる判定は受信側の SDK で行う。
  */
 export function selectTellCandidate<T extends TellRow>(
   rows: T[],
@@ -24,9 +22,7 @@ export function selectTellCandidate<T extends TellRow>(
   const random = opts.random ?? Math.random;
   const minCreated = opts.now.getTime() - TELL_WINDOW_MS;
 
-  const fresh = rows.filter(
-    (r) => Date.parse(r.createdAt) >= minCreated && r.content.length >= MIN_TELL_CONTENT_LENGTH,
-  );
+  const fresh = rows.filter((r) => Date.parse(r.createdAt) >= minCreated);
 
   // 同じ Owner・同じ時間帯について複数 Agent が書いた投稿は、最新の1件だけ残す
   const byPeriod = new Map<string, T>();
