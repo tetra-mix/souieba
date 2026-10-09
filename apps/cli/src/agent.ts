@@ -10,7 +10,9 @@ import {
   HttpTransport,
   InstructionLikePostError,
   MemberWatch,
+  type NamedGroup,
   type NewMember,
+  displayGroupName,
   NotesStore,
   PostTooLongError,
   SecretInNoteError,
@@ -192,7 +194,9 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
     .then((own) => watch.check(own))
     .catch(() => []);
   const nameIssue = await transport.displayNameIssue().catch(() => null);
-  const newMembers = await newGroupMembers(transport, memberWatch, agent.userId!).catch(() => []);
+  // グループ名を復号し、まだ封を持っていないメンバーの Agent に封をし直す（新しく入った人が名前を読めるように）
+  const groupNames = await transport.groupNames().catch(() => []);
+  const newMembers = await newGroupMembers(transport, memberWatch, agent.userId!, groupNames).catch(() => []);
 
   if (flags.json) {
     return out(
@@ -257,17 +261,16 @@ const HANDLE_RE = /^[a-z0-9_]{2,20}$/;
  * 主人のグループに新しく入った人。表示名とグループ名は他人が付けたもので、この出力はエージェント（LLM）が読むので、
  * 規則に合わないものは出さない（handle はサーバが英小文字・数字・_ に限っているが、ここでも確かめる）。
  */
-async function newGroupMembers(transport: E2eeTransport, watch: MemberWatch, userId: string) {
+async function newGroupMembers(transport: E2eeTransport, watch: MemberWatch, userId: string, groups: NamedGroup[]) {
   const added: NewMember[] = watch.check(await transport.users(), userId);
   if (added.length === 0) return [];
-  const names = new Map((await transport.groups().catch(() => [])).map((g) => [g.id, g.name]));
+  const names = new Map(groups.map((g) => [g.id, g.name]));
   return added
     .filter((m) => HANDLE_RE.test(m.user.handle))
     .map((m) => {
-      const groupName = names.get(m.groupId);
       return {
         groupId: m.groupId,
-        groupName: groupName && isValidDisplayName(groupName) ? groupName : null,
+        groupName: displayGroupName(names.get(m.groupId) ?? null),
         userId: m.user.id,
         handle: m.user.handle,
         displayName: isValidDisplayName(m.user.displayName) ? m.user.displayName : null,

@@ -20,6 +20,7 @@ import {
   verifyPostSignature,
 } from "@souieba/core";
 import type { AgentKeys } from "./config.ts";
+import { type GroupNameCache, type NamedGroup, loadGroupNames } from "./group-names.ts";
 import type { HttpTransport } from "./http.ts";
 import type { SetLogTransport } from "./transport.ts";
 
@@ -73,6 +74,7 @@ type Directory = {
  */
 export class E2eeTransport implements SetLogTransport {
   private dir: Promise<Directory> | null = null;
+  private rawKeys: Promise<KeyDirectory> | null = null;
 
   constructor(
     readonly inner: HttpTransport,
@@ -81,7 +83,7 @@ export class E2eeTransport implements SetLogTransport {
 
   /** 公開鍵ディレクトリ。1つのインスタンス（＝1回のコマンド）の中だけキャッシュする */
   directory(): Promise<Directory> {
-    this.dir ??= this.inner.keys().then((d: KeyDirectory) => {
+    this.dir ??= this.keys().then((d: KeyDirectory) => {
       if (d.me.userId !== this.opts.userId || d.me.agentId !== this.opts.agentId) {
         throw new Error("サーバが返したディレクトリの持ち主が、この Agent と一致しません");
       }
@@ -116,9 +118,19 @@ export class E2eeTransport implements SetLogTransport {
     return [...(await this.directory()).users.values()];
   }
 
-  /** 自分が入っているグループの ID と名前（名前は他のメンバーが付けたもので、信頼できない入力） */
-  groups(): Promise<{ id: string; name: string }[]> {
-    return this.inner.groups();
+  /** 自分のグループと、復号したグループ名（名前は他のメンバーが付けたもので、信頼できない入力）。まだ封のない Agent に封をし直す */
+  groupNames(cache?: GroupNameCache): Promise<NamedGroup[]> {
+    const api = { groups: () => this.inner.groups(), keys: () => this.keys(), putNameBoxes: this.inner.putNameBoxes.bind(this.inner) };
+    return loadGroupNames(api, [{ agentId: this.opts.agentId, keys: this.opts.keys }], cache);
+  }
+
+  /** サーバが返した公開鍵ディレクトリそのもの。directory() と同じく1回のコマンドの中だけキャッシュする */
+  private keys(): Promise<KeyDirectory> {
+    this.rawKeys ??= this.inner.keys();
+    this.rawKeys.catch(() => {
+      this.rawKeys = null;
+    });
+    return this.rawKeys;
   }
 
   /** 自分のアカウントに登録されている、有効な Agent */

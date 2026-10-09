@@ -1,4 +1,4 @@
-import { generateEncryptionKey, generateSigningKey } from "@souieba/core";
+import { generateEncryptionKey, generateSigningKey, sealGroupName, sealInviteName } from "@souieba/core";
 import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import { schema } from "../src/db/index.ts";
@@ -6,7 +6,7 @@ import { runRetention } from "../src/retention.ts";
 import * as accounts from "../src/services/accounts.ts";
 import * as groups from "../src/services/groups.ts";
 import { MIN_CLIENT_VERSION } from "../src/app.ts";
-import { harness, testConfig, twoMembers } from "./harness.ts";
+import { type TestUser, harness, testConfig, twoMembers } from "./harness.ts";
 
 const MIN = 60_000;
 
@@ -630,5 +630,87 @@ describe("上限", () => {
     const { h, alice, bob, groupId } = await twoMembers({ config: { limits: { maxUsers: 2, maxGroupMembers: 50, maxGroupsPerUser: 10 } } });
     accounts.disableUser(h.db, bob.id, h.clock.now);
     await h.joinNew(alice, groupId, "carol", "キャロル");
+  });
+});
+
+describe("グループ名の暗号化（#16）", () => {
+  const box = (name: string, groupId: string, version: number, from: TestUser, to: TestUser) => ({
+    agentId: to.agentId,
+    box: sealGroupName(name, { groupId, version }, { agentId: from.agentId, signKey: from.agent.keys.sign }, { agentId: to.agentId, encKey: to.agent.keys.enc.pub }),
+  });
+  const list = async (h: ReturnType<typeof harness>, u: TestUser, token = u.agentToken) => (await h.call("GET", "/v1/groups", token)).body.groups[0];
+
+  it("サーバには名前を送らず、まだ封のないメンバーの Agent を missingAgentIds で知らせる", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    expect(h.db.select().from(schema.groups).all().map((g) => g.name)).toEqual([""]);
+    const g = await list(h, alice);
+    expect(g).toMatchObject({ id: groupId, nameVersion: 1, legacyName: null, nameBoxes: [] });
+    expect(g.missingAgentIds.sort()).toEqual([alice.agentId, bob.agentId].sort());
+
+    // アリスが2人分の封を置くと、ボブの Agent には自分宛ての封だけが返る
+    const put = await h.call("PUT", `/v1/groups/${groupId}/name-boxes`, alice.agentToken, {
+      version: 1,
+      boxes: [box("研究室", groupId, 1, alice, alice), box("研究室", groupId, 1, alice, bob)],
+    });
+    expect(put.status).toBe(204);
+    expect(JSON.stringify(h.db.select().from(schema.groupNameBoxes).all())).not.toContain("研究室");
+    const forBob = await list(h, bob);
+    expect(forBob.nameBoxes.map((b: { recipientAgentId: string }) => b.recipientAgentId)).toEqual([bob.agentId]);
+    expect(forBob.missingAgentIds).toEqual([]);
+    // User トークンなら、自分の Agent すべて宛ての封
+    expect((await list(h, bob, bob.token)).nameBoxes).toHaveLength(1);
+  });
+
+  it("メンバーでない Agent 宛て・ヘッダの違う封・古い版は断る。メンバーでなければグループも見えない", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const eve = await h.user("eve", "イヴ");
+    const put = (token: string, body: unknown) => h.call("PUT", `/v1/groups/${groupId}/name-boxes`, token, body);
+    expect((await put(alice.agentToken, { version: 1, boxes: [box("x", groupId, 1, alice, eve)] })).body.error.code).toBe("invalid_recipient");
+    expect((await put(alice.agentToken, { version: 1, boxes: [{ ...box("x", groupId, 1, alice, bob), agentId: alice.agentId }] })).body.error.code).toBe(
+      "invalid_name_box",
+    );
+    expect((await put(alice.agentToken, { version: 2, boxes: [box("x", groupId, 2, alice, bob)] })).body.error.code).toBe("stale_name_version");
+    expect((await put(eve.agentToken, { version: 1, boxes: [box("x", groupId, 1, eve, bob)] })).status).toBe(404);
+  });
+
+  it("名前の変更は owner だけで、版を1つ上げて封を置き換える", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    await h.call("PUT", `/v1/groups/${groupId}/name-boxes`, alice.agentToken, { version: 1, boxes: [box("旧", groupId, 1, alice, bob)] });
+    const rename = (u: TestUser, version: number) =>
+      h.call("PATCH", `/v1/groups/${groupId}`, u.token, { version, boxes: [box("新", groupId, version, u, alice), box("新", groupId, version, u, bob)] });
+    expect((await rename(bob, 2)).status).toBe(403);
+    expect((await rename(alice, 3)).body.error.code).toBe("stale_name_version");
+    expect((await rename(alice, 2)).status).toBe(204);
+    const g = await list(h, bob);
+    expect(g.nameVersion).toBe(2);
+    expect(g.nameBoxes.map((b: { version: number }) => b.version)).toEqual([2]);
+  });
+
+  it("招待に添えた封は、招待した本人だけが置け、参加したときに返る", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const { code } = await h.invite(alice, groupId);
+    const nameBox = sealInviteName("研究室", code, groupId);
+    expect((await h.call("PUT", `/v1/groups/${groupId}/invites/name-box`, bob.token, { code, box: nameBox })).status).toBe(404);
+    expect((await h.call("PUT", `/v1/groups/${groupId}/invites/name-box`, alice.token, { code, box: nameBox })).status).toBe(204);
+    const r = await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "carol", displayName: "キャロル" });
+    expect(r.body.group).toEqual({ id: groupId, nameVersion: 1, legacyName: null, nameBox });
+  });
+
+  it("暗号化する前の平文の名前は legacyName で返し、clearPlain で消せる", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    h.setGroupNameRaw(groupId, "研究室");
+    expect((await list(h, alice)).legacyName).toBe("研究室");
+    await h.call("PUT", `/v1/groups/${groupId}/name-boxes`, alice.agentToken, {
+      version: 1,
+      boxes: [box("研究室", groupId, 1, alice, alice), box("研究室", groupId, 1, alice, bob)],
+      clearPlain: true,
+    });
+    expect((await list(h, alice)).legacyName).toBeNull();
+    expect(h.db.select().from(schema.groups).all().map((g) => g.name)).toEqual([""]);
+  });
+
+  it("管理者のグループ一覧に名前は出ない", async () => {
+    const { h } = await twoMembers();
+    expect(Object.keys(groups.listAllGroups(h.db)[0]!).sort()).toEqual(["createdAt", "id", "memberCount"]);
   });
 });
