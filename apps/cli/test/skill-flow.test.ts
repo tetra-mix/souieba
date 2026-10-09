@@ -66,10 +66,10 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     const inviteCode = async () => /((?:[A-Z0-9]{4}-){2}[A-Z0-9]{4})/.exec((await souieba("alice", "invite")).out)![1]!;
     const invCode = await inviteCode();
 
-    // 同じグループに同じ表示名の人は入れない（Tell 文でなりすませないように）
+    // ほかの人と同じ表示名では入れない（Tell 文でなりすませないように）
     const fake = await souieba("eve", "login", baseUrl, "--code", await inviteCode(), "--handle", "eve", "--name", "アリス");
     expect(fake.code).toBe(1);
-    expect(fake.out).toContain("同じ表示名");
+    expect(fake.out).toContain("その表示名は使われています");
 
     const joined = await souieba("bob", "login", baseUrl, "--code", invCode, "--handle", "bob", "--name", "ボブ");
     expect(joined.out).toContain("グループ「研究室」に参加しました");
@@ -112,7 +112,7 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     // JSON 出力
     now = new Date("2026-10-05T15:00:00Z");
     const j = JSON.parse((await souieba("bob", "tell", "--json")).out);
-    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [], outdated: null });
+    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [], outdated: null, displayNameIssue: null });
 
     // ボブのアカウントに知らない Agent が足されたら（User トークンの漏洩を想定）、次の tell で一度だけ知らせる
     const bobId = accounts.getUserByHandle(db, "bob")!.id;

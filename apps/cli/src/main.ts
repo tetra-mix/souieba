@@ -10,6 +10,7 @@ import {
   generateSigningKey,
   openPost,
 } from "@souieba/core";
+import { isValidDisplayName } from "@souieba/core";
 import { HttpClient, SetLogApiError, configPath, loadClientConfig, saveClientConfig } from "@souieba/sdk";
 import { SKILL_TOPICS, installedSkills, isSkillTopic, skillText, skillVersionAdvice } from "./skill.ts";
 import { CLI_VERSION } from "./version.ts";
@@ -409,8 +410,13 @@ async function doctor() {
   }
   const client = userClient();
   try {
-    await client.request("GET", "/v1/me");
+    const me = await client.request<{ user: Me }>("GET", "/v1/me");
     ok("User トークンは有効です");
+    if (isValidDisplayName(me.user.displayName)) ok(`表示名「${me.user.displayName}」`);
+    else
+      ng(
+        `表示名「${me.user.displayName}」に使えない文字か表現が含まれているため、友人に近況が届きません。souieba profile --name <新しい表示名> で変えてください（日本語・英数字・一部の記号のみ）`,
+      );
   } catch (err) {
     return ng(`User トークンが無効です: ${err instanceof Error ? err.message : err}`);
   }

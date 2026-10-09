@@ -178,7 +178,7 @@ describe("グループ", () => {
     expect((await redeem("carol2")).body.error.code).toBe("invalid_code");
   });
 
-  it("同じグループに同じ表示名の人がいると参加できない（Tell 文で見分けられないため）", async () => {
+  it("ほかの人と同じ表示名では参加できない（Tell 文で見分けられないため）", async () => {
     const { h, alice, groupId } = await twoMembers();
     const { code } = await h.invite(alice, groupId);
     const r = await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "fake", displayName: " アリス " });
@@ -188,14 +188,19 @@ describe("グループ", () => {
     expect((await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "carol", displayName: "キャロル" })).status).toBe(201);
   });
 
-  it("表示名は、いっしょにいるグループのメンバーと同じものには変えられない", async () => {
+  it("表示名はインスタンス全体で一意（グループが別でも、英字の大文字・小文字が違うだけでも使えない）", async () => {
     const { h, bob } = await twoMembers();
     expect((await h.call("PATCH", "/v1/me", bob.token, { displayName: "アリス" })).body.error.code).toBe("display_name_taken");
-    const r = await h.call("PATCH", "/v1/me", bob.token, { displayName: "ボブ太郎" });
-    expect(r.body.user.displayName).toBe("ボブ太郎");
-    // グループが別なら同じ表示名でもよい
+    const r = await h.call("PATCH", "/v1/me", bob.token, { displayName: "Bob" });
+    expect(r.body.user.displayName).toBe("Bob");
+    // 自分の今の名前に変えるのはよい
+    expect((await h.call("PATCH", "/v1/me", bob.token, { displayName: "Bob" })).status).toBe(200);
+    // グループが別でも同じ表示名にはできない
     const carol = await h.user("carol", "キャロル");
-    expect((await h.call("PATCH", "/v1/me", carol.token, { displayName: "アリス" })).status).toBe(200);
+    expect((await h.call("PATCH", "/v1/me", carol.token, { displayName: "アリス" })).body.error.code).toBe("display_name_taken");
+    expect((await h.call("PATCH", "/v1/me", carol.token, { displayName: "BOB" })).body.error.code).toBe("display_name_taken");
+    // 管理者が作るときも同じ
+    expect(() => accounts.createUser(h.db, { handle: "dave", displayName: "bob" }, new Date())).toThrow("その表示名は使われています");
   });
 
   it("期限切れ（3日）の招待コードは使えない", async () => {

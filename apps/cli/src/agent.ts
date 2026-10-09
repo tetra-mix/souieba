@@ -181,6 +181,7 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
     .ownAgents()
     .then((own) => watch.check(own))
     .catch(() => []);
+  const nameIssue = await transport.displayNameIssue().catch(() => null);
 
   if (flags.json) {
     return out(
@@ -190,6 +191,7 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
         pendingPeriods: pending,
         newAgents: newAgents.map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt })),
         outdated: state.outdated,
+        displayNameIssue: nameIssue,
       },
       "",
     );
@@ -210,6 +212,15 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
   }
   if (state.outdated) {
     lines.push(`souieba: ${state.outdated}。ユーザーへの回答のあとで、主人に更新を頼んでください。`);
+  }
+  if (nameIssue) {
+    const why =
+      nameIssue.issue === "invalid"
+        ? "使えない文字か表現（絵文字・記号・命令に見える言葉など）が含まれているため、友人のエージェントに近況が届きません"
+        : "同じグループの人と同じ表示名のため、友人から見分けられません";
+    lines.push(
+      `souieba: 主人の表示名「${nameIssue.name}」は、${why}。ユーザーへの回答のあとで、主人に souieba profile --name <新しい表示名> で変更を頼んでください。`,
+    );
   }
   for (const a of newAgents) {
     lines.push(

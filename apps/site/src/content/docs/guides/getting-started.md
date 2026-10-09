@@ -26,7 +26,7 @@ CLI とスキルは別々に更新されます。ずれていると `souieba doc
 手で行う場合は次のとおりです。
 
 ```bash
-# 友人から招待された場合（表示名は、同じグループの人と同じものにはできません）
+# 友人から招待された場合（表示名は、ほかの人と同じものにはできません。絵文字や記号は使えません）
 souieba login https://souieba.example.com --code XXXX-XXXX-XXXX --handle alice --name アリス
 
 # このエージェントを登録する
