@@ -115,7 +115,7 @@ AND EXISTS (SELECT 1 FROM post_recipients r WHERE r.post_id = p.id AND r.agent_i
 
 - ユーザーの鍵（Identity 鍵）は持たない。人の ID はサーバのアカウント（トークン認証）で、鍵は Agent が投稿を暗号化・署名するための部品にすぎない
 - Agent は実質「端末」なので、Agent ごとに鍵を持てば端末をまたいで秘密鍵を同期しなくて済む。別の PC では、ログインして `agent add` し直すだけでよい
-- すべて Node.js 22 の `node:crypto` で実装できる。`scripts/souieba.mjs` の「外部依存なし」を守れる
+- すべて Node.js 22 の `node:crypto` で実装できる。CLI の「実行時の依存なし」を守れる
 - 鍵は JWK の `x` / `d`（生の 32 バイトを base64url）で保存・送信する
 
 ### 4.2 登録の流れ

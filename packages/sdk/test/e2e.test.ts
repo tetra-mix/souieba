@@ -11,6 +11,7 @@ import {
   sealPost,
 } from "@souieba/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { MIN_CLIENT_VERSION as clientVersion } from "../../../apps/server/src/app.ts";
 import { type TestUser, harness } from "../../../apps/server/test/harness.ts";
 import { AgentWatch, E2eeTransport, HttpTransport, SecretInPostError, SetLog } from "../src/index.ts";
 
@@ -34,7 +35,7 @@ afterAll(() => {
   server.close();
 });
 
-function transport(u: TestUser, http = new HttpTransport({ baseUrl, token: u.agentToken, interactiveTimeoutMs: 500 })) {
+function transport(u: TestUser, http = new HttpTransport({ baseUrl, token: u.agentToken, clientVersion, interactiveTimeoutMs: 500 })) {
   return new E2eeTransport(http, {
     userId: u.id,
     agentId: u.agentId,
@@ -98,7 +99,7 @@ describe("最小デモ（HTTP + SDK + E2EE）", () => {
       { userId: alice.id, agentId: alice.agentId, signKey: alice.agent.keys.sign },
       [{ agentId: bob.agentId, encKey: bob.agent.keys.enc.pub }],
     );
-    await new HttpTransport({ baseUrl, token: alice.agentToken }).publishEnvelope(env);
+    await new HttpTransport({ baseUrl, token: alice.agentToken, clientVersion }).publishEnvelope(env);
     h.clock.advance(11 * MIN);
     const t = transport(bob);
     await t.sync();
@@ -109,7 +110,7 @@ describe("最小デモ（HTTP + SDK + E2EE）", () => {
   });
 
   it("サーバに届かないときはすぐに null を返す", async () => {
-    const b = setlog(transport(bob, new HttpTransport({ baseUrl: "http://127.0.0.1:9", token: bob.agentToken, interactiveTimeoutMs: 500 })));
+    const b = setlog(transport(bob, new HttpTransport({ baseUrl: "http://127.0.0.1:9", token: bob.agentToken, clientVersion, interactiveTimeoutMs: 500 })));
     const started = Date.now();
     expect(await tellForTurn(b)).toBeNull();
     expect(Date.now() - started).toBeLessThan(2000);
@@ -138,7 +139,7 @@ class TamperedHttp extends HttpTransport {
 
 describe("宛先と受信した投稿の検証", () => {
   it("投稿は、ディレクトリにある自分とグループのメンバーの Agent 宛てに暗号化する", async () => {
-    const http = new TamperedHttp({ baseUrl, token: alice.agentToken });
+    const http = new TamperedHttp({ baseUrl, token: alice.agentToken, clientVersion });
     const outsider = await h.user("eve", "イヴ");
     await transport(alice, http).publish({ ...periodNow(), content: "主人は研究をしていた。" });
     const recipients = http.sent[0]!.recipients.map((r) => r.agentId);
@@ -147,7 +148,7 @@ describe("宛先と受信した投稿の検証", () => {
   });
 
   it("今いっしょにいるグループがない人の投稿は伝えず、dismiss する", async () => {
-    const http = new TamperedHttp({ baseUrl, token: bob.agentToken });
+    const http = new TamperedHttp({ baseUrl, token: bob.agentToken, clientVersion });
     const mallory = { id: "usr_mallory", sign: generateSigningKey() };
     const period = { periodStart: "2026-10-05T09:00:00.000Z", periodEnd: "2026-10-05T10:00:00.000Z" };
     http.fakeCandidate = {
@@ -170,7 +171,7 @@ describe("宛先と受信した投稿の検証", () => {
   });
 
   it("本文や期間を書き換えた投稿は、署名を検証できないので伝えない", async () => {
-    const http = new TamperedHttp({ baseUrl, token: bob.agentToken });
+    const http = new TamperedHttp({ baseUrl, token: bob.agentToken, clientVersion });
     const period = { periodStart: "2026-10-05T09:00:00.000Z", periodEnd: "2026-10-05T10:00:00.000Z" };
     const env = sealPost({ ...period, visibility: "groups", content: "主人は散歩をしていた。" }, { userId: alice.id, agentId: alice.agentId, signKey: alice.agent.keys.sign }, [
       { agentId: bob.agentId, encKey: bob.agent.keys.enc.pub },

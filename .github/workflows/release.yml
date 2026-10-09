@@ -1,0 +1,44 @@
+name: Release
+
+# v0.4.0 のようなタグを push すると、CLI（npm の souieba）を publish して GitHub Release を作る。
+# npm への publish は Trusted Publishing（OIDC）で行い、長期のトークンは使わない。provenance は自動で付く。
+# 手順: docs/client-distribution-plan.md §5
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # GitHub Release を作る
+  id-token: write # npm の Trusted Publishing（OIDC）
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      # Trusted Publishing には npm 11.5.1 以上が要る
+      - run: npm install -g npm@^11.5.1
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/check-version.mjs "$GITHUB_REF_NAME"
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build:cli
+      # 公開するのはバンドル済みの1ファイルなので、開発用の依存（workspace:*）は package.json から外す
+      - working-directory: apps/cli
+        run: npm pkg delete devDependencies scripts
+      - working-directory: apps/cli
+        run: npm publish --access public
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

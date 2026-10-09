@@ -1,3 +1,4 @@
+import { CLIENT_VERSION_HEADER, compareVersions } from "@souieba/core";
 import { type Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
@@ -14,6 +15,12 @@ import * as inboxSvc from "./services/inbox.ts";
 import * as posts from "./services/posts.ts";
 
 export const VERSION = "0.4.0";
+
+/**
+ * これより古いクライアントと、バージョンを送らないクライアントは 426 で断る（黙って壊れないように、更新を促す）。
+ * API に互換性のない変更をしたら上げる
+ */
+export const MIN_CLIENT_VERSION = "0.4.0";
 
 export type AppDeps = {
   db: DB;
@@ -124,8 +131,24 @@ export function createApp(deps: AppDeps) {
       name: config.instanceName,
       registration: "invite",
       inviteBy: config.inviteBy,
+      minClientVersion: MIN_CLIENT_VERSION,
     }),
   );
+
+  // 利用者・エージェント用の API は、クライアントのバージョンを確かめる。admin API は souieba-admin が使うので対象外
+  app.use("/v1/*", async (c, next) => {
+    if (c.req.path !== "/v1/instance" && !c.req.path.startsWith("/v1/admin/")) {
+      const v = c.req.header(CLIENT_VERSION_HEADER);
+      if (!v || compareVersions(v, MIN_CLIENT_VERSION) < 0) {
+        throw new ApiError(
+          426,
+          "client_outdated",
+          `souieba の CLI が古いため使えません（${v ?? "不明"}、必要: ${MIN_CLIENT_VERSION} 以上）。npm i -g souieba@latest で更新し、npx skills update でスキルも更新してください`,
+        );
+      }
+    }
+    await next();
+  });
 
   app.post("/v1/auth/redeem", async (c) => {
     if (!redeemLimiter.take(`redeem:${c.get("clientIp")}`, now().getTime())) {

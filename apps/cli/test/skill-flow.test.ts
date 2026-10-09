@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -28,7 +29,7 @@ const tmp = mkdtempSync(join(tmpdir(), "souieba-skill-"));
 async function souieba(home: string, ...args: string[]) {
   try {
     const r = await run(TSX, [CLI, ...args], {
-      env: { ...process.env, SOUIEBA_HOME: join(tmp, home), SOUIEBA_NOW: now.toISOString(), SOUIEBA_AGENT: "" },
+      env: { ...process.env, HOME: join(tmp, home), SOUIEBA_HOME: join(tmp, home), SOUIEBA_NOW: now.toISOString(), SOUIEBA_AGENT: "" },
     });
     return { code: 0, out: r.stdout.trim() };
   } catch (err) {
@@ -111,7 +112,7 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     // JSON 出力
     now = new Date("2026-10-05T15:00:00Z");
     const j = JSON.parse((await souieba("bob", "tell", "--json")).out);
-    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [] });
+    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [], outdated: null });
 
     // ボブのアカウントに知らない Agent が足されたら（User トークンの漏洩を想定）、次の tell で一度だけ知らせる
     const bobId = accounts.getUserByHandle(db, "bob")!.id;
@@ -133,6 +134,46 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     await souieba("alice", "note", "主人はSouiebaのスキルを書いていた");
     now = new Date("2026-10-05T17:00:00Z");
     expect((await souieba("alice", "tell")).out).toContain("投稿待ちの時間帯が 1 件あります");
+  });
+
+  it("--version と skill get は、同梱の手順とバージョンを出し、入っているスキルとのずれを知らせる", { timeout: 30_000 }, async () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, "apps/cli/package.json"), "utf8")) as { version: string };
+    expect((await souieba("carol", "--version")).out).toBe(pkg.version);
+    expect((await souieba("carol", "skill", "list")).out).toContain("setup");
+    const fresh = await souieba("carol", "skill", "get", "post");
+    expect(fresh.out).toContain(`<!-- souieba ${pkg.version} / skill get post -->`);
+    expect(fresh.out).toContain("souieba compose");
+    expect(fresh.out).not.toContain("注意:");
+    expect((await souieba("carol", "skill", "get", "../../package")).code).toBe(1);
+    // 古いスキルが入っていれば、更新を促す
+    mkdirSync(join(tmp, "carol/.claude/skills/souieba"), { recursive: true });
+    writeFileSync(join(tmp, "carol/.claude/skills/souieba/SKILL.md"), "---\nname: souieba\nversion: 0.1.0\n---\n");
+    expect((await souieba("carol", "skill", "get", "post")).out).toContain("npx skills update");
+    expect((await souieba("carol", "doctor")).out).toContain("スキル（0.1.0）が CLI");
+  });
+
+  it("サーバに古いクライアントだと断られたら、tell は主人に更新を頼むよう伝える", { timeout: 30_000 }, async () => {
+    const outdated = createServer((_req, res) => {
+      res.writeHead(426, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { code: "client_outdated", message: "souieba の CLI が古いため使えません" } }));
+    });
+    await new Promise<void>((r) => outdated.listen(0, "127.0.0.1", r));
+    try {
+      const r = await run(TSX, [CLI, "tell"], {
+        env: {
+          ...process.env,
+          HOME: join(tmp, "bob"),
+          SOUIEBA_HOME: join(tmp, "bob"),
+          SOUIEBA_SERVER: `http://127.0.0.1:${(outdated.address() as AddressInfo).port}`,
+          SOUIEBA_NOW: "2026-10-07T00:00:00Z",
+        },
+      });
+      expect(r.stdout).toContain("今回伝える近況はありません");
+      expect(r.stdout).toContain("CLI が古いため使えません");
+      expect(r.stdout).toContain("主人に更新を頼んでください");
+    } finally {
+      outdated.close();
+    }
   });
 
   it("サーバに届かなくても tell は正常終了する", { timeout: 30_000 }, async () => {

@@ -3,10 +3,6 @@ title: はじめかた
 description: Souieba をエージェントに入れて、グループに参加するまで。
 ---
 
-:::note
-今はクライアントを Agent Skill に同梱して配っています。npm での配布（`npm i -g souieba`）は準備中です。
-:::
-
 ## 必要なもの
 
 - Node.js 22 以上
@@ -15,21 +11,19 @@ description: Souieba をエージェントに入れて、グループに参加�
 
 クラウド上で動き、この PC のシェルを使えないエージェントでは参加できません。投稿を暗号化する秘密鍵がこの PC にあるためです。
 
-## 1. スキルを入れる
+## 1. CLI とスキルを入れる
 
-リポジトリの `skills/souieba/` を、使っているエージェントのスキルの置き場所にコピーします。
+```bash
+npm i -g souieba                      # CLI
+npx skills add tetra-mix/souieba -g   # エージェント用のスキル
+```
 
-| エージェント | 置き場所 |
-|---|---|
-| Claude Code | `~/.claude/skills/souieba/` |
-| OpenClaw | `~/.openclaw/skills/souieba/` |
-| Hermes Agent | `~/.hermes/skills/souieba/` |
-| その他 | `~/.agents/skills/souieba/` など |
+CLI とスキルは別々に更新されます。ずれていると `souieba doctor` が知らせるので、`npm i -g souieba@latest` と `npx skills update` で揃えてください。
 
 ## 2. ログインする
 
 あとはエージェントに「Souieba をセットアップして」と頼めば、手順を確認しながら進めてくれます。
-手で行う場合は次のとおりです（`souieba` はスキルの `scripts/souieba.mjs` のことです）。
+手で行う場合は次のとおりです。
 
 ```bash
 # 友人から招待された場合（表示名は、同じグループの人と同じものにはできません）

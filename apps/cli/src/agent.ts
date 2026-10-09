@@ -12,9 +12,11 @@ import {
   SecretInNoteError,
   SecretInPostError,
   SetLog,
+  SetLogApiError,
   resolveAgent,
   souiebaHome,
 } from "@souieba/sdk";
+import { CLI_VERSION } from "./version.ts";
 
 export type AgentFlags = {
   agent?: string;
@@ -29,10 +31,12 @@ function context(flags: AgentFlags) {
   if (!a.keys || !a.userId) {
     throw new Error(`Agent「${a.name}」の鍵がありません（E2EE に対応する前に登録した Agent です）。souieba doctor で確認してください`);
   }
+  /** tell は失敗しても黙って続けるが、CLI が古くて断られたことだけは主人に伝える */
+  const state: { outdated: string | null } = { outdated: null };
   const debug = (msg: string) => {
     if (flags.debug) console.error(`[souieba] ${msg}`);
   };
-  const transport = new E2eeTransport(new HttpTransport({ baseUrl: a.serverUrl, token: a.token }), {
+  const transport = new E2eeTransport(new HttpTransport({ baseUrl: a.serverUrl, token: a.token, clientVersion: CLI_VERSION }), {
     userId: a.userId,
     agentId: a.agentId,
     keys: a.keys,
@@ -44,10 +48,11 @@ function context(flags: AgentFlags) {
     sessionGapMs: Number(process.env.SOUIEBA_SESSION_GAP_MIN ?? 30) * 60_000,
     now: flags.now,
     onError: (op, err) => {
+      if (err instanceof SetLogApiError && err.code === "client_outdated") state.outdated = err.message;
       if (flags.debug) console.error(`[souieba] ${op} 失敗: ${err instanceof Error ? err.message : err}`);
     },
   });
-  return { agent: a, transport, setlog, notes: new NotesStore(a.agentId, dir), watch: new AgentWatch(join(dir, "known_agents.json")) };
+  return { agent: a, transport, setlog, state, notes: new NotesStore(a.agentId, dir), watch: new AgentWatch(join(dir, "known_agents.json")) };
 }
 
 const fmt = new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -140,7 +145,7 @@ export async function publish(flags: AgentFlags, content: string, periodArg = "p
  * --reserve のときは予約だけして、伝えたら told、伝えなかったら release を呼んでもらう。
  */
 export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
-  const { setlog, notes, transport, watch } = context(flags);
+  const { setlog, notes, transport, watch, state } = context(flags);
   const now = flags.now();
   setlog.beginTurn();
   const c = await setlog.pickTellCandidate();
@@ -168,6 +173,7 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
         tell: text && c ? { postId: c.postId, text, friend: c.owner.displayName, reserved: reserve } : null,
         pendingPeriods: pending,
         newAgents: newAgents.map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt })),
+        outdated: state.outdated,
       },
       "",
     );
@@ -185,6 +191,9 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
   }
   if (pending > 0) {
     lines.push(`souieba: 投稿待ちの時間帯が ${pending} 件あります。ユーザーへの回答のあとで souieba compose を実行してください。`);
+  }
+  if (state.outdated) {
+    lines.push(`souieba: ${state.outdated}。ユーザーへの回答のあとで、主人に更新を頼んでください。`);
   }
   for (const a of newAgents) {
     lines.push(

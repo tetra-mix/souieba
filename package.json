@@ -1,5 +1,5 @@
 {
-  "name": "souieba",
+  "name": "souieba-workspace",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.12.1",
@@ -13,7 +13,8 @@
     "admin": "tsx apps/server/src/admin-cli.ts",
     "souieba": "tsx apps/cli/src/main.ts",
     "build:server": "pnpm --filter @souieba/server build",
-    "build:skill": "esbuild apps/cli/src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=skills/souieba/scripts/souieba.mjs --banner:js='#!/usr/bin/env node' --log-level=warning"
+    "build:cli": "pnpm --filter souieba build",
+    "check:version": "node scripts/check-version.mjs"
   },
   "devDependencies": {
     "@types/node": "^24",

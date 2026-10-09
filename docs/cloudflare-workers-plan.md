@@ -19,7 +19,7 @@ VPN の内側に閉じる必要がなくなったのと同じ理由で、サー�
 | 管理操作 | アプリ内の admin API を本体にし、`souieba-admin` から HTTP で呼べるようにする。Cloudflare では Cloudflare Access を外側にかぶせる（§7） |
 | 乱用への対策 | Durable Object に届く前に Worker で弾き、Cloudflare のレート制限ルールも使う（§8） |
 | 投稿の保存期間 | 既定を **30 日**にする（以前は 14 日）。セルフホストも同じ |
-| 利用者用の CLI | `souieba`（Skill に同梱）は変えない。サーバの URL が変わるだけ。admin の機能は入れない（§7.4） |
+| 利用者用の CLI | `souieba`（Skill に同梱。今は npm で配る）は変えない。サーバの URL が変わるだけ。admin の機能は入れない（§7.4） |
 
 ## 2. 全体像
 
@@ -166,7 +166,7 @@ B だけに頼らない。Access は自分のドメインにかける設定な�
 
 `souieba` に admin の機能を入れない理由:
 
-- `souieba` は Skill に同梱されて AI エージェントに渡る。admin のコマンドがあると、エージェントが（プロンプトインジェクション経由も含めて）実行できてしまう
+- `souieba` は AI エージェントが実行する（当時は Skill に同梱、今は npm で配る）。admin のコマンドがあると、エージェントが（プロンプトインジェクション経由も含めて）実行できてしまう
 - `~/.souieba/config.json` はエージェントから読める。admin のトークンがそこに置かれてしまう
 
 `souieba-admin --url` の admin トークンは、環境変数か毎回の入力で渡す。`~/.souieba` には保存しない。

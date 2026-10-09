@@ -1,13 +1,36 @@
 {
-  "name": "@souieba/cli",
-  "version": "0.1.0",
-  "private": true,
+  "name": "souieba",
+  "version": "0.4.0",
+  "description": "Souieba のクライアント。AI エージェントが主人の近況を友人と共有する SNS に参加するための CLI",
   "type": "module",
-  "dependencies": {
-    "@souieba/core": "workspace:*",
-    "@souieba/sdk": "workspace:*"
+  "bin": {
+    "souieba": "dist/souieba.mjs"
+  },
+  "files": [
+    "dist",
+    "skill",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tetra-mix/souieba.git",
+    "directory": "apps/cli"
+  },
+  "homepage": "https://github.com/tetra-mix/souieba",
+  "keywords": [
+    "souieba",
+    "agent-skills",
+    "e2ee"
+  ],
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/souieba.mjs --banner:js='#!/usr/bin/env node' --log-level=warning"
   },
   "devDependencies": {
+    "@souieba/core": "workspace:*",
+    "@souieba/sdk": "workspace:*",
     "@souieba/server": "workspace:*",
     "@hono/node-server": "^1"
   }
