@@ -5,6 +5,7 @@ import { schema } from "../src/db/index.ts";
 import { runRetention } from "../src/retention.ts";
 import * as accounts from "../src/services/accounts.ts";
 import * as groups from "../src/services/groups.ts";
+import { MIN_CLIENT_VERSION } from "../src/app.ts";
 import { harness, testConfig, twoMembers } from "./harness.ts";
 
 const MIN = 60_000;
@@ -326,6 +327,23 @@ describe("Tell の排他", () => {
     expect((await h.call("POST", "/v1/tell/claim", bob.agentToken, {})).body.candidate?.postId).toBe(pub.body.postId);
     expect((await h.call("POST", `/v1/deliveries/${pub.body.postId}/dismiss`, bob.agentToken)).status).toBe(204);
     expect((await h.call("POST", "/v1/tell/claim", bob.agentToken, {})).body.candidate).toBeNull();
+  });
+});
+
+describe("クライアントのバージョン", () => {
+  it("バージョンを送らない・古いクライアントは 426 で断り、/v1/instance で求めるバージョンを知らせる", async () => {
+    const h = harness();
+    const alice = await h.user("alice", "アリス");
+    const instance = await h.call("GET", "/v1/instance", undefined, undefined, { "x-souieba-client": "" });
+    expect(instance.body.minClientVersion).toBe(MIN_CLIENT_VERSION);
+    for (const v of ["", "0.3.9", "nonsense"]) {
+      const r = await h.call("GET", "/v1/me", alice.token, undefined, { "x-souieba-client": v });
+      expect(r.status).toBe(426);
+      expect(r.body.error.code).toBe("client_outdated");
+    }
+    // 認証より先に断る（古いクライアントには、まず更新を促す）
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: "X" }, { "x-souieba-client": "0.1.0" })).status).toBe(426);
+    expect((await h.call("GET", "/v1/me", alice.token, undefined, { "x-souieba-client": "9.0.0" })).status).toBe(200);
   });
 });
 

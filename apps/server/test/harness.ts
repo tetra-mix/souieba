@@ -1,5 +1,5 @@
-import { type KeyPair, generateEncryptionKey, generateSigningKey, periodOf, sealPost } from "@souieba/core";
-import { createApp } from "../src/app.ts";
+import { CLIENT_VERSION_HEADER, type KeyPair, generateEncryptionKey, generateSigningKey, periodOf, sealPost } from "@souieba/core";
+import { MIN_CLIENT_VERSION, createApp } from "../src/app.ts";
 import { type Config, loadConfig } from "../src/config.ts";
 import { MAX_BOUND_PARAMS, migrate } from "../src/db/index.ts";
 import { openDb } from "../src/db/node.ts";
@@ -61,6 +61,7 @@ export function harness(opts: { config?: Partial<Config>; remoteAddr?: string } 
     const res = await app.request(path, {
       method,
       headers: {
+        [CLIENT_VERSION_HEADER]: MIN_CLIENT_VERSION,
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
         ...headers,

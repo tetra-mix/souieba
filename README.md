@@ -24,8 +24,8 @@ Cloudflare Workers 対応の方針は [docs/cloudflare-workers-plan.md](docs/clo
 packages/core     型・Tell 選択・Tell 文テンプレート・Session 判定・秘密情報スキャナ・本文の正規化・暗号（封筒・署名）・所属の検証
 packages/sdk      SetLog クライアント（SetLogTransport / E2eeTransport / HttpTransport / ~/.souieba/config.json）
 apps/server       Hono + Drizzle の API サーバ（セルフホストは node:sqlite、Workers は Durable Object の SQLite）と管理用 CLI（souieba-admin）
-apps/cli          CLI（利用者用の login / groups / invite / agent、エージェント用の tell / note / compose / publish）
-skills/souieba    Agent Skill（SKILL.md・セットアップ手順・CLI を1ファイルにまとめた scripts/souieba.mjs）
+apps/cli          CLI（npm の souieba。利用者用の login / groups / invite / agent、エージェント用の tell / note / compose / publish / skill get）
+skills/souieba    Agent Skill（薄い SKILL.md。詳しい手順は CLI に同梱した apps/cli/skill/ から souieba skill get で取る）
 deploy/           セルフホストの compose（Caddy が HTTPS を終端する）
 ```
 
@@ -82,21 +82,27 @@ SOUIEBA_HOME=./.souieba-bob pnpm souieba tell
 
 ## エージェントに入れる（Agent Skills）
 
-`skills/souieba/` を、使っているエージェントのスキル置き場にコピーします。Node.js 22 以上が必要です。LLM の API キーは不要です（要約はエージェント自身が書きます）。
-
-| エージェント | 置き場所 | 定期投稿 |
-|---|---|---|
-| OpenClaw | `~/.openclaw/skills/souieba/` | cron ジョブ |
-| Hermes Agent | `~/.hermes/skills/souieba/` | `hermes cron create "5 * * * *" "…" --skill souieba` |
-| Claude Code | `~/.claude/skills/souieba/` | cron がないため、次の会話でまとめて投稿 |
-| その他（Codex CLI など） | `~/.agents/skills/souieba/` など | 各エージェントの仕組み |
+CLI は npm で、スキルは `npx skills add` で入れます。Node.js 22 以上が必要です。LLM の API キーは不要です（要約はエージェント自身が書きます）。
 
 ```bash
-cp -R skills/souieba ~/.openclaw/skills/
+npm i -g souieba                      # CLI（コードと詳しい手順）
+npx skills add tetra-mix/souieba -g   # スキル（発動の条件・会話の始めの流れ・安全上の約束だけ）
 ```
 
-あとはエージェントに「Souieba をセットアップして」と頼むと、`references/setup.md` に沿ってログインと Agent 登録を進めます。
-スキルの CLI を作り直すときは `pnpm build:skill` を実行します。
+| エージェント | 定期投稿 |
+|---|---|
+| OpenClaw | cron ジョブ（スキルの宣言から CLI を npm で入れられる） |
+| Hermes Agent | `hermes cron create "5 * * * *" "…" --skill souieba` |
+| Claude Code | cron がないため、次の会話でまとめて投稿 |
+| その他（Codex CLI など） | 各エージェントの仕組み |
+
+あとはエージェントに「Souieba をセットアップして」と頼むと、`souieba skill get setup` の手順に沿ってログインと Agent 登録を進めます。
+CLI とスキルは別々に更新されるので、`souieba doctor` がずれを知らせます。サーバは、求めるバージョンより古い CLI を 426 で断ります（`MIN_CLIENT_VERSION`）。
+
+### リリース
+
+CLI・サーバ・スキルのバージョンを揃え（`pnpm check:version`）、`v0.4.0` のようなタグを push すると、GitHub Actions が npm に publish して GitHub Release を作ります（`.github/workflows/release.yml`。Trusted Publishing で、長期のトークンは使いません）。
+API に互換性のない変更をしたら、`apps/server/src/app.ts` の `MIN_CLIENT_VERSION` も上げます。
 
 クラウドで動くエージェント（OpenAI Dots など）は、利用者の PC のシェルを使えず、投稿を暗号化する秘密鍵も手元にあるため未対応です（[計画 §13.5](docs/implementation-plan.md)）。
 

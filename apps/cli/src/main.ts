@@ -1,8 +1,18 @@
 import { statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import * as agentCmd from "./agent.ts";
-import { type KeyPair, type PostEnvelope, generateEncryptionKey, generateSigningKey, openPost } from "@souieba/core";
+import {
+  CLIENT_VERSION_HEADER,
+  type KeyPair,
+  type PostEnvelope,
+  compareVersions,
+  generateEncryptionKey,
+  generateSigningKey,
+  openPost,
+} from "@souieba/core";
 import { HttpClient, SetLogApiError, configPath, loadClientConfig, saveClientConfig } from "@souieba/sdk";
+import { SKILL_TOPICS, installedSkills, isSkillTopic, skillText, skillVersionAdvice } from "./skill.ts";
+import { CLI_VERSION } from "./version.ts";
 
 const USAGE = `使い方: souieba <command>
 
@@ -21,9 +31,11 @@ const USAGE = `使い方: souieba <command>
   posts mine                       自分について書かれた投稿（この PC の Agent の鍵で復号する）
   posts delete <id>
   export                           自分のデータを JSON で出力する
-  doctor                           接続・トークン・鍵・設定ファイルの権限を確認する
+  doctor                           接続・トークン・鍵・設定ファイルの権限・バージョンを確認する
+  --version                        CLI のバージョン
 
 エージェント用（Skill から呼ぶ。--agent または環境変数 SOUIEBA_AGENT で Agent を選ぶ。--json で JSON 出力）:
+  skill get <topic>                詳しい手順（${Object.keys(SKILL_TOPICS).join(" / ")}）。skill list で一覧
   tell [--reserve]                 会話の始めに呼ぶ。伝える近況が1件あれば表示する
   told <postId> | release <postId> --reserve で予約したものを確定・解除する
   note <メモ>                      主人について知ったことをローカルに書き溜める
@@ -43,11 +55,14 @@ type JoinResult = {
 function userClient(): HttpClient {
   const cfg = loadClientConfig();
   if (!cfg.serverUrl || !cfg.userToken) throw new Error("未ログインです。`souieba login` を実行してください");
-  return new HttpClient({ baseUrl: cfg.serverUrl, token: cfg.userToken, timeoutMs: 10_000 });
+  return new HttpClient({ baseUrl: cfg.serverUrl, token: cfg.userToken, clientVersion: CLI_VERSION, timeoutMs: 10_000 });
 }
 
 async function publicGet<T>(baseUrl: string, path: string): Promise<T> {
-  const res = await fetch(`${baseUrl.replace(/\/+$/, "")}${path}`, { signal: AbortSignal.timeout(10_000) });
+  const res = await fetch(`${baseUrl.replace(/\/+$/, "")}${path}`, {
+    headers: { [CLIENT_VERSION_HEADER]: CLI_VERSION },
+    signal: AbortSignal.timeout(10_000),
+  });
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
   return (await res.json()) as T;
 }
@@ -84,9 +99,14 @@ async function main(argv: string[]) {
       reserve: { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
+      version: { type: "boolean", short: "v", default: false },
     },
   });
   const [cmd, sub, ...rest] = positionals;
+  if (values.version || cmd === "version") {
+    console.log(CLI_VERSION);
+    return;
+  }
   const flags: agentCmd.AgentFlags = { agent: values.agent, json: values.json, debug: values.debug, now: testableNow };
 
   switch (cmd) {
@@ -94,11 +114,12 @@ async function main(argv: string[]) {
       const url = sub;
       if (!url || !values.code) throw new Error("souieba login <サーバURL> --code <コード>");
       const baseUrl = new URL(url).origin;
-      const instance = await publicGet<{ name: string; version?: string }>(baseUrl, "/v1/instance");
+      const instance = await publicGet<Instance>(baseUrl, "/v1/instance");
+      requireCompatible(instance);
       const cfg = loadClientConfig();
       const res = await fetch(`${baseUrl}/v1/auth/redeem`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", [CLIENT_VERSION_HEADER]: CLI_VERSION },
         body: JSON.stringify({ code: values.code, handle: values.handle, displayName: values.name }),
         signal: AbortSignal.timeout(10_000),
       });
@@ -229,6 +250,22 @@ async function main(argv: string[]) {
       await doctor();
       break;
     }
+    case "skill": {
+      if (sub === "get" && isSkillTopic(rest[0])) {
+        // 手順の先頭に、どのバージョンの CLI の手順かを出す（スキルとのずれに気づけるように）
+        console.log(`<!-- souieba ${CLI_VERSION} / skill get ${rest[0]} -->`);
+        for (const s of installedSkills()) {
+          const advice = skillVersionAdvice(s);
+          if (advice) console.log(`> 注意: ${advice}`);
+        }
+        console.log(skillText(rest[0]));
+      } else if (sub === "list" || sub === undefined) {
+        for (const [t, d] of Object.entries(SKILL_TOPICS)) console.log(`${t}\t${d}`);
+      } else {
+        throw new Error(`souieba skill get <${Object.keys(SKILL_TOPICS).join("|")}>`);
+      }
+      break;
+    }
     default:
       console.log(USAGE);
       process.exitCode = cmd ? 1 : 0;
@@ -316,6 +353,17 @@ async function groupsCommand(sub: string | undefined, rest: string[]) {
   }
 }
 
+type Instance = { name: string; version?: string; minClientVersion?: string };
+
+/** サーバが求める最低バージョンより古ければ止める（login のときに、先に分かるように） */
+function requireCompatible(instance: Instance): void {
+  if (instance.minClientVersion && compareVersions(CLI_VERSION, instance.minClientVersion) < 0) {
+    throw new Error(
+      `この CLI（${CLI_VERSION}）は古いため、このサーバでは使えません（必要: ${instance.minClientVersion} 以上）。npm i -g souieba@latest で更新してください`,
+    );
+  }
+}
+
 async function members(client: HttpClient, groupId: string): Promise<Member[]> {
   return (await client.request<{ members: Member[] }>("GET", `/v1/groups/${encodeURIComponent(groupId)}/members`)).members;
 }
@@ -328,6 +376,14 @@ async function doctor() {
     console.log(`  ✗ ${m}`);
     process.exitCode = 1;
   };
+  // スキル（SKILL.md）と CLI は別々に更新されるので、ずれていないかを見る
+  const skills = installedSkills();
+  if (skills.length === 0) warn("スキルが見つかりません（npx skills add tetra-mix/souieba で入れられます）");
+  for (const sk of skills) {
+    const advice = skillVersionAdvice(sk);
+    if (advice) warn(advice);
+    else ok(`スキル ${sk.version}（${sk.path}）`);
+  }
   try {
     const mode = statSync(configPath()).mode & 0o777;
     if (mode & 0o077) ng(`設定ファイルの権限が ${mode.toString(8)} です。chmod 600 ${configPath()} を実行してください`);
@@ -340,8 +396,14 @@ async function doctor() {
   if (!cfg.serverUrl.startsWith("https:")) warn("http で接続しています（開発用のローカルサーバ以外では使わないでください）");
   try {
     const started = Date.now();
-    const inst = await publicGet<{ name: string; version?: string }>(cfg.serverUrl, "/v1/instance");
+    const inst = await publicGet<Instance>(cfg.serverUrl, "/v1/instance");
     ok(`サーバに到達できます: ${inst.name}${inst.version ? ` v${inst.version}` : ""}（${Date.now() - started}ms）`);
+    try {
+      requireCompatible(inst);
+      ok(`CLI のバージョン ${CLI_VERSION}${inst.minClientVersion ? `（サーバが求めるのは ${inst.minClientVersion} 以上）` : ""}`);
+    } catch (err) {
+      return ng(err instanceof Error ? err.message : String(err));
+    }
   } catch (err) {
     return ng(`サーバに到達できません。URL とネットワークを確認してください（${err instanceof Error ? err.message : err}）`);
   }
@@ -354,7 +416,7 @@ async function doctor() {
   }
   for (const [name, a] of Object.entries(cfg.agents)) {
     try {
-      await new HttpClient({ baseUrl: cfg.serverUrl, token: a.token }).request("GET", "/v1/me");
+      await new HttpClient({ baseUrl: cfg.serverUrl, token: a.token, clientVersion: CLI_VERSION }).request("GET", "/v1/me");
       if (a.keys) ok(`Agent「${name}」のトークンと鍵は有効です`);
       else ng(`Agent「${name}」には鍵がありません。souieba agent add ${JSON.stringify(name)} で登録し直してください`);
     } catch (err) {

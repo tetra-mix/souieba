@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   advanceSession,
   canTell,
+  compareVersions,
   maskSecrets,
   periodOf,
   sanitizeContent,
@@ -156,5 +157,15 @@ describe("formatTellText", () => {
     expect(formatTellText("ボブ", "主人はP2P化について検討しているらしい。")).toBe(
       "あ、そういえばボブさん、P2P化について検討しているみたいですよ。",
     );
+  });
+});
+
+describe("compareVersions", () => {
+  it("x.y.z を数値として比べ、形式の違うものは最も古い扱いにする", () => {
+    expect(compareVersions("0.4.0", "0.4.0")).toBe(0);
+    expect(compareVersions("0.3.9", "0.4.0")).toBeLessThan(0);
+    expect(compareVersions("0.10.0", "0.9.0")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.0-beta.1", "1.0.0")).toBe(0);
+    expect(compareVersions("abc", "0.0.1")).toBeLessThan(0);
   });
 });

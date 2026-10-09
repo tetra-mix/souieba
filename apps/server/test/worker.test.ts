@@ -3,7 +3,8 @@
  * Durable Object の SQLite・Drizzle の durable-sqlite ドライバ・入口の検査・admin API を、本物の実行環境で通す。
  */
 import { fileURLToPath } from "node:url";
-import { type KeyPair, generateEncryptionKey, generateSigningKey, openPost, periodOf, sealPost } from "@souieba/core";
+import { CLIENT_VERSION_HEADER, type KeyPair, generateEncryptionKey, generateSigningKey, openPost, periodOf, sealPost } from "@souieba/core";
+import { MIN_CLIENT_VERSION } from "../src/app.ts";
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -30,6 +31,7 @@ async function call<T = any>(method: string, path: string, token?: string, body?
   const res = await worker.fetch(path, {
     method,
     headers: {
+      [CLIENT_VERSION_HEADER]: MIN_CLIENT_VERSION,
       ...(token ? { authorization: `Bearer ${token}` } : {}),
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
     },
