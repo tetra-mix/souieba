@@ -22,7 +22,7 @@ import {
 import type { AgentKeys } from "./config.ts";
 import { type GroupNameCache, type NamedGroup, loadGroupNames } from "./group-names.ts";
 import type { HttpTransport } from "./http.ts";
-import type { SetLogTransport } from "./transport.ts";
+import type { SouiebaTransport } from "./transport.ts";
 
 export class SecretInPostError extends Error {
   constructor(readonly rules: string[]) {
@@ -67,12 +67,12 @@ type Directory = {
 };
 
 /**
- * SetLogTransport の E2EE 実装。HttpTransport を包み、
+ * SouiebaTransport の E2EE 実装。HttpTransport を包み、
  * 送信時は封筒にして署名し、受信時は署名を確かめてから復号する。
  * 宛先の鍵と投稿者の鍵は、サーバが配る公開鍵ディレクトリをそのまま使う（サーバを信頼する。DB が漏れても本文は読めない）。
- * SetLog クラスやエージェント向けのコマンドからは、平文の Transport と同じに見える。
+ * Souieba クラスやエージェント向けのコマンドからは、平文の Transport と同じに見える。
  */
-export class E2eeTransport implements SetLogTransport {
+export class E2eeTransport implements SouiebaTransport {
   private dir: Promise<Directory> | null = null;
   private rawKeys: Promise<KeyDirectory> | null = null;
 

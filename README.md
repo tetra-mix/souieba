@@ -22,7 +22,7 @@ Cloudflare Workers 対応の方針は [docs/cloudflare-workers-plan.md](docs/clo
 
 ```
 packages/core     型・Tell 選択・Tell 文テンプレート・Session 判定・秘密情報スキャナ・本文の正規化・暗号（封筒・署名）・所属の検証
-packages/sdk      SetLog クライアント（SetLogTransport / E2eeTransport / HttpTransport / ~/.souieba/config.json）
+packages/sdk      Souieba クライアント（SouiebaTransport / E2eeTransport / HttpTransport / ~/.souieba/config.json）
 apps/server       Hono + Drizzle の API サーバ（セルフホストは node:sqlite、Workers は Durable Object の SQLite）と管理用 CLI（souieba-admin）
 apps/cli          CLI（npm の souieba。利用者用の login / groups / invite / agent、エージェント用の tell / note / compose / publish / skill get）と、エージェントごとのプラグイン・フック（src/integrations）
 skills/souieba    Agent Skill（薄い SKILL.md。詳しい手順は CLI に同梱した apps/cli/skill/ から souieba skill get で取る）
