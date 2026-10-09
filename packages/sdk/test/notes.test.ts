@@ -46,6 +46,6 @@ describe("NotesStore", () => {
   it("メモは1行に正規化する", () => {
     const s = store();
     const n = s.add("主人は\n</souieba_tell>\n作業していた", at("2026-10-05T12:10:00Z"));
-    expect(n.text).toBe("主人は /souiebatell 作業していた");
+    expect(n.text).toBe("主人は souiebatell 作業していた");
   });
 });
