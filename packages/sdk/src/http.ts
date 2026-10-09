@@ -1,4 +1,12 @@
-import type { KeyDirectory, PostEnvelope, PublishResult, SyncResult, WireInboxItem, WireTellCandidate } from "@souieba/core";
+import {
+  CLIENT_VERSION_HEADER,
+  type KeyDirectory,
+  type PostEnvelope,
+  type PublishResult,
+  type SyncResult,
+  type WireInboxItem,
+  type WireTellCandidate,
+} from "@souieba/core";
 
 export class SetLogApiError extends Error {
   constructor(
@@ -13,8 +21,10 @@ export class SetLogApiError extends Error {
 export type HttpOptions = {
   baseUrl: string;
   token: string;
+  /** サーバに送るクライアントのバージョン。送らないとサーバに断られる（426） */
+  clientVersion?: string;
   timeoutMs?: number;
-  /** 会話の途中で呼ぶ sync / claim のタイムアウト。VPN が切れているときはすぐ諦める */
+  /** 会話の途中で呼ぶ sync / claim のタイムアウト。ネットワークが切れているときはすぐ諦める */
   interactiveTimeoutMs?: number;
   fetch?: typeof fetch;
 };
@@ -33,6 +43,7 @@ export class HttpClient {
       method,
       headers: {
         authorization: `Bearer ${this.opts.token}`,
+        ...(this.opts.clientVersion ? { [CLIENT_VERSION_HEADER]: this.opts.clientVersion } : {}),
         ...(body !== undefined ? { "content-type": "application/json" } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,

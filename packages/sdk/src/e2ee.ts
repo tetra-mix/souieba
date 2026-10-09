@@ -1,12 +1,13 @@
 import {
   type CreatePostInput,
   DecryptError,
+  type DirectoryAgent,
+  type DirectoryUser,
   type InboxItem,
+  type KeyDirectory,
   MIN_TELL_CONTENT_LENGTH,
   type PublishResult,
   type TellCandidate,
-  type TrustProblem,
-  type TrustResult,
   type WireInboxItem,
   openPost,
   sanitizeContent,
@@ -16,7 +17,6 @@ import {
 } from "@souieba/core";
 import type { AgentKeys } from "./config.ts";
 import type { HttpTransport } from "./http.ts";
-import { Keyring } from "./keyring.ts";
 import type { SetLogTransport } from "./transport.ts";
 
 export class SecretInPostError extends Error {
@@ -26,8 +26,8 @@ export class SecretInPostError extends Error {
 }
 
 export type RejectReason =
-  | "untrusted_author"
-  | "untrusted_agent"
+  | "unknown_author"
+  | "unknown_agent"
   | "header_mismatch"
   | "bad_signature"
   | "decrypt_failed"
@@ -37,43 +37,47 @@ export type E2eeOptions = {
   userId: string;
   agentId: string;
   keys: AgentKeys;
-  /** 自分の Identity 公開鍵（ディレクトリ上で自分の鍵がすり替えられていないかの確認に使う） */
-  identityKey: string;
-  keyring?: Keyring;
-  onProblem?: (p: TrustProblem) => void;
   onReject?: (postId: string, reason: RejectReason) => void;
+};
+
+type Directory = {
+  users: Map<string, DirectoryUser>;
+  agents: Map<string, DirectoryAgent & { userId: string }>;
 };
 
 /**
  * SetLogTransport の E2EE 実装。HttpTransport を包み、
- * 送信時は封筒にして署名し、受信時はサーバを信頼せずに検証してから復号する。
+ * 送信時は封筒にして署名し、受信時は署名を確かめてから復号する。
+ * 宛先の鍵と投稿者の鍵は、サーバが配る公開鍵ディレクトリをそのまま使う（サーバを信頼する。DB が漏れても本文は読めない）。
  * SetLog クラスやエージェント向けのコマンドからは、平文の Transport と同じに見える。
  */
 export class E2eeTransport implements SetLogTransport {
-  private trust: Promise<TrustResult> | null = null;
-  private readonly keyring: Keyring;
+  private dir: Promise<Directory> | null = null;
 
   constructor(
     readonly inner: HttpTransport,
     private readonly opts: E2eeOptions,
-  ) {
-    this.keyring = opts.keyring ?? new Keyring();
-  }
+  ) {}
 
-  /** 公開鍵ディレクトリを取得して検証する。1つのインスタンス（＝1回のコマンド）の中だけキャッシュする */
-  directory(): Promise<TrustResult> {
-    this.trust ??= this.inner.keys().then((dir) => {
-      if (dir.me.userId !== this.opts.userId || dir.me.agentId !== this.opts.agentId) {
+  /** 公開鍵ディレクトリ。1つのインスタンス（＝1回のコマンド）の中だけキャッシュする */
+  directory(): Promise<Directory> {
+    this.dir ??= this.inner.keys().then((d: KeyDirectory) => {
+      if (d.me.userId !== this.opts.userId || d.me.agentId !== this.opts.agentId) {
         throw new Error("サーバが返したディレクトリの持ち主が、この Agent と一致しません");
       }
-      const result = this.keyring.evaluate(dir, this.opts.identityKey);
-      for (const p of result.problems) this.opts.onProblem?.(p);
-      return result;
+      const users = new Map(d.users.map((u) => [u.id, u]));
+      const agents = new Map(d.users.flatMap((u) => u.agents.map((a) => [a.id, { ...a, userId: u.id }] as const)));
+      return { users, agents };
     });
-    this.trust.catch(() => {
-      this.trust = null;
+    this.dir.catch(() => {
+      this.dir = null;
     });
-    return this.trust;
+    return this.dir;
+  }
+
+  /** 自分のアカウントに登録されている、有効な Agent */
+  async ownAgents(): Promise<DirectoryAgent[]> {
+    return (await this.directory()).users.get(this.opts.userId)?.agents ?? [];
   }
 
   async publish(post: CreatePostInput): Promise<PublishResult> {
@@ -85,9 +89,9 @@ export class E2eeTransport implements SetLogTransport {
 
     const visibility = post.visibility ?? "groups";
     const { userId, agentId, keys } = this.opts;
-    const trust = await this.directory();
-    const recipients = [...trust.agents.values()]
-      .filter((a) => visibility === "groups" || a.user.id === userId)
+    const dir = await this.directory();
+    const recipients = [...dir.agents.values()]
+      .filter((a) => visibility === "groups" || a.userId === userId)
       .map((a) => ({ agentId: a.id, encKey: a.encKey }));
     if (!recipients.some((r) => r.agentId === agentId)) recipients.push({ agentId, encKey: keys.enc.pub });
 
@@ -104,10 +108,10 @@ export class E2eeTransport implements SetLogTransport {
   }
 
   async inbox(): Promise<InboxItem[]> {
-    const trust = await this.directory();
+    const dir = await this.directory();
     const items = await this.inner.inbox();
     return items.flatMap((item) => {
-      const r = this.open(item, trust);
+      const r = this.open(item, dir);
       return r.ok ? [{ ...r.item, receivedAt: item.receivedAt }] : [];
     });
   }
@@ -117,11 +121,11 @@ export class E2eeTransport implements SetLogTransport {
    * 次の候補を試す（何度も同じ壊れた投稿が候補にならないように）。
    */
   async claimTell(opts: { leaseSec?: number } = {}): Promise<TellCandidate | null> {
-    const trust = await this.directory();
+    const dir = await this.directory();
     for (let i = 0; i < 3; i++) {
       const c = await this.inner.claimTell(opts);
       if (!c) return null;
-      const r = this.open(c, trust);
+      const r = this.open(c, dir);
       if (r.ok) return { ...r.item, reservedUntil: c.reservedUntil };
       this.opts.onReject?.(c.postId, r.reason);
       await this.inner.dismiss(c.postId).catch(() => {});
@@ -140,12 +144,13 @@ export class E2eeTransport implements SetLogTransport {
   /** 受け取った投稿の検証と復号（docs/public-deployment-plan.md §6.3） */
   private open(
     item: WireInboxItem,
-    trust: TrustResult,
+    dir: Directory,
   ): { ok: true; item: Omit<TellCandidate, "reservedUntil"> } | { ok: false; reason: RejectReason } {
-    const owner = trust.users.get(item.owner.id);
-    if (!owner || owner.id === this.opts.userId) return { ok: false, reason: "untrusted_author" };
-    const agent = trust.agents.get(item.authorAgentId);
-    if (!agent || agent.user.id !== owner.id) return { ok: false, reason: "untrusted_agent" };
+    // 今いっしょにいるグループがない人（抜けた人など）や、失効した Agent の投稿は伝えない
+    const owner = dir.users.get(item.owner.id);
+    if (!owner || owner.id === this.opts.userId) return { ok: false, reason: "unknown_author" };
+    const agent = dir.agents.get(item.authorAgentId);
+    if (!agent || agent.userId !== owner.id) return { ok: false, reason: "unknown_agent" };
 
     const env = item.envelope;
     if (env.periodStart !== item.periodStart || env.periodEnd !== item.periodEnd || env.visibility !== "groups") {

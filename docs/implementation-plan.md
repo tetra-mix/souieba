@@ -361,6 +361,8 @@ cron がない   souieba tell が「投稿待ちが N 件」と知らせ、次�
 
 ## 12. セルフホスト設計
 
+> **廃止:** VPN 内での運用（この節の Tailscale・WireGuard の構成、`SOUIEBA_ALLOWED_CIDRS`・`SOUIEBA_ALLOW_HTTP`）はやめた。投稿本文を E2EE にしたことで、VPN に閉じる必要がなくなったため。今の構成は [公開の設計](public-deployment-plan.md) と README の「セルフホスト」を参照。
+
 ### 12.1 方針
 
 - **VPN 内で運用することを前提にする。** サーバはインターネットに公開しない。標準の構成は Tailscale（Headscale も可）とし、素の WireGuard などそれ以外の VPN にも対応する

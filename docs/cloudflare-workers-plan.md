@@ -1,6 +1,6 @@
 # 設計: Cloudflare Workers 対応
 
-> **状態:** 方針のみ（未実装）。前提は [インターネット公開・グループ・E2EE](public-deployment-plan.md) の実装（ブランチ `feat/public-groups-e2ee`）。
+> **状態:** §11 の手順 1〜4 を実装済み（ブランチ `feat/workers`）。設計から変えた点は §13 にまとめた。Cloudflare への実際のデプロイは未確認（workerd でのテストまで）。
 
 E2EE を入れたことで、サーバに置かれるのは暗号文とメタデータだけになった（[公開の設計 §9](public-deployment-plan.md)）。
 VPN の内側に閉じる必要がなくなったのと同じ理由で、サーバを自宅・VPS・Cloudflare のどこに置いても守れるものは変わらない。
@@ -19,7 +19,7 @@ VPN の内側に閉じる必要がなくなったのと同じ理由で、サー�
 | 管理操作 | アプリ内の admin API を本体にし、`souieba-admin` から HTTP で呼べるようにする。Cloudflare では Cloudflare Access を外側にかぶせる（§7） |
 | 乱用への対策 | Durable Object に届く前に Worker で弾き、Cloudflare のレート制限ルールも使う（§8） |
 | 投稿の保存期間 | 既定を **30 日**にする（以前は 14 日）。セルフホストも同じ |
-| 利用者用の CLI | `souieba`（Skill に同梱）は変えない。サーバの URL が変わるだけ。admin の機能は入れない（§7.4） |
+| 利用者用の CLI | `souieba`（Skill に同梱。今は npm で配る）は変えない。サーバの URL が変わるだけ。admin の機能は入れない（§7.4） |
 
 ## 2. 全体像
 
@@ -121,7 +121,7 @@ export interface Db {
 | 接続元の IP | `getConnInfo` + `X-Forwarded-For`（`TRUST_PROXY`） | `CF-Connecting-IP`。`createApp` の `deps.remoteAddr` で差し替える |
 | レート制限 | メモリ上 | Worker の段階（§8）＋ Durable Object のメモリ上（今の `RateLimiter` がそのまま動く） |
 | 設定 | `process.env` | Worker の env bindings を `loadConfig(env)` に渡す |
-| 公開モード | `SOUIEBA_EXPOSURE=vpn\|public` | 常に public 相当。https は Cloudflare が終端する。`TRUST_PROXY` は使わない |
+| https の終端 | Caddy | Cloudflare。`TRUST_PROXY` は使わない |
 | `node:net`（`isIP` など） | そのまま | 自前の小さな関数に置き換える（両方とも） |
 | `node:crypto` | そのまま | サーバが使うのは sha256・乱数・Ed25519 の検証だけ。`nodejs_compat` で動くか確かめ、動かなければ WebCrypto に寄せる |
 | バックアップの取り出し | `souieba-admin backup` | admin API に export を足すか、PITR だけにするか（§12） |
@@ -143,9 +143,9 @@ B だけに頼らない。Access は自分のドメインにかける設定な�
 
 ### 7.2 admin API
 
-- 有効・無効を切り替えられるようにする。セルフホストは `SOUIEBA_ADMIN_API=off|on`（**既定は off**。今の「public モードでは `/v1/admin/*` を 404 にする」を引き継ぐ）。Workers ではシェルがないので常に on
+- 有効・無効を切り替えられるようにする。セルフホストは `SOUIEBA_ADMIN_API=off|on`（**既定は off**。今は HTTP の admin API がないので、既定の挙動は変わらない）。Workers ではシェルがないので常に on
 - 認証には、普段のユーザートークンとは別の **admin 専用トークン**（scope `admin`）を使う
-  - 今の admin API（VPN モードだけで使える）は、`role = admin` のユーザーのトークンで呼べる。これを admin 専用トークンに限る
+  - 以前の admin API（VPN モードだけで使えた）は `role = admin` のユーザーのトークンで呼べたが、VPN の廃止とともに削除した。作り直すときは admin 専用トークンに限る
   - Agent のトークンには admin の scope を付けられないようにする
 - `souieba-admin` の操作（create-user / login-code / invite / list-groups / disable-user / list-users）を API に揃える
 - admin API の呼び出しはすべてログに残す
@@ -166,7 +166,7 @@ B だけに頼らない。Access は自分のドメインにかける設定な�
 
 `souieba` に admin の機能を入れない理由:
 
-- `souieba` は Skill に同梱されて AI エージェントに渡る。admin のコマンドがあると、エージェントが（プロンプトインジェクション経由も含めて）実行できてしまう
+- `souieba` は AI エージェントが実行する（当時は Skill に同梱、今は npm で配る）。admin のコマンドがあると、エージェントが（プロンプトインジェクション経由も含めて）実行できてしまう
 - `~/.souieba/config.json` はエージェントから読める。admin のトークンがそこに置かれてしまう
 
 `souieba-admin --url` の admin トークンは、環境変数か毎回の入力で渡す。`~/.souieba` には保存しない。
@@ -229,7 +229,7 @@ Workers では、認証の前のリクエストも Durable Object に届ける�
 
 - **Cloudflare から見えるもの**: 誰がどのグループにいるか、投稿の時刻とサイズ、IP。自宅や VPS で Caddy を使って公開するのと同じ量で、見る主体が Cloudflare になる
 - **運営者（admin）から見えるもの**: 上と同じメタデータを、すべてのグループについて見られる。本文は読めない。複数の集まりを1つのインスタンスに載せるので、**運営者は、自分が入っていない集まりのメタデータも見られる**。これを受け入れられない集まりは、自分でデプロイする
-- **本文**: E2EE なので、TLS を Cloudflare が終端しても読めない。所属の証明の連鎖と TOFU（[公開の設計 §5](public-deployment-plan.md)）により、サーバ（Cloudflare・運営者を含む）が偽のメンバーや鍵を足しても宛先には入らない
+- **本文**: E2EE なので、TLS を Cloudflare が終端しても、Durable Object のストレージや PITR のバックアップを見ても読めない。ただし鍵はサーバが配る（[公開の設計 §5](public-deployment-plan.md)。2026-10-09 にサーバを信頼する方式に変えた）ので、**運営者が能動的に偽の鍵を配れば読める**。複数の集まりを載せるインスタンスでは、どの集まりも運営者を信頼することになる。これを受け入れられない集まりは、自分でデプロイする
 - **集まりどうしの分離**: グループの可視性（共通のグループがない相手には届かない）と E2EE で分ける。サーバのバグで別のグループの封筒が届いても、宛先の鍵がないので読めない
 - **管理の経路が外に開く**: admin 専用トークン、ブートストラップの制限、Access、レート制限で守る
 - **ログ**: Workers のログには IP・handle・グループ ID などが載る。本文を E2EE にしても、ログから人間関係が読めてしまうので、出す項目を絞る
@@ -253,3 +253,24 @@ PR #1（公開・グループ・E2EE）をマージしてから、別の PR で�
 - **バックアップ**: Workers では PITR だけにするか、admin API に DB のエクスポートを足すか（中身は暗号文とメタデータ）
 - **Durable Object の場所**: 最初のリクエストの近くに置かれる。日本から使うなら、location hint を指定するか
 - **別のデプロイにも入る人**: 自分でデプロイした集まりと、共有のインスタンスの両方に入る人は、今のクライアントでは扱えない（`serverUrl` が1つ）。需要が出てから考える
+
+## 13. 実装メモ（設計からの差分）
+
+- **DB は Drizzle にした（§5 の自前の `Db` インターフェースはやめた）**。SQL をアプリに直書きしないため
+  - Drizzle の Durable Object 用ドライバ（`drizzle-orm/durable-sqlite`）を、セルフホストでも使う。node:sqlite を `ctx.storage` と同じ形（`sql.exec` と `transactionSync`）に見せるアダプタ（`apps/server/src/db/node.ts`）を挟む。better-sqlite3 用のドライバはネイティブモジュールを要求するため使わない
+  - 同期 API のままなので、読んでから書く処理は `db.transaction` の中でそのまま書ける。Durable Object のドライバの `run()` は変更行数を返さないので、変更の有無は `.returning()` で確かめる
+  - テーブル定義は `src/db/schema.ts`。マイグレーションは drizzle-kit で生成し（`drizzle/`）、Node と Workers の両方で読めるよう `src/db/migrations.gen.ts` に埋め込む（`pnpm --filter @souieba/server db:generate`）。適用の記録は drizzle-kit と同じ `__drizzle_migrations`
+  - 0.2 系の手書きのマイグレーションで作った DB（`PRAGMA user_version = 2`）は、ベースラインを適用済みとして引き継ぐ。スキーマが同じ形であることを `test/db.test.ts` で確かめている（違いは、一意制約のインデックスが無名なことと、主キーの列に NOT NULL がないことだけ）。v1（Friend の時代）の DB は、先に 0.2 系で移行するよう求めて起動を止める
+  - SQL が残っているのは DB 層だけ（マイグレーションの記録と、node:sqlite のトランザクション制御）
+  - node:sqlite の `setReturnArrays`・`backup()` を使うので、サーバは Node.js 24 以上にした。`VACUUM INTO` は `backup()` に置き換えた
+- **admin API**（§7）
+  - admin 専用トークンは `sou_m_` で始まり、credentials の `kind = 'user'`・`scopes = 'admin'` の行に入れる（CHECK 制約を変えないため）。admin API にだけ使え、普段の API には使えない（逆も同じ）。持ち主が admin でなくなると使えなくなる。ログインコードでの再ログイン（User トークンの失効）では失効しない
+  - エンドポイント: `POST /v1/admin/bootstrap`（認証なし。`SOUIEBA_BOOTSTRAP_TOKEN` と照合し、admin がいないときだけ）、`GET|POST /v1/admin/users`、`POST /v1/admin/users/:handle/{login-code,disable,admin-token}`、`POST /v1/admin/invites`、`GET /v1/admin/groups`。呼び出しは `msg: "admin"` でログに残す
+  - `souieba-admin --url`（または `SOUIEBA_ADMIN_URL`）で HTTP から使う。トークンは `SOUIEBA_ADMIN_TOKEN`・`SOUIEBA_BOOTSTRAP_TOKEN`、Access の service token は `CF_ACCESS_CLIENT_ID`・`CF_ACCESS_CLIENT_SECRET` で渡す。`admin-token` コマンドは、サーバ上（DB を直接開く）でも使える
+- **上限**（§3.2）: `SOUIEBA_MAX_USERS`（既定 500）・`SOUIEBA_MAX_GROUP_MEMBERS`（50）・`SOUIEBA_MAX_GROUPS_PER_USER`（20）。超えると 409（`limit_users`・`limit_group_members`・`limit_groups_per_user`）
+- **Worker の入口**（§8）: `src/edge.ts`。API 以外のパスは 404、認証の要るエンドポイントで `Authorization` の形が正しくなければ 401、本文が 64KB を超えれば 413。Rate Limiting バインディングで IP ごとに 1分 120 回。WAF のルールと Access は Cloudflare 側で設定する（README）
+- **Workers の設定**: `apps/server/wrangler.toml`。`workers_dev = false`（Access のかからない URL を作らない）、Cron で毎日 03:17 UTC に retention。Durable Object は `idFromName("default")` の1個
+- **型検査**: Workers の入口（`src/worker.ts`）だけを `wrangler types` で作った型（`worker-configuration.d.ts`）で検査する（`apps/server/tsconfig.worker.json`）。他は今どおり Node の型
+- **workerd での確認**: Ed25519 の署名・検証と sha256 は `nodejs_compat` で動く。X25519 の鍵交換は動かないが、暗号化と復号はクライアントだけで行うので影響しない。`test/worker.test.ts` で、wrangler の `unstable_dev` を使い、ブートストラップから E2EE の投稿・Tell・アカウント削除までを HTTP 越しに通している
+- **未対応**: Cloudflare への実際のデプロイ、Access と WAF の設定手順の検証、Durable Object の location hint、Workers からの DB のエクスポート（§12）
+

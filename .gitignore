@@ -6,4 +6,7 @@ dist/
 .env
 .souieba*/
 .data/
-deploy/.env.public
+*.tsbuildinfo
+.wrangler/
+.dev.vars*
+.reviews/

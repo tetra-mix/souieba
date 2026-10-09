@@ -25,7 +25,7 @@ export type SetLogOptions = {
 
 /**
  * Agent 実装から使う高水準 API。SetLog の内部構造（受信箱・予約・Session）を意識させない。
- * ネットワーク障害（VPN 切断など）で会話を止めないよう、Tell 系は失敗しても null を返す。
+ * ネットワーク障害で会話を止めないよう、Tell 系は失敗しても null を返す。
  */
 export class SetLog {
   private readonly transport: SetLogTransport;

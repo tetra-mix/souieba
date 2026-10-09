@@ -1,8 +1,8 @@
 # 設計: クライアントの配布
 
-> **状態:** 方針のみ（未実装）。
+> **状態:** 実装済み（ブランチ `feat/npm-distribution`）。npm の名前は確保した。最初のリリース（Trusted Publisher の登録とタグの push）はまだ。方針から変えた点は §9。
 
-今のクライアント（`apps/cli`）は、Skill に同梱した `skills/souieba/scripts/souieba.mjs` としてしか配っていない。
+当時のクライアント（`apps/cli`）は、Skill に同梱した `skills/souieba/scripts/souieba.mjs` としてしか配っていなかった。
 人がふつうにインストールして使えるよう、**CLI は npm で配り、Skill は `npx skills add` で入れる薄い入口にする**。
 詳しい手順は CLI が持ち、インストール済みの CLI のバージョンと常に一致させる（§4）。
 
@@ -82,7 +82,7 @@ Agent Skills でよく使われている「CLI は別に配り、Skill は薄く
 
 ### 4.3 CLI が配る手順の扱い
 
-- **手順は CLI のパッケージに同梱したテキストだけにする。サーバからは取らない**。サーバ（共有インスタンスの運営者を含む）は信頼しない前提なので、サーバから配るとエージェントに命令を注入できてしまう
+- **手順は CLI のパッケージに同梱したテキストだけにする。サーバからは取らない**。鍵の配布ではサーバ（運営者）を信頼することにした（[公開の設計 §13](public-deployment-plan.md)）が、エージェントへの命令までサーバに任せる理由はない。サーバから配ると、運営者や侵入者がすべての利用者のエージェントに命令を注入できてしまう
 - `souieba skill get` の出力に、友人の投稿などのリモートのデータを混ぜない。`tell` とは別のコマンドにする
 - 手順のテキストは `apps/cli` の中に Markdown で置き、ビルド時にバンドルする
 - `souieba skill get` は、先頭に CLI のバージョンを出す
@@ -121,7 +121,7 @@ git tag v0.2.0 && git push --tags
 
 ### 5.1 サプライチェーンの安全性
 
-このクライアントは Identity 鍵と Agent の秘密鍵を扱う。配布物がすり替えられると E2EE が根本から破れるので、次を守る。
+このクライアントは Agent の秘密鍵とトークンを扱う。配布物がすり替えられると E2EE が根本から破れるので、次を守る。
 
 - publish は GitHub Actions の Trusted Publishing だけで行う。長期の npm トークンを作らない
 - provenance を付け、どのコミットからビルドしたかを検証できるようにする
@@ -161,3 +161,14 @@ end
 - **秘密鍵の保管場所**: 今は `~/.souieba/config.json`（権限 600）。インストール版になったのを機に、OS のキーチェーンに移すか。エージェントが鍵を使えなくなる環境が出ないかを確かめる必要がある
 - **自動更新の通知**: `doctor` で新しいバージョンを知らせるか（npm の registry を見に行くことになる）
 - **退会のコマンド**: サーバの `DELETE /v1/me` に対応するコマンドを足す
+
+## 9. 実装メモ（方針からの差分）
+
+- **手順の Markdown はバンドルせず、パッケージにファイルとして入れた**（`apps/cli/skill/*.md`、`files` に `skill`）。CLI は自分の場所からの相対パス（`../skill/`）で読む。npm のパッケージの中身であることは同じで、サーバからは取らない。開発中（tsx）とビルド後で同じ読み方ができるため
+- **バージョン**: `apps/cli/package.json` の version を CLI に埋め込む（JSON の import をバンドル）。サーバの `VERSION` と SKILL.md の `version` が揃っているかを `scripts/check-version.mjs` で検査し、リリースではタグとも比べる。最初のバージョンは 0.4.0（サーバを信頼する E2EE への変更と同時）
+- **古いクライアントを断る**: CLI はリクエストごとに `X-Souieba-Client: <version>` を送る。サーバは `MIN_CLIENT_VERSION`（`apps/server/src/app.ts`）より古いか、送らないクライアントを、認証より先に `426 client_outdated` で断る（`/v1/instance` と admin API は対象外）。`/v1/instance` は `minClientVersion` を返し、`login` と `doctor` で先に確かめる。`tell` は失敗しても黙るが、426 のときだけは主人に更新を頼むよう出力する
+- **スキルと CLI のずれ**: `doctor` と `skill get` が、よく使われる場所（`~/.claude/skills`・`~/.agents/skills`・`~/.openclaw/skills`・`~/.hermes/skills`、`SOUIEBA_SKILL_DIR`）の SKILL.md の version を CLI と比べ、`npx skills update` か `npm i -g souieba@latest` を促す
+- **ルートの package.json の名前**を `souieba-workspace` にした（CLI の `souieba` と同じ名前だと `pnpm --filter` で区別できない）
+- **リリース**（`.github/workflows/release.yml`）: publish の前に `npm pkg delete devDependencies scripts` で、`workspace:*` の開発用の依存を外す（公開するのはバンドル済みの1ファイルなので要らない）。provenance は Trusted Publishing で自動で付くので、`--provenance` は付けない
+- **残っていること**: npm の Trusted Publisher の登録（登録から2日以内に最初の publish が要る）、最初のタグの push、成功後に「トークンでの publish を禁止」にすること、ライセンスを決めること（今は `package.json` に書いていない）
+

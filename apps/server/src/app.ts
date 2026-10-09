@@ -1,26 +1,34 @@
-import { Hono } from "hono";
-import { getConnInfo } from "@hono/node-server/conninfo";
+import { CLIENT_VERSION_HEADER, compareVersions } from "@souieba/core";
+import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import { type Env, authenticate, requireAdmin, requireAgent, requireUser } from "./auth.ts";
+import { type Env, authenticate, requireAgent, requireUser } from "./auth.ts";
 import type { Config } from "./config.ts";
-import type { DB } from "./db.ts";
-import { ApiError, badRequest, notFound } from "./errors.ts";
-import { ipInCidrs, isLoopback, isPrivateOrLoopback, normalizeIp } from "./net.ts";
+import type { DB } from "./db/index.ts";
+import { safeEqual } from "./crypto.ts";
+import { ApiError, badRequest, forbidden, notFound } from "./errors.ts";
+import { isLoopback, isPrivateOrLoopback, normalizeIp } from "./net.ts";
 import { RateLimiter } from "./ratelimit.ts";
 import * as accounts from "./services/accounts.ts";
 import * as groups from "./services/groups.ts";
 import * as inboxSvc from "./services/inbox.ts";
 import * as posts from "./services/posts.ts";
 
-export const VERSION = "0.2.0";
+export const VERSION = "0.4.0";
+
+/**
+ * これより古いクライアントと、バージョンを送らないクライアントは 426 で断る（黙って壊れないように、更新を促す）。
+ * API に互換性のない変更をしたら上げる
+ */
+export const MIN_CLIENT_VERSION = "0.4.0";
 
 export type AppDeps = {
   db: DB;
   config: Config;
   now?: () => Date;
   random?: () => number;
-  /** テストでは接続情報がないので、送信元 IP を差し替えられるようにする */
-  remoteAddr?: (c: Parameters<typeof getConnInfo>[0]) => string;
+  /** 直前の接続元の IP。Node では接続情報、Workers では CF-Connecting-IP から取る */
+  remoteAddr: (c: Context<Env>) => string;
   log?: (line: Record<string, unknown>) => void;
 };
 
@@ -57,14 +65,16 @@ const EnvelopeSchema = z.object({
 
 /** /v1/posts は宛先の数だけ大きくなるので、他より上限を大きくする */
 const BODY_LIMIT = 16 * 1024;
-const POST_BODY_LIMIT = 64 * 1024;
+export const POST_BODY_LIMIT = 64 * 1024;
+
+/** 認証なしで呼べるエンドポイント（Workers の入口で、それ以外の Authorization のない要求を先に弾くため） */
+export const PUBLIC_ROUTES = ["GET /healthz", "GET /v1/instance", "POST /v1/auth/redeem", "POST /v1/admin/bootstrap"];
 
 export function createApp(deps: AppDeps) {
   const { db, config } = deps;
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line) => console.log(JSON.stringify(line)));
-  const remoteAddr = deps.remoteAddr ?? ((c) => getConnInfo(c).remote.address ?? "");
-  const isPublic = config.exposure === "public";
+  const remoteAddr = deps.remoteAddr;
 
   const redeemLimiter = new RateLimiter(10, 60 * 60_000);
   const authFailLimiter = new RateLimiter(30, 10 * 60_000);
@@ -83,7 +93,7 @@ export function createApp(deps: AppDeps) {
   });
   app.notFound((c) => c.json({ error: { code: "not_found", message: "Not Found" } }, 404));
 
-  // 送信元 IP の判定・許可範囲の検査・アクセスログ（本文やトークンは記録しない）
+  // 送信元 IP の判定とアクセスログ（本文やトークンは記録しない）
   app.use("*", async (c, next) => {
     const started = Date.now();
     const peer = normalizeIp(remoteAddr(c));
@@ -91,42 +101,54 @@ export function createApp(deps: AppDeps) {
     const forwarded = c.req.header("x-forwarded-for")?.split(",").at(-1)?.trim();
     const ip = trustsForwarded(peer) && forwarded ? normalizeIp(forwarded) : peer;
     c.set("clientIp", ip);
-    if (config.allowedCidrs.length > 0 && !isLoopback(peer) && !ipInCidrs(peer, config.allowedCidrs)) {
-      throw new ApiError(403, "forbidden", "許可されていないネットワークからの接続です");
-    }
     await next();
     c.header("X-Content-Type-Options", "nosniff");
     c.header("Cache-Control", "no-store");
     if (config.logLevel !== "error") {
-      // 公開モードでは不正アクセスの調査のために送信元 IP を残す
+      // 不正アクセスの調査のために送信元 IP を残す
       log({
         level: "info",
         method: c.req.method,
         route: c.req.routePath,
         status: c.res.status,
         ms: Date.now() - started,
-        ...(isPublic ? { ip } : {}),
+        ip,
       });
     }
   });
 
-  app.use("/v1/*", async (c, next) => {
-    const limit = c.req.method === "POST" && c.req.path === "/v1/posts" ? POST_BODY_LIMIT : BODY_LIMIT;
-    const len = Number(c.req.header("content-length") ?? 0);
-    if (len > limit) throw new ApiError(413, "payload_too_large", "リクエストが大きすぎます");
-    await next();
-  });
+  // Content-Length がない（chunked の）要求も、読みながら数えて上限を超えたところで打ち切る
+  const tooLarge = () => {
+    throw new ApiError(413, "payload_too_large", "リクエストが大きすぎます");
+  };
+  const limitBody = bodyLimit({ maxSize: BODY_LIMIT, onError: tooLarge });
+  const limitPostBody = bodyLimit({ maxSize: POST_BODY_LIMIT, onError: tooLarge });
+  app.use("/v1/*", (c, next) => (c.req.method === "POST" && c.req.path === "/v1/posts" ? limitPostBody : limitBody)(c, next));
 
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/v1/instance", (c) =>
     c.json({
       name: config.instanceName,
-      // 公開モードでは、脆弱なバージョンを探すスキャナに手がかりを与えない
-      ...(isPublic ? {} : { version: VERSION }),
       registration: "invite",
       inviteBy: config.inviteBy,
+      minClientVersion: MIN_CLIENT_VERSION,
     }),
   );
+
+  // 利用者・エージェント用の API は、クライアントのバージョンを確かめる。admin API は souieba-admin が使うので対象外
+  app.use("/v1/*", async (c, next) => {
+    if (c.req.path !== "/v1/instance" && !c.req.path.startsWith("/v1/admin/")) {
+      const v = c.req.header(CLIENT_VERSION_HEADER);
+      if (!v || compareVersions(v, MIN_CLIENT_VERSION) < 0) {
+        throw new ApiError(
+          426,
+          "client_outdated",
+          `souieba の CLI が古いため使えません（${v ?? "不明"}、必要: ${MIN_CLIENT_VERSION} 以上）。npm i -g souieba@latest で更新し、npx skills update でスキルも更新してください`,
+        );
+      }
+    }
+    await next();
+  });
 
   app.post("/v1/auth/redeem", async (c) => {
     if (!redeemLimiter.take(`redeem:${c.get("clientIp")}`, now().getTime())) {
@@ -138,12 +160,30 @@ export function createApp(deps: AppDeps) {
         code: z.string().min(1).max(40),
         handle: z.string().optional(),
         displayName: z.string().optional(),
-        identityKey: z.string().max(64).optional(),
-        joinSig: sig.optional(),
       }),
     );
-    const r = accounts.redeemCode(db, input, now());
+    const r = accounts.redeemCode(db, input, now(), config.limits);
     return c.json({ user: accounts.publicUser(r.user), token: r.token, group: r.group, inviter: r.inviter }, 201);
+  });
+
+  // 管理（admin API）。セルフホストでは既定で閉じ、サーバ上の souieba-admin で DB を直接操作する
+  if (!config.adminApi) {
+    app.all("/v1/admin/*", () => {
+      throw notFound("ページ");
+    });
+  }
+
+  // 最初の admin を作る。SOUIEBA_BOOTSTRAP_TOKEN を知っていて、admin が1人もいないときだけ使える
+  app.post("/v1/admin/bootstrap", async (c) => {
+    if (!config.bootstrapToken) throw notFound("ページ");
+    if (!redeemLimiter.take(`bootstrap:${c.get("clientIp")}`, now().getTime())) {
+      throw new ApiError(429, "rate_limited", "試行回数が多すぎます。時間をおいてください");
+    }
+    const input = await body(c, z.object({ token: z.string().max(200), handle: z.string(), displayName: z.string() }));
+    if (!safeEqual(input.token, config.bootstrapToken)) throw new ApiError(401, "unauthorized", "認証に失敗しました");
+    const r = accounts.bootstrapAdmin(db, input, now(), config.limits);
+    log({ level: "info", msg: "admin", action: "bootstrap", user: r.user.id, ip: c.get("clientIp") });
+    return c.json({ user: accounts.publicUser(r.user), adminToken: r.adminToken, loginCode: r.login.code, expiresAt: r.login.expiresAt }, 201);
   });
 
   // ---- ここから認証が必要 ----
@@ -157,6 +197,10 @@ export function createApp(deps: AppDeps) {
   );
   v1.use("*", async (c, next) => {
     const a = c.get("auth");
+    // admin 専用トークンは admin API だけ、普段のトークンは admin API 以外だけに使える
+    if ((a.kind === "admin") !== c.req.path.startsWith("/v1/admin/")) {
+      throw forbidden(a.kind === "admin" ? "admin 専用トークンは admin API にだけ使えます" : "admin 専用トークンが必要です");
+    }
     const key = a.agentId ?? a.userId;
     const isPost = c.req.method === "POST" && c.req.path === "/v1/posts";
     if (!(isPost ? postLimiter : readLimiter).take(`${isPost ? "post" : "req"}:${key}`, now().getTime())) {
@@ -172,11 +216,10 @@ export function createApp(deps: AppDeps) {
     return c.json({ user: accounts.publicUser(user), agent: agent ? accounts.publicAgent(agent) : null });
   });
 
-  v1.put("/me/identity", async (c) => {
+  v1.patch("/me", async (c) => {
     const a = requireUser(c);
-    const { identityKey } = await body(c, z.object({ identityKey: z.string().max(64) }));
-    accounts.setIdentityKey(db, a.userId, identityKey);
-    return c.body(null, 204);
+    const { displayName } = await body(c, z.object({ displayName: z.string() }));
+    return c.json({ user: accounts.publicUser(accounts.setDisplayName(db, a.userId, displayName)) });
   });
 
   v1.get("/me/export", (c) => {
@@ -202,7 +245,7 @@ export function createApp(deps: AppDeps) {
     const a = requireUser(c);
     const input = await body(
       c,
-      z.object({ name: z.string(), provider: z.string().max(40).optional(), encKey: z.string().max(64), signKey: z.string().max(64), cert: sig }),
+      z.object({ name: z.string(), provider: z.string().max(40).optional(), encKey: z.string().max(64), signKey: z.string().max(64) }),
     );
     const { agent, token } = accounts.createAgent(db, a.userId, input, now());
     return c.json({ agent: accounts.publicAgent(agent), token }, 201);
@@ -212,7 +255,7 @@ export function createApp(deps: AppDeps) {
     return c.body(null, 204);
   });
 
-  // 公開鍵ディレクトリ（User・Agent のどちらでも。検証はクライアントが行う）
+  // 公開鍵ディレクトリ（User・Agent のどちらでも）
   v1.get("/keys", (c) => {
     const a = c.get("auth");
     return c.json(groups.directory(db, { userId: a.userId, agentId: a.agentId }));
@@ -222,8 +265,8 @@ export function createApp(deps: AppDeps) {
   v1.get("/groups", (c) => c.json({ groups: groups.listGroups(db, c.get("auth").userId) }));
   v1.post("/groups", async (c) => {
     const a = requireUser(c);
-    const input = await body(c, z.object({ id: z.string().max(80), name: z.string(), createSig: sig }));
-    return c.json(groups.createGroup(db, a, input, { createBy: config.groupCreateBy }, now()), 201);
+    const input = await body(c, z.object({ name: z.string() }));
+    return c.json(groups.createGroup(db, a, input, { createBy: config.groupCreateBy, limits: config.limits }, now()), 201);
   });
   v1.patch("/groups/:id", async (c) => {
     const { name } = await body(c, z.object({ name: z.string() }));
@@ -232,13 +275,13 @@ export function createApp(deps: AppDeps) {
   });
   v1.post("/groups/join", async (c) => {
     const a = requireUser(c);
-    const input = await body(c, z.object({ code: z.string().min(1).max(40), joinSig: sig }));
-    return c.json(accounts.joinGroup(db, a.userId, input, now()), 201);
+    const input = await body(c, z.object({ code: z.string().min(1).max(40) }));
+    return c.json(accounts.joinGroup(db, a.userId, input, now(), config.limits), 201);
   });
-  v1.post("/groups/:id/invites", async (c) => {
+  v1.get("/groups/:id/members", (c) => c.json({ members: groups.listMembers(db, requireUser(c).userId, c.req.param("id")) }));
+  v1.post("/groups/:id/invites", (c) => {
     const a = requireUser(c);
-    const input = await body(c, z.object({ codeHash: z.string(), commit: z.string(), inviteSig: sig }));
-    return c.json(groups.createGroupInvite(db, a.userId, c.req.param("id"), input, { inviteBy: config.inviteBy }, now()), 201);
+    return c.json(groups.createGroupInvite(db, a.userId, c.req.param("id"), { inviteBy: config.inviteBy }, now()), 201);
   });
   v1.delete("/groups/:id/members/:userId", (c) => {
     groups.removeMember(db, requireUser(c).userId, c.req.param("id"), c.req.param("userId"), now());
@@ -284,23 +327,60 @@ export function createApp(deps: AppDeps) {
     return c.body(null, 204);
   });
 
-  // 管理（公開モードでは HTTP からは使えない。サーバ上の souieba-admin で操作する）
+  // admin API（admin 専用トークン）。souieba-admin --url から使う
   const admin = new Hono<Env>();
-  admin.use("*", async (_c, next) => {
-    if (isPublic) throw notFound("ページ");
+  // v1 の共通の検査でも弾いているが、admin API の中でも admin 専用トークンであることを確かめる
+  admin.use("*", async (c, next) => {
+    if (c.get("auth").kind !== "admin") throw forbidden("admin 専用トークンが必要です");
     await next();
   });
+  const audit = (c: Context<Env>, action: string, extra: Record<string, unknown> = {}) =>
+    log({ level: "info", msg: "admin", action, by: c.get("auth").userId, ip: c.get("clientIp"), ...extra });
+  const userByHandle = (handle: string) => {
+    const u = accounts.getUserByHandle(db, handle);
+    if (!u) throw notFound("ユーザー");
+    return u;
+  };
   admin.get("/users", (c) => {
-    requireAdmin(c);
-    return c.json({
-      users: accounts.listUsers(db).map((u) => ({ ...accounts.publicUser(u), disabledAt: u.disabled_at })),
-    });
+    audit(c, "list-users");
+    return c.json({ users: accounts.listUsers(db).map((u) => ({ ...accounts.publicUser(u), disabledAt: u.disabledAt })) });
   });
-  admin.post("/users/:id/disable", (c) => {
-    const a = requireAdmin(c);
-    if (c.req.param("id") === a.userId) throw badRequest("self_disable", "自分自身は無効化できません");
-    accounts.disableUser(db, c.req.param("id"), now());
+  admin.post("/users", async (c) => {
+    const input = await body(c, z.object({ handle: z.string(), displayName: z.string(), admin: z.boolean().optional() }));
+    const result = db.transaction(() => {
+      const u = accounts.createUser(db, { ...input, role: input.admin ? "admin" : "member" }, now(), config.limits);
+      return { user: u, login: accounts.issueLoginCode(db, u.id, now()) };
+    });
+    audit(c, "create-user", { user: result.user.id });
+    return c.json({ user: accounts.publicUser(result.user), loginCode: result.login.code, expiresAt: result.login.expiresAt }, 201);
+  });
+  admin.post("/users/:handle/login-code", (c) => {
+    const u = userByHandle(c.req.param("handle"));
+    const { code, expiresAt } = accounts.issueLoginCode(db, u.id, now());
+    audit(c, "login-code", { user: u.id });
+    return c.json({ loginCode: code, expiresAt }, 201);
+  });
+  admin.post("/users/:handle/disable", (c) => {
+    const u = userByHandle(c.req.param("handle"));
+    if (u.id === c.get("auth").userId) throw badRequest("self_disable", "自分自身は無効化できません");
+    accounts.disableUser(db, u.id, now());
+    audit(c, "disable-user", { user: u.id });
     return c.body(null, 204);
+  });
+  admin.post("/users/:handle/admin-token", (c) => {
+    const u = userByHandle(c.req.param("handle"));
+    const token = accounts.issueAdminToken(db, u.id, now());
+    audit(c, "admin-token", { user: u.id });
+    return c.json({ adminToken: token }, 201);
+  });
+  admin.post("/invites", (c) => {
+    const { code, expiresAt } = accounts.createAccountInvite(db, now());
+    audit(c, "invite");
+    return c.json({ code, expiresAt }, 201);
+  });
+  admin.get("/groups", (c) => {
+    audit(c, "list-groups");
+    return c.json({ groups: groups.listAllGroups(db) });
   });
   v1.route("/admin", admin);
 

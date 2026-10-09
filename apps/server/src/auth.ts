@@ -1,10 +1,14 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { sha256 } from "./crypto.ts";
-import type { DB } from "./db.ts";
+import { and, eq, isNull, or } from "drizzle-orm";
+import type { DB } from "./db/index.ts";
+import { agents, credentials, users } from "./db/schema.ts";
 import { ApiError, forbidden, unauthorized } from "./errors.ts";
+import { ADMIN_SCOPE } from "./services/accounts.ts";
 
 export type Auth = {
-  kind: "user" | "agent";
+  /** admin は admin 専用トークン（/v1/admin/* だけに使える） */
+  kind: "user" | "agent" | "admin";
   userId: string;
   agentId: string | null;
   role: "admin" | "member";
@@ -12,14 +16,6 @@ export type Auth = {
 };
 
 export type Env = { Variables: { auth: Auth; clientIp: string } };
-
-type CredRow = {
-  kind: "user" | "agent";
-  user_id: string;
-  agent_id: string | null;
-  scopes: string;
-  role: "admin" | "member";
-};
 
 export type AuthFailureGuard = {
   /** 認証に失敗しすぎた送信元なら true（トークンを照合せずに 429 にする） */
@@ -35,25 +31,40 @@ export function authenticate(db: DB, guard?: AuthFailureGuard): MiddlewareHandle
       return unauthorized();
     };
     const header = c.req.header("authorization") ?? "";
-    const m = /^Bearer\s+(sou_[ua]_[A-Za-z0-9_-]+)$/.exec(header);
+    const m = /^Bearer\s+(sou_[uam]_[A-Za-z0-9_-]+)$/.exec(header);
     if (!m) throw fail();
     // 失効した資格情報・無効化されたユーザー・失効した Agent はすべて 401
     const row = db
-      .prepare(
-        `SELECT c.kind, c.user_id, c.agent_id, c.scopes, u.role
-         FROM credentials c JOIN users u ON u.id = c.user_id
-         LEFT JOIN agents a ON a.id = c.agent_id
-         WHERE c.token_hash = ? AND c.revoked_at IS NULL AND u.disabled_at IS NULL
-           AND (c.agent_id IS NULL OR a.revoked_at IS NULL)`,
+      .select({
+        kind: credentials.kind,
+        userId: credentials.userId,
+        agentId: credentials.agentId,
+        scopes: credentials.scopes,
+        role: users.role,
+      })
+      .from(credentials)
+      .innerJoin(users, eq(users.id, credentials.userId))
+      .leftJoin(agents, eq(agents.id, credentials.agentId))
+      .where(
+        and(
+          eq(credentials.tokenHash, sha256(m[1]!)),
+          isNull(credentials.revokedAt),
+          isNull(users.disabledAt),
+          or(isNull(credentials.agentId), isNull(agents.revokedAt)),
+        ),
       )
-      .get(sha256(m[1]!)) as CredRow | undefined;
+      .get();
     if (!row) throw fail();
+    const scopes = new Set(row.scopes.split(" "));
+    const isAdminToken = scopes.has(ADMIN_SCOPE);
+    // admin 専用トークンは、持ち主が今も admin のときだけ有効
+    if (isAdminToken && row.role !== "admin") throw fail();
     c.set("auth", {
-      kind: row.kind,
-      userId: row.user_id,
-      agentId: row.agent_id,
+      kind: isAdminToken ? "admin" : row.kind,
+      userId: row.userId,
+      agentId: row.agentId,
       role: row.role,
-      scopes: new Set(row.scopes.split(" ")),
+      scopes,
     });
     await next();
   };
@@ -62,12 +73,6 @@ export function authenticate(db: DB, guard?: AuthFailureGuard): MiddlewareHandle
 export function requireUser(c: Context<Env>): Auth {
   const a = c.get("auth");
   if (a.kind !== "user") throw forbidden("User トークンが必要です");
-  return a;
-}
-
-export function requireAdmin(c: Context<Env>): Auth {
-  const a = requireUser(c);
-  if (a.role !== "admin") throw forbidden("管理者だけが実行できます");
   return a;
 }
 
