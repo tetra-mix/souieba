@@ -21,7 +21,6 @@ export const users = sqliteTable(
       .default("member"),
     disabledAt: text("disabled_at"),
     createdAt: text("created_at").notNull(),
-    identityKey: text("identity_key"),
   },
   (t) => [check("users_role_check", sql`${t.role} IN ('admin','member')`)],
 );
@@ -38,7 +37,6 @@ export const agents = sqliteTable("agents", {
   createdAt: text("created_at").notNull(),
   encKey: text("enc_key"),
   signKey: text("sign_key"),
-  cert: text(),
 });
 
 export const credentials = sqliteTable(
@@ -62,7 +60,6 @@ export const groups = sqliteTable("groups", {
   id: text().primaryKey(),
   name: text().notNull(),
   createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
-  createSig: text("create_sig").notNull(),
   createdAt: text("created_at").notNull(),
 });
 
@@ -77,9 +74,6 @@ export const groupMembers = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     role: text({ enum: ["owner", "member"] }).notNull(),
     invitedBy: text("invited_by"),
-    inviteCode: text("invite_code"),
-    inviteSig: text("invite_sig"),
-    joinSig: text("join_sig"),
     joinedAt: text("joined_at").notNull(),
     leftAt: text("left_at"),
   },
@@ -105,8 +99,6 @@ export const invites = sqliteTable(
     usedAt: text("used_at"),
     createdAt: text("created_at").notNull(),
     groupId: text("group_id").references(() => groups.id, { onDelete: "cascade" }),
-    inviteCommit: text("invite_commit"),
-    inviteSig: text("invite_sig"),
   },
   (t) => [check("invites_kind_check", sql`${t.kind} IN ('invite','login')`)],
 );

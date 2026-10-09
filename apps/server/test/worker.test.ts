@@ -3,20 +3,7 @@
  * Durable Object の SQLite・Drizzle の durable-sqlite ドライバ・入口の検査・admin API を、本物の実行環境で通す。
  */
 import { fileURLToPath } from "node:url";
-import {
-  GROUP_INVITE_CODE_LENGTH,
-  type KeyPair,
-  codeHash,
-  generateEncryptionKey,
-  generateSigningKey,
-  inviteCommit,
-  newCode,
-  openPost,
-  periodOf,
-  sealPost,
-  signText,
-  signedText,
-} from "@souieba/core";
+import { type KeyPair, generateEncryptionKey, generateSigningKey, openPost, periodOf, sealPost } from "@souieba/core";
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -52,17 +39,12 @@ async function call<T = any>(method: string, path: string, token?: string, body?
   return { status: res.status, body: (text ? JSON.parse(text) : null) as T };
 }
 
-type Member = { id: string; token: string; identity: KeyPair; agent: { id: string; token: string; enc: KeyPair; sign: KeyPair } };
+type Member = { id: string; token: string; agent: { id: string; token: string; enc: KeyPair; sign: KeyPair } };
 
 async function addAgent(u: Omit<Member, "agent">): Promise<Member> {
   const enc = generateEncryptionKey();
   const sign = generateSigningKey();
-  const r = await call("POST", "/v1/agents", u.token, {
-    name: "Agent",
-    encKey: enc.pub,
-    signKey: sign.pub,
-    cert: signText(u.identity, signedText.agentCert(u.id, enc.pub, sign.pub)),
-  });
+  const r = await call("POST", "/v1/agents", u.token, { name: "Agent", encKey: enc.pub, signKey: sign.pub });
   expect(r.status).toBe(201);
   return { ...u, agent: { id: r.body.agent.id, token: r.body.token, enc, sign } };
 }
@@ -93,38 +75,20 @@ describe("Workers 版（workerd + Durable Object）", () => {
     const created = await call("POST", "/v1/admin/users", adminToken, { handle: "alice", displayName: "アリス" });
     expect(created.status).toBe(201);
 
-    // アリスはログインコードでログインし、Identity 鍵を登録してグループを作る
-    const aliceIdentity = generateSigningKey();
-    const login = await call("POST", "/v1/auth/redeem", undefined, { code: created.body.loginCode, identityKey: aliceIdentity.pub });
+    // アリスはログインコードでログインし、グループを作る
+    const login = await call("POST", "/v1/auth/redeem", undefined, { code: created.body.loginCode });
     expect(login.status).toBe(201);
-    const alice = await addAgent({ id: login.body.user.id, token: login.body.token, identity: aliceIdentity });
-    const groupId = `grp_${"w".repeat(16)}`;
-    const group = await call("POST", "/v1/groups", alice.token, {
-      id: groupId,
-      name: "研究室",
-      createSig: signText(alice.identity, signedText.groupCreate(groupId, alice.id)),
-    });
+    const alice = await addAgent({ id: login.body.user.id, token: login.body.token });
+    const group = await call("POST", "/v1/groups", alice.token, { name: "研究室" });
     expect(group.status).toBe(201);
+    const groupId: string = group.body.id;
 
-    // ボブを招待する（コードはアリスの手元で作って署名する）
-    const code = newCode(GROUP_INVITE_CODE_LENGTH);
-    const commit = inviteCommit(groupId, code);
-    const inv = await call("POST", `/v1/groups/${groupId}/invites`, alice.token, {
-      codeHash: codeHash(code),
-      commit,
-      inviteSig: signText(alice.identity, signedText.invite(groupId, alice.id, commit)),
-    });
+    // ボブを招待する
+    const inv = await call("POST", `/v1/groups/${groupId}/invites`, alice.token);
     expect(inv.status).toBe(201);
-    const bobIdentity = generateSigningKey();
-    const joined = await call("POST", "/v1/auth/redeem", undefined, {
-      code,
-      handle: "bob",
-      displayName: "ボブ",
-      identityKey: bobIdentity.pub,
-      joinSig: signText(bobIdentity, signedText.join(code)),
-    });
+    const joined = await call("POST", "/v1/auth/redeem", undefined, { code: inv.body.code, handle: "bob", displayName: "ボブ" });
     expect(joined.status).toBe(201);
-    const bob = await addAgent({ id: joined.body.user.id, token: joined.body.token, identity: bobIdentity });
+    const bob = await addAgent({ id: joined.body.user.id, token: joined.body.token });
 
     // アリスの Agent が、ボブの Agent 宛てに暗号化して投稿する
     const envelope = sealPost(

@@ -4,19 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import {
-  type KeyDirectory,
   type PostEnvelope,
   type WireTellCandidate,
   formatTellText,
-  generateEncryptionKey,
   generateSigningKey,
   sealPost,
-  signText,
-  signedText,
 } from "@souieba/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type TestUser, harness } from "../../../apps/server/test/harness.ts";
-import { E2eeTransport, HttpTransport, Keyring, SecretInPostError, SetLog } from "../src/index.ts";
+import { AgentWatch, E2eeTransport, HttpTransport, SecretInPostError, SetLog } from "../src/index.ts";
 
 const MIN = 60_000;
 const h = harness();
@@ -43,8 +39,6 @@ function transport(u: TestUser, http = new HttpTransport({ baseUrl, token: u.age
     userId: u.id,
     agentId: u.agentId,
     keys: u.agent.keys,
-    identityKey: u.identity.pub,
-    keyring: new Keyring(join(dir, `${u.handle}-known_keys.json`)),
   });
 }
 
@@ -122,16 +116,12 @@ describe("最小デモ（HTTP + SDK + E2EE）", () => {
   });
 });
 
-/** 実サーバの応答を書き換える、悪意あるサーバ役 */
-class EvilHttp extends HttpTransport {
+/** 実サーバの応答を差し替えられる Transport（DB が書き換えられた場合などを再現する） */
+class TamperedHttp extends HttpTransport {
   sent: PostEnvelope[] = [];
   dismissed: string[] = [];
-  editDirectory: (d: KeyDirectory) => KeyDirectory = (d) => d;
   fakeCandidate: WireTellCandidate | null = null;
 
-  override async keys() {
-    return this.editDirectory(await super.keys());
-  }
   override publishEnvelope(envelope: PostEnvelope) {
     this.sent.push(envelope);
     return super.publishEnvelope(envelope);
@@ -146,52 +136,21 @@ class EvilHttp extends HttpTransport {
   }
 }
 
-describe("悪意あるサーバ", () => {
-  const mallory = { id: "usr_mallory", identity: generateSigningKey(), enc: generateEncryptionKey(), sign: generateSigningKey() };
-  const malloryAgent = {
-    id: "agt_mallory",
-    name: "Mallory",
-    encKey: mallory.enc.pub,
-    signKey: mallory.sign.pub,
-    cert: signText(mallory.identity, signedText.agentCert(mallory.id, mallory.enc.pub, mallory.sign.pub)),
-  };
-  /** サーバが、招待の署名なしでグループにメンバーを足す */
-  const injectMember = (d: KeyDirectory): KeyDirectory => ({
-    ...d,
-    users: [...d.users, { id: mallory.id, handle: "mallory", displayName: "マロリー", identityKey: mallory.identity.pub, agents: [malloryAgent] }],
-    groups: d.groups.map((g) => ({
-      ...g,
-      members: [
-        ...g.members,
-        { userId: mallory.id, role: "member" as const, invitedBy: alice.id, inviteCode: "AAAA-BBBB", inviteSig: "x", joinSig: "x", joinedAt: "t", leftAt: null },
-      ],
-    })),
+describe("宛先と受信した投稿の検証", () => {
+  it("投稿は、ディレクトリにある自分とグループのメンバーの Agent 宛てに暗号化する", async () => {
+    const http = new TamperedHttp({ baseUrl, token: alice.agentToken });
+    const outsider = await h.user("eve", "イヴ");
+    await transport(alice, http).publish({ ...periodNow(), content: "主人は研究をしていた。" });
+    const recipients = http.sent[0]!.recipients.map((r) => r.agentId);
+    expect(recipients).toEqual(expect.arrayContaining([alice.agentId, bob.agentId]));
+    expect(recipients).not.toContain(outsider.agentId);
   });
 
-  it("偽のメンバーの Agent は投稿の宛先に入らない", async () => {
-    const evil = new EvilHttp({ baseUrl, token: alice.agentToken });
-    evil.editDirectory = injectMember;
-    await transport(alice, evil).publish({ ...periodNow(), content: "主人は秘密の研究をしていた。" });
-    const recipients = evil.sent[0]!.recipients.map((r) => r.agentId);
-    expect(recipients).toContain(bob.agentId);
-    expect(recipients).not.toContain("agt_mallory");
-  });
-
-  it("既存メンバーに偽の Agent を足しても、宛先に入らない", async () => {
-    const evil = new EvilHttp({ baseUrl, token: alice.agentToken });
-    evil.editDirectory = (d) => ({
-      ...d,
-      users: d.users.map((u) => (u.id === bob.id ? { ...u, agents: [...u.agents, { ...malloryAgent, cert: signText(mallory.identity, "x") }] } : u)),
-    });
-    await transport(alice, evil).publish({ ...periodNow(), content: "主人は秘密の研究をしていた。" });
-    expect(evil.sent[0]!.recipients.map((r) => r.agentId)).not.toContain("agt_mallory");
-  });
-
-  it("偽のメンバーが書いた投稿は伝えず、dismiss する", async () => {
-    const evil = new EvilHttp({ baseUrl, token: bob.agentToken });
-    evil.editDirectory = injectMember;
+  it("今いっしょにいるグループがない人の投稿は伝えず、dismiss する", async () => {
+    const http = new TamperedHttp({ baseUrl, token: bob.agentToken });
+    const mallory = { id: "usr_mallory", sign: generateSigningKey() };
     const period = { periodStart: "2026-10-05T09:00:00.000Z", periodEnd: "2026-10-05T10:00:00.000Z" };
-    evil.fakeCandidate = {
+    http.fakeCandidate = {
       postId: "pst_fake",
       owner: { id: mallory.id, handle: "mallory", displayName: "マロリー" },
       authorAgentId: "agt_mallory",
@@ -203,21 +162,20 @@ describe("悪意あるサーバ", () => {
       receivedAt: "t",
       reservedUntil: "t",
     };
-    const t = transport(bob, evil);
-    // 偽の投稿は弾かれ、次の（本物の）候補があればそれが返る
+    const t = transport(bob, http);
     const c = await t.claimTell();
     expect(c?.postId).not.toBe("pst_fake");
     if (c) await t.release(c.postId);
-    expect(evil.dismissed).toEqual(["pst_fake"]);
+    expect(http.dismissed).toEqual(["pst_fake"]);
   });
 
-  it("本物のメンバーの投稿でも、本文や期間を書き換えたものは伝えない", async () => {
-    const evil = new EvilHttp({ baseUrl, token: bob.agentToken });
+  it("本文や期間を書き換えた投稿は、署名を検証できないので伝えない", async () => {
+    const http = new TamperedHttp({ baseUrl, token: bob.agentToken });
     const period = { periodStart: "2026-10-05T09:00:00.000Z", periodEnd: "2026-10-05T10:00:00.000Z" };
     const env = sealPost({ ...period, visibility: "groups", content: "主人は散歩をしていた。" }, { userId: alice.id, agentId: alice.agentId, signKey: alice.agent.keys.sign }, [
       { agentId: bob.agentId, encKey: bob.agent.keys.enc.pub },
     ]);
-    evil.fakeCandidate = {
+    http.fakeCandidate = {
       postId: "pst_moved",
       owner: { id: alice.id, handle: "alice", displayName: "アリス" },
       authorAgentId: alice.agentId,
@@ -228,11 +186,22 @@ describe("悪意あるサーバ", () => {
       receivedAt: "t",
       reservedUntil: "t",
     };
-    const t = transport(bob, evil);
+    const t = transport(bob, http);
     const c = await t.claimTell();
     expect(c?.postId).not.toBe("pst_moved");
     if (c) await t.release(c.postId);
-    expect(evil.dismissed).toEqual(["pst_moved"]);
+    expect(http.dismissed).toEqual(["pst_moved"]);
+  });
+});
+
+describe("自分の Agent が増えたことの通知", () => {
+  it("初回は記録だけし、その後に増えた Agent だけを返す", async () => {
+    const watch = new AgentWatch(join(dir, "alice-known_agents.json"));
+    const t = () => transport(alice);
+    expect(watch.check(await t().ownAgents())).toEqual([]);
+    const added = await h.addAgent(alice, "知らない PC");
+    expect(watch.check(await t().ownAgents()).map((a) => a.id)).toEqual([added.id]);
+    expect(watch.check(await t().ownAgents())).toEqual([]);
   });
 });
 
