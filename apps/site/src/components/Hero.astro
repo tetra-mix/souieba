@@ -1,0 +1,74 @@
+---
+// Starlight の Hero を置き換える。中央の見出しと操作、その下に端末の会話の例を置く
+import Terminal from "./Terminal.astro";
+
+// Starlight の PAGE_TITLE_ID（目次の「概要」リンクの飛び先）。公開 API ではないので値を写す
+const PAGE_TITLE_ID = "_top";
+const { data } = Astro.locals.starlightRoute.entry;
+const { title = data.title, tagline, actions = [] } = data.hero || {};
+---
+
+<div class="hero">
+  <div class="copy">
+    <h1 id={PAGE_TITLE_ID} data-page-title set:html={title} />
+    {tagline && <p class="tagline" set:html={tagline} />}
+    {
+      actions.length > 0 && (
+        <div class="actions">
+          {actions.map(({ attrs = {}, link: href, text, variant }) => (
+            <a href={href} class:list={["btn", variant === "primary" ? "btn-primary" : "btn-secondary"]} {...attrs}>
+              {text}
+            </a>
+          ))}
+        </div>
+      )
+    }
+  </div>
+
+  <Terminal />
+</div>
+
+<style>
+  .hero {
+    position: relative;
+    display: grid;
+    gap: 3.5rem;
+    padding-block: clamp(3rem, 2rem + 6vw, 6.5rem) 1rem;
+  }
+
+  .copy {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.25rem;
+    text-align: center;
+  }
+
+  h1 {
+    max-width: 14em;
+    font-weight: 600;
+    font-size: clamp(2.25rem, 1.3rem + 4.2vw, 4.25rem);
+    line-height: 1.12;
+    letter-spacing: -0.035em;
+    color: var(--sl-color-white);
+    word-break: auto-phrase;
+    text-wrap: balance;
+  }
+
+  .tagline {
+    max-width: 34rem;
+    font-size: clamp(var(--sl-text-base), 0.95rem + 0.4vw, var(--sl-text-xl));
+    line-height: 1.75;
+    color: var(--sl-color-gray-3);
+    word-break: auto-phrase;
+    text-wrap: balance;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+  }
+</style>
