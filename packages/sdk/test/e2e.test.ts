@@ -233,6 +233,21 @@ describe("自分の Agent が増えたことの通知", () => {
   });
 });
 
+describe("自分の表示名の問題の通知", () => {
+  const rename = (u: TestUser, name: string) => h.setDisplayNameRaw(u.id, name);
+
+  it("規則に合わない表示名や、いっしょにいる人との重複（一意にする前の登録）を知らせる", async () => {
+    expect(await transport(alice).displayNameIssue()).toBeNull();
+    // 規則を足す前に登録した絵文字入りの名前は、友人の受信側で捨てられる
+    rename(alice, "アリス🎸");
+    expect(await transport(alice).displayNameIssue()).toEqual({ name: "アリス🎸", issue: "invalid" });
+    // 一意にする前に登録した、同じグループの人と同じ名前
+    rename(alice, "ボブ");
+    expect(await transport(alice).displayNameIssue()).toEqual({ name: "ボブ", issue: "duplicate" });
+    rename(alice, "アリス");
+  });
+});
+
 function periodNow() {
   const start = new Date(h.clock.now);
   start.setUTCMinutes(0, 0, 0);

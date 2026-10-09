@@ -3,7 +3,7 @@
  * （サーバを信頼する E2EE。docs/public-deployment-plan.md §5）。
  */
 import type { DirectoryUser, KeyDirectory } from "@souieba/core";
-import { type SQLWrapper, and, count, eq, exists, inArray, isNotNull, isNull, ne, notExists, or } from "drizzle-orm";
+import { type SQLWrapper, and, count, eq, exists, inArray, isNotNull, isNull, notExists, or } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 import type { Limits } from "../config.ts";
 import { codeHash, newCode, newId } from "../crypto.ts";
@@ -177,14 +177,6 @@ export function joinWithInvite(
   if (activeMemberCount(db, inv.groupId) >= limits.maxGroupMembers) {
     throw conflict("limit_group_members", `このグループの人数が上限（${limits.maxGroupMembers} 人）に達しています`);
   }
-  // Tell 文は表示名で人を呼ぶので、同じグループに同じ表示名の人がいると見分けられない（なりすましにも使える）
-  const sameName = db
-    .select({ id: users.id })
-    .from(groupMembers)
-    .innerJoin(users, eq(users.id, groupMembers.userId))
-    .where(and(eq(groupMembers.groupId, inv.groupId), isActive, eq(users.displayName, user.displayName), ne(users.id, user.id)))
-    .get();
-  if (sameName) throw conflict("display_name_taken", "このグループには同じ表示名の人がいます。別の表示名にしてください");
   requireGroupSlot(db, user.id, limits);
 
   const ts = now.toISOString();
@@ -295,15 +287,6 @@ export function directory(db: DB, me: { userId: string; agentId: string | null }
       .map((a) => ({ id: a.id, name: a.name, encKey: a.encKey!, signKey: a.signKey!, createdAt: a.createdAt })),
   }));
   return { me, users: directoryUsers };
-}
-
-/** userId といっしょにいるグループのメンバーに、表示名が name の人がいるか */
-export function displayNameTakenAmongCoMembers(db: DB, userId: string, name: string): boolean {
-  return !!db
-    .select({ id: users.id })
-    .from(users)
-    .where(and(eq(users.displayName, name), ne(users.id, userId), isNull(users.disabledAt), sharesGroup(db, userId, users.id)))
-    .get();
 }
 
 /** 2人のユーザーが、今いっしょにいるグループがあるか（相関サブクエリ用） */

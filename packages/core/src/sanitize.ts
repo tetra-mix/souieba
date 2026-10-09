@@ -41,6 +41,26 @@ const INSTRUCTION_RULES: { rule: string; re: RegExp }[] = [
   { rule: "exfiltration", re: /秘密鍵|パスワード|認証情報|環境変数|(?<![a-z])(sudo|curl|wget|ssh|env|rm)(?![a-z])/i },
 ];
 
+export const MAX_DISPLAY_NAME_LENGTH = 40;
+
+/**
+ * 表示名は友人の Tell 文に入り、相手の LLM が読む。本文と同じ文字だけを許し、命令に見えるものは断る。
+ * サーバ（登録・変更時）と受信側（Tell 文を作る前）の両方で使う。
+ */
+export function isValidDisplayName(name: string): boolean {
+  return (
+    name.length >= 1 &&
+    name.length <= MAX_DISPLAY_NAME_LENGTH &&
+    sanitizeContent(name) === name &&
+    findInstructionLike(name).length === 0
+  );
+}
+
+/** 表示名の重複を見るときの比較キー（英字の大文字・小文字は区別しない） */
+export function displayNameKey(name: string): string {
+  return name.toLowerCase();
+}
+
 /** 近況として不自然な、読み手への命令に見える表現の規則名を返す（なければ空） */
 export function findInstructionLike(text: string): string[] {
   const t = text.normalize("NFKC");

@@ -7,6 +7,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import { displayNameKey, isValidDisplayName } from "@souieba/core";
 import { VERSION } from "./app.ts";
 import { migrateWithBackup, openDb } from "./db/node.ts";
 import { ApiError } from "./errors.ts";
@@ -20,7 +21,7 @@ const USAGE = `使い方: souieba-admin [--url <サーバURL>] <command> [option
   invite                                              アカウント作成用の招待コードを発行（どのグループにも入らない）
   list-groups                                         グループ一覧（名前・人数。投稿本文はサーバでは読めません）
   disable-user --handle <h>                           ユーザーを無効化
-  list-users                                          ユーザー一覧
+  list-users                                          ユーザー一覧（表示名が重複・規則に合わない人に印を付ける）
   admin-token --handle <h>                            admin 専用トークンを発行（admin API 用。admin のユーザーだけ。古いものは失効）
   backup      [path]                                  DB のバックアップ（SQLite のオンラインバックアップ。--url なしのときだけ）
   bootstrap   --handle <h> --name <表示名>             最初の admin を作る（--url のときだけ。admin が1人もいないあいだだけ）
@@ -226,8 +227,22 @@ async function main(argv: string[]) {
       break;
     }
     case "list-users": {
-      for (const u of await backend.listUsers()) {
-        console.log(`${u.id}\t@${u.handle}\t${u.displayName}\t${u.role}${u.disabledAt ? "\t(disabled)" : ""}`);
+      // 表示名を一意にする前・規則を足す前に登録した人は、本人に souieba profile --name で変えてもらう
+      const rows = await backend.listUsers();
+      const count = new Map<string, number>();
+      for (const u of rows) count.set(displayNameKey(u.displayName), (count.get(displayNameKey(u.displayName)) ?? 0) + 1);
+      let flagged = 0;
+      for (const u of rows) {
+        const marks = [
+          ...(u.disabledAt ? ["(disabled)"] : []),
+          ...(count.get(displayNameKey(u.displayName))! > 1 ? ["(表示名が重複)"] : []),
+          ...(isValidDisplayName(u.displayName) ? [] : ["(表示名が規則に合わない)"]),
+        ];
+        if (marks.some((m) => m.startsWith("(表示名"))) flagged++;
+        console.log([u.id, `@${u.handle}`, u.displayName, u.role, ...marks].join("\t"));
+      }
+      if (flagged > 0) {
+        console.log(`表示名の変更が必要な人が ${flagged} 人います。本人に souieba profile --name <新しい表示名> で変えてもらってください。`);
       }
       break;
     }

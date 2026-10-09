@@ -1,6 +1,7 @@
 import {
   type CreatePostInput,
   DecryptError,
+  displayNameKey,
   MAX_POST_LENGTH,
   type DirectoryAgent,
   type DirectoryUser,
@@ -12,6 +13,7 @@ import {
   type WireInboxItem,
   openPost,
   findInstructionLike,
+  isValidDisplayName,
   sanitizeContent,
   scanSecrets,
   sealPost,
@@ -91,6 +93,22 @@ export class E2eeTransport implements SetLogTransport {
       this.dir = null;
     });
     return this.dir;
+  }
+
+  /**
+   * 自分の表示名に、近況が友人に届かなくなる問題がないか。
+   * invalid: 規則に合わない（受信側で捨てられる）。duplicate: いっしょにいる人に同じ表示名の人がいる（一意にする前の登録）
+   */
+  async displayNameIssue(): Promise<{ name: string; issue: "invalid" | "duplicate" } | null> {
+    const dir = await this.directory();
+    const me = dir.users.get(this.opts.userId);
+    if (!me) return null;
+    if (!isValidDisplayName(me.displayName)) return { name: me.displayName, issue: "invalid" };
+    const key = displayNameKey(me.displayName);
+    for (const u of dir.users.values()) {
+      if (u.id !== me.id && displayNameKey(u.displayName) === key) return { name: me.displayName, issue: "duplicate" };
+    }
+    return null;
   }
 
   /** 自分のアカウントに登録されている、有効な Agent */
@@ -193,8 +211,7 @@ export class E2eeTransport implements SetLogTransport {
     if (content.length > MAX_POST_LENGTH) return { ok: false, reason: "too_long" };
     if (findInstructionLike(content).length > 0) return { ok: false, reason: "instruction_like" };
     // 表示名も Tell 文に入るので、本文と同じく信頼できない入力として確かめる
-    const name = owner.displayName;
-    if (sanitizeContent(name) !== name || findInstructionLike(name).length > 0) return { ok: false, reason: "bad_display_name" };
+    if (!isValidDisplayName(owner.displayName)) return { ok: false, reason: "bad_display_name" };
 
     return {
       ok: true,
