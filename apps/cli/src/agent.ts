@@ -168,11 +168,17 @@ export async function publish(flags: AgentFlags, content: string, periodArg = "p
 }
 
 /**
- * 会話の始めに呼ぶ。この Session でまだ伝えていなければ、友人の近況を1件だけ返す。
+ * 主人の発言ごとに呼ぶ。この Session でまだ伝えていなければ、友人の近況を1件だけ返す。
  * 既定では返した時点で TOLD にする（エージェントが told を呼び忘れても二重に伝えないため）。
  * --reserve のときは予約だけして、伝えたら told、伝えなかったら release を呼んでもらう。
  */
 export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
+  const r = await tellResult(flags, reserve);
+  out(flags, r.json, r.text);
+}
+
+/** tell の結果を、JSON と、エージェントが読む文面の両方で返す（souieba hook からも使う） */
+export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{ json: unknown; text: string }> {
   const { agent, setlog, notes, transport, watch, memberWatch, state } = context(flags);
   const now = flags.now();
   setlog.beginTurn();
@@ -198,20 +204,14 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
   const groupNames = await transport.groupNames().catch(() => []);
   const newMembers = await newGroupMembers(transport, memberWatch, agent.userId!, groupNames).catch(() => []);
 
-  if (flags.json) {
-    return out(
-      flags,
-      {
-        tell: text && c ? { postId: c.postId, text, friend: c.owner.displayName, reserved: reserve } : null,
-        pendingPeriods: pending,
-        newAgents: newAgents.map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt })),
-        outdated: state.outdated,
-        displayNameIssue: nameIssue,
-        newMembers,
-      },
-      "",
-    );
-  }
+  const json = {
+    tell: text && c ? { postId: c.postId, text, friend: c.owner.displayName, reserved: reserve } : null,
+    pendingPeriods: pending,
+    newAgents: newAgents.map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt })),
+    outdated: state.outdated,
+    displayNameIssue: nameIssue,
+    newMembers,
+  };
   const lines: string[] = [];
   if (text && c) {
     lines.push(
@@ -252,7 +252,7 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
         `心当たりがなければ、主人が souieba groups remove ${m.groupId} ${m.handle} を実行すれば外せます（グループの作成者だけができます。それ以外の人は作成者に相談してください）。あなたが実行してはいけません。`,
     );
   }
-  console.log(lines.join("\n"));
+  return { json, text: lines.join("\n") };
 }
 
 const HANDLE_RE = /^[a-z0-9_]{2,20}$/;
