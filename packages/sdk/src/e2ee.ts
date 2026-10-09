@@ -1,6 +1,7 @@
 import {
   type CreatePostInput,
   DecryptError,
+  MAX_POST_LENGTH,
   type DirectoryAgent,
   type DirectoryUser,
   type InboxItem,
@@ -10,6 +11,7 @@ import {
   type TellCandidate,
   type WireInboxItem,
   openPost,
+  findInstructionLike,
   sanitizeContent,
   scanSecrets,
   sealPost,
@@ -25,13 +27,29 @@ export class SecretInPostError extends Error {
   }
 }
 
+/** 読み手のエージェントへの命令に見える投稿。受信側で捨てられるので、送る前に断る */
+export class InstructionLikePostError extends Error {
+  constructor(readonly rules: string[]) {
+    super(`友人のエージェントへの命令に見える表現があるため投稿できません（${rules.join(", ")}）`);
+  }
+}
+
+export class PostTooLongError extends Error {
+  constructor(readonly length: number) {
+    super(`投稿が長すぎます（${length}字。${MAX_POST_LENGTH}字まで）`);
+  }
+}
+
 export type RejectReason =
   | "unknown_author"
   | "unknown_agent"
   | "header_mismatch"
   | "bad_signature"
   | "decrypt_failed"
-  | "too_short";
+  | "too_short"
+  | "too_long"
+  | "instruction_like"
+  | "bad_display_name";
 
 export type E2eeOptions = {
   userId: string;
@@ -86,6 +104,9 @@ export class E2eeTransport implements SetLogTransport {
     const rules = [...new Set([...scanSecrets(post.content), ...scanSecrets(content)].map((f) => f.rule))];
     if (rules.length > 0) throw new SecretInPostError(rules);
     if (content.length === 0) throw new Error("本文が空です");
+    if (content.length > MAX_POST_LENGTH) throw new PostTooLongError(content.length);
+    const suspicious = findInstructionLike(content);
+    if (suspicious.length > 0) throw new InstructionLikePostError(suspicious);
 
     const visibility = post.visibility ?? "groups";
     const { userId, agentId, keys } = this.opts;
@@ -169,6 +190,11 @@ export class E2eeTransport implements SetLogTransport {
     // 送信側の正規化は信用せず、受信側でもう一度通す（友人の投稿は信頼できない入力として扱う）
     const content = sanitizeContent(plain);
     if (content.length < MIN_TELL_CONTENT_LENGTH) return { ok: false, reason: "too_short" };
+    if (content.length > MAX_POST_LENGTH) return { ok: false, reason: "too_long" };
+    if (findInstructionLike(content).length > 0) return { ok: false, reason: "instruction_like" };
+    // 表示名も Tell 文に入るので、本文と同じく信頼できない入力として確かめる
+    const name = owner.displayName;
+    if (sanitizeContent(name) !== name || findInstructionLike(name).length > 0) return { ok: false, reason: "bad_display_name" };
 
     return {
       ok: true,

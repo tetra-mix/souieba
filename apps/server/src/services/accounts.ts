@@ -1,4 +1,4 @@
-import { AGENT_SCOPES, isPublicKey } from "@souieba/core";
+import { AGENT_SCOPES, findInstructionLike, isPublicKey, sanitizeContent } from "@souieba/core";
 import { and, count, eq, isNull, ne } from "drizzle-orm";
 import type { Limits } from "../config.ts";
 import { newCode, newId, newToken, sha256 } from "../crypto.ts";
@@ -34,6 +34,10 @@ export function getUserByHandle(db: DB, handle: string): UserRow | undefined {
 export function validateDisplayName(displayName: string): string {
   const name = displayName.trim();
   if (name.length < 1 || name.length > 40) throw badRequest("invalid_display_name", "表示名は1〜40文字にしてください");
+  // 表示名は友人の Tell 文に入り、相手の LLM が読む。本文と同じ文字だけを許し、命令に見えるものは断る
+  if (sanitizeContent(name) !== name || findInstructionLike(name).length > 0) {
+    throw badRequest("invalid_display_name", "表示名に使えない文字か表現が含まれています（日本語・英数字・一部の記号のみ）");
+  }
   return name;
 }
 

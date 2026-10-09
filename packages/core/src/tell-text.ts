@@ -1,7 +1,7 @@
 /** LLM が生成した Tell 文が、そのまま表示してよい形かを確かめる */
 export function validateTellText(text: string, displayName: string): string | null {
   const t = text.trim();
-  if (t.length === 0 || t.length > 120) return "length";
+  if (t.length === 0 || t.length > 180) return "length";
   if (/[\r\n]/.test(t)) return "newline";
   if (/https?:\/\/|www\./i.test(t)) return "url";
   if (/[`<>{}[\]$]/.test(t)) return "markup";

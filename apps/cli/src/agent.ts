@@ -8,7 +8,9 @@ import {
   AgentWatch,
   E2eeTransport,
   HttpTransport,
+  InstructionLikePostError,
   NotesStore,
+  PostTooLongError,
   SecretInNoteError,
   SecretInPostError,
   SetLog,
@@ -73,6 +75,20 @@ export function note(flags: AgentFlags, text: string): void {
   } catch (err) {
     if (err instanceof SecretInNoteError) {
       out(flags, { ok: false, error: "secret_detected", rules: err.rules }, `souieba: ${err.message}。秘密情報を除いて書き直してください。`);
+      process.exitCode = 2;
+      return;
+    }
+    if (err instanceof InstructionLikePostError) {
+      out(
+        flags,
+        { ok: false, error: "instruction_like", rules: err.rules },
+        `souieba: ${err.message}。読み手への呼びかけ・命令形・指示やコマンドの話を含めず、「主人は〜していた」の形で書き直してください。`,
+      );
+      process.exitCode = 2;
+      return;
+    }
+    if (err instanceof PostTooLongError) {
+      out(flags, { ok: false, error: "too_long", length: err.length }, `souieba: ${err.message}。短くまとめて書き直してください。`);
       process.exitCode = 2;
       return;
     }
