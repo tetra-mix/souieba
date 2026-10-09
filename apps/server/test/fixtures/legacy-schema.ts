@@ -1,9 +1,8 @@
-import { DatabaseSync } from "node:sqlite";
-
-export type DB = DatabaseSync;
-
-/** 前進のみのマイグレーション。追加するときは末尾に足す */
-export const MIGRATIONS: string[] = [
+/**
+ * 0.2 系までの手書きのマイグレーション（apps/server/src/db.ts にあったもの）。
+ * 既存の DB を Drizzle のマイグレーションへ引き継げるかを確かめるためだけに残している。
+ */
+export const LEGACY_MIGRATIONS: string[] = [
   `
   CREATE TABLE instance_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -167,40 +166,3 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX deliveries_recipient ON deliveries (recipient_user_id, told_at);
   `,
 ];
-
-export function openDb(path: string): DB {
-  const db = new DatabaseSync(path);
-  db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
-  return db;
-}
-
-export function schemaVersion(db: DB): number {
-  return (db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version;
-}
-
-export function pendingMigrations(db: DB): number {
-  return MIGRATIONS.length - schemaVersion(db);
-}
-
-export function migrate(db: DB): void {
-  const current = schemaVersion(db);
-  for (let v = current; v < MIGRATIONS.length; v++) {
-    tx(db, () => {
-      db.exec(MIGRATIONS[v]!);
-      db.exec(`PRAGMA user_version = ${v + 1}`);
-    });
-  }
-}
-
-/** node:sqlite は同期 API なので、BEGIN IMMEDIATE で書き込みを直列化する */
-export function tx<T>(db: DB, fn: () => T): T {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const result = fn();
-    db.exec("COMMIT");
-    return result;
-  } catch (err) {
-    db.exec("ROLLBACK");
-    throw err;
-  }
-}

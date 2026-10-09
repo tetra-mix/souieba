@@ -9,14 +9,12 @@ export type AgentEntry = { id: string; token: string; keys?: AgentKeys };
 
 /**
  * ~/.souieba/config.json。SDK・CLI が共通で読む。
- * トークンに加えて Identity 鍵・Agent の秘密鍵も入るので、権限は必ず 600 にする。
+ * トークンに加えて Agent の秘密鍵も入るので、権限は必ず 600 にする。
  */
 export type ClientConfig = {
   serverUrl?: string;
   userToken?: string;
   user?: { id: string; handle: string; displayName: string };
-  /** ユーザーの Identity 鍵（Ed25519）。別の PC へは souieba identity export / import で移す */
-  identity?: { userId: string } & KeyPair;
   agents: Record<string, AgentEntry>;
 };
 
@@ -57,7 +55,6 @@ export type ResolvedAgent = {
   name: string;
   keys?: AgentKeys;
   userId?: string;
-  identityKey?: string;
 };
 
 /**
@@ -89,6 +86,5 @@ export function resolveAgent(name?: string): ResolvedAgent {
     name: key,
     keys: agent.keys,
     userId: cfg.user?.id,
-    identityKey: cfg.identity?.userId === cfg.user?.id ? cfg.identity?.pub : undefined,
   };
 }

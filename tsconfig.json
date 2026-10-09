@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.base.json",
   "include": ["packages/*/src", "packages/*/test", "apps/*/src", "apps/*/test"],
+  // Workers の入口は Workers の型で検査する（apps/server/tsconfig.worker.json）
   // 紹介サイトは Astro のビルドで検査する（apps/site）
-  "exclude": ["apps/site"]
+  "exclude": ["apps/server/src/worker.ts", "apps/site"]
 }

@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // worker-configuration.d.ts は `pnpm --filter @souieba/server cf-typegen`（wrangler types）で作り直す
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["src/worker.ts", "worker-configuration.d.ts"]
+}

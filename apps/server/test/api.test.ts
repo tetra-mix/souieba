@@ -1,7 +1,10 @@
-import { generateSigningKey, signText, signedText } from "@souieba/core";
+import { generateEncryptionKey, generateSigningKey } from "@souieba/core";
 import { describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import { schema } from "../src/db/index.ts";
 import { runRetention } from "../src/retention.ts";
 import * as accounts from "../src/services/accounts.ts";
+import * as groups from "../src/services/groups.ts";
 import { harness, testConfig, twoMembers } from "./harness.ts";
 
 const MIN = 60_000;
@@ -35,7 +38,7 @@ describe("最小デモ: 投稿 → 猶予 → sync → claim → told", () => {
     expect((await h.call("GET", "/v1/inbox", bob.agentToken)).body.items).toEqual([]);
 
     // DB のどこにも本文が残っていない
-    const dump = JSON.stringify(h.db.prepare("SELECT * FROM posts").all());
+    const dump = JSON.stringify(h.db.select().from(schema.posts).all());
     expect(dump).not.toContain("M5Stack");
   });
 });
@@ -53,7 +56,10 @@ describe("投稿", () => {
 
   it("不正な期間は 400", async () => {
     const { h, alice } = await twoMembers();
-    const r = await h.publish(alice, "主人は何かをしていた。", { periodStart: "2026-10-05T13:30:00.000Z", periodEnd: "2026-10-05T14:30:00.000Z" });
+    const r = await h.publish(alice, "主人は何かをしていた。", {
+      periodStart: "2026-10-05T13:30:00.000Z",
+      periodEnd: "2026-10-05T14:30:00.000Z",
+    });
     expect(r.status).toBe(400);
     expect(r.body.error.code).toBe("period_not_hour_aligned");
   });
@@ -61,7 +67,7 @@ describe("投稿", () => {
   it("改ざんした封筒・他の Agent の鍵で署名した封筒は 400", async () => {
     const { h, alice, bob } = await twoMembers();
     const ok = await h.publish(alice, "主人は京都へ遊びに行っていた。");
-    const env = JSON.parse((h.db.prepare("SELECT envelope FROM posts WHERE id = ?").get(ok.body.postId) as { envelope: string }).envelope);
+    const env = JSON.parse(h.db.select().from(schema.posts).where(eq(schema.posts.id, ok.body.postId)).get()!.envelope);
     const tampered = { ...env, periodStart: "2026-10-05T12:00:00.000Z", periodEnd: "2026-10-05T13:00:00.000Z" };
     const r1 = await h.call("POST", "/v1/posts", alice.agentToken, { envelope: tampered });
     expect(r1.body.error.code).toBe("invalid_signature");
@@ -118,8 +124,8 @@ describe("可視性（グループ）", () => {
     // 宛先に含まれない Agent（投稿の後に足した Agent など）は、復号できないので候補にしない
     expect((await h.call("POST", "/v1/tell/claim", bob2.token, {})).body.candidate).toBeNull();
     // サーバは届けてよくない宛先（キャロル）を保存しない
-    const stored = h.db.prepare("SELECT agent_id FROM post_recipients").all() as { agent_id: string }[];
-    expect(stored.map((r) => r.agent_id)).not.toContain(carol.agentId);
+    const stored = h.db.select().from(schema.postRecipients).all();
+    expect(stored.map((r) => r.agentId)).not.toContain(carol.agentId);
   });
 
   it("別々のグループの人どうしには届かず、両方に入っている人の投稿は両方に届く", async () => {
@@ -151,17 +157,6 @@ describe("可視性（グループ）", () => {
 });
 
 describe("グループ", () => {
-  it("作成の署名が不正なら作れない", async () => {
-    const h = harness();
-    const alice = await h.user("alice", "アリス");
-    const r = await h.call("POST", "/v1/groups", alice.token, {
-      id: "grp_aaaaaaaaaaaaaaaa",
-      name: "研究室",
-      createSig: signText(generateSigningKey(), signedText.groupCreate("grp_aaaaaaaaaaaaaaaa", alice.id)),
-    });
-    expect(r.body.error.code).toBe("invalid_signature");
-  });
-
   it("GROUP_CREATE_BY=admin なら管理者だけが作れる", async () => {
     const h = harness({ config: { groupCreateBy: "admin" } });
     const admin = await h.user("root", "管理者", "admin");
@@ -176,31 +171,30 @@ describe("グループ", () => {
     expect((await h.invite(outsider, groupId)).status).toBe(404);
 
     const { code } = await h.invite(alice, groupId);
-    const identity = generateSigningKey();
-    const redeem = (handle: string) =>
-      h.call("POST", "/v1/auth/redeem", undefined, {
-        code,
-        handle,
-        displayName: handle,
-        identityKey: identity.pub,
-        joinSig: signText(identity, signedText.join(code)),
-      });
+    expect(code).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+    const redeem = (handle: string) => h.call("POST", "/v1/auth/redeem", undefined, { code, handle, displayName: handle });
     expect((await redeem("carol")).status).toBe(201);
     expect((await redeem("carol2")).body.error.code).toBe("invalid_code");
   });
 
-  it("参加の署名がないか不正なら参加できない", async () => {
+  it("同じグループに同じ表示名の人がいると参加できない（Tell 文で見分けられないため）", async () => {
     const { h, alice, groupId } = await twoMembers();
     const { code } = await h.invite(alice, groupId);
-    const identity = generateSigningKey();
-    const r = await h.call("POST", "/v1/auth/redeem", undefined, {
-      code,
-      handle: "carol",
-      displayName: "キャロル",
-      identityKey: identity.pub,
-      joinSig: signText(generateSigningKey(), signedText.join(code)),
-    });
-    expect(r.body.error.code).toBe("invalid_signature");
+    const r = await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "fake", displayName: " アリス " });
+    expect(r.body.error.code).toBe("display_name_taken");
+    // ユーザーも作られない（コードもまだ使える）
+    expect(accounts.getUserByHandle(h.db, "fake")).toBeUndefined();
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "carol", displayName: "キャロル" })).status).toBe(201);
+  });
+
+  it("表示名は、いっしょにいるグループのメンバーと同じものには変えられない", async () => {
+    const { h, bob } = await twoMembers();
+    expect((await h.call("PATCH", "/v1/me", bob.token, { displayName: "アリス" })).body.error.code).toBe("display_name_taken");
+    const r = await h.call("PATCH", "/v1/me", bob.token, { displayName: "ボブ太郎" });
+    expect(r.body.user.displayName).toBe("ボブ太郎");
+    // グループが別なら同じ表示名でもよい
+    const carol = await h.user("carol", "キャロル");
+    expect((await h.call("PATCH", "/v1/me", carol.token, { displayName: "アリス" })).status).toBe(200);
   });
 
   it("期限切れ（3日）の招待コードは使えない", async () => {
@@ -208,7 +202,7 @@ describe("グループ", () => {
     const carol = await h.user("carol", "キャロル");
     const { code } = await h.invite(alice, groupId);
     h.clock.advance(4 * 86_400_000);
-    const r = await h.call("POST", "/v1/groups/join", carol.token, { code, joinSig: signText(carol.identity, signedText.join(code)) });
+    const r = await h.call("POST", "/v1/groups/join", carol.token, { code });
     expect(r.status).toBe(400);
   });
 
@@ -218,12 +212,12 @@ describe("グループ", () => {
     expect((await h.invite(alice, groupId)).status).toBe(201);
   });
 
-  it("既存のユーザーは groups/join で別のグループに参加でき、応答に招待者の鍵が入る", async () => {
+  it("既存のユーザーは groups/join で別のグループに参加でき、応答に招待者が入る", async () => {
     const { h, alice, groupId } = await twoMembers();
     const carol = await h.user("carol", "キャロル");
     const r = await h.join(alice, groupId, carol);
     expect(r.status).toBe(201);
-    expect(r.body.inviter).toMatchObject({ handle: "alice", identityKey: alice.identity.pub });
+    expect(r.body.inviter).toEqual({ id: alice.id, handle: "alice", displayName: "アリス" });
     expect((await h.join(alice, groupId, carol)).body.error.code).toBe("already_member");
   });
 
@@ -232,7 +226,7 @@ describe("グループ", () => {
     await h.call("DELETE", `/v1/groups/${groupId}/members/${alice.id}`, alice.token);
     expect((await h.call("GET", "/v1/groups", bob.token)).body.groups).toMatchObject([{ id: groupId, role: "owner" }]);
     await h.call("DELETE", `/v1/groups/${groupId}/members/${bob.id}`, bob.token);
-    expect(h.db.prepare("SELECT count(*) AS n FROM groups").get()).toEqual({ n: 0 });
+    expect(h.db.select().from(schema.groups).all()).toEqual([]);
   });
 
   it("owner でなければ他人を外せない", async () => {
@@ -241,32 +235,44 @@ describe("グループ", () => {
     expect((await h.call("DELETE", `/v1/groups/${groupId}/members/${bob.id}`, alice.token)).status).toBe(204);
   });
 
-  it("ディレクトリは抜けたメンバーの所属の証明も返す（その人が招待した人を検証するため）", async () => {
+  it("メンバーの一覧はメンバーだけが見られる", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const r = await h.call("GET", `/v1/groups/${groupId}/members`, bob.token);
+    expect(r.body.members.map((m: { handle: string; role: string }) => [m.handle, m.role])).toEqual([
+      ["alice", "owner"],
+      ["bob", "member"],
+    ]);
+    const eve = await h.user("eve", "イヴ");
+    expect((await h.call("GET", `/v1/groups/${groupId}/members`, eve.token)).status).toBe(404);
+    expect(alice).toBeDefined();
+  });
+
+  it("ディレクトリは、自分と今いっしょにいるグループのメンバーの、有効な Agent の鍵だけを返す", async () => {
     const { h, alice, bob, groupId } = await twoMembers();
     const carol = await h.joinNew(bob, groupId, "carol", "キャロル");
+    const old = await h.addAgent(alice, "古い PC");
+    await h.call("DELETE", `/v1/agents/${old.id}`, alice.token);
     await h.call("DELETE", `/v1/groups/${groupId}/members/${bob.id}`, bob.token);
+    await h.user("eve", "イヴ");
     const dir = (await h.call("GET", "/v1/keys", carol.agentToken)).body;
-    const members = dir.groups[0].members;
-    expect(members.find((m: { userId: string }) => m.userId === bob.id).leftAt).not.toBeNull();
-    expect(members.find((m: { userId: string }) => m.userId === carol.id)).toMatchObject({ invitedBy: bob.id });
     expect(dir.me).toEqual({ userId: carol.id, agentId: carol.agentId });
-    expect(alice).toBeDefined();
+    expect(dir.users.map((u: { handle: string }) => u.handle).sort()).toEqual(["alice", "carol"]);
+    const aliceAgents = dir.users.find((u: { id: string }) => u.id === alice.id).agents;
+    expect(aliceAgents).toEqual([
+      { id: alice.agentId, name: "アリスのAgent", encKey: alice.agent.keys.enc.pub, signKey: alice.agent.keys.sign.pub, createdAt: expect.any(String) },
+    ]);
   });
 });
 
 describe("鍵", () => {
-  it("Identity 鍵は未登録のときだけ登録できる", async () => {
+  it("Agent の鍵の形式が不正なら登録できない", async () => {
     const h = harness();
     const alice = await h.user("alice", "アリス");
-    const r = await h.call("PUT", "/v1/me/identity", alice.token, { identityKey: generateSigningKey().pub });
-    expect(r.body.error.code).toBe("identity_exists");
-  });
-
-  it("Identity 鍵で署名していない Agent は登録できない", async () => {
-    const h = harness();
-    const alice = await h.user("alice", "アリス");
-    const r = await h.addAgent({ ...alice, identity: generateSigningKey() }, "偽の Agent").catch((e: Error) => e.message);
-    expect(r).toContain("invalid_signature");
+    const enc = generateEncryptionKey().pub;
+    const sign = generateSigningKey().pub;
+    const r = await h.call("POST", "/v1/agents", alice.token, { name: "x", encKey: "not-a-key", signKey: sign });
+    expect(r.body.error.code).toBe("invalid_agent_keys");
+    expect((await h.call("POST", "/v1/agents", alice.token, { name: "x", encKey: enc, signKey: sign })).status).toBe(201);
   });
 });
 
@@ -324,28 +330,21 @@ describe("Tell の排他", () => {
 });
 
 describe("認証", () => {
-  it("グループに入らないアカウント用の招待コードでも参加できる（Identity 鍵は必須）", async () => {
+  it("グループに入らないアカウント用の招待コードでも参加できる", async () => {
     const h = harness();
     const { code } = accounts.createAccountInvite(h.db, h.clock.now);
-    const noKey = await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "bob", displayName: "ボブ" });
-    expect(noKey.body.error.code).toBe("invalid_identity_key");
-    const r = await h.call("POST", "/v1/auth/redeem", undefined, {
-      code,
-      handle: "bob",
-      displayName: "ボブ",
-      identityKey: generateSigningKey().pub,
-    });
+    const r = await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "bob", displayName: "ボブ" });
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ group: null, inviter: null });
     expect((await h.call("GET", "/v1/groups", r.body.token)).body.groups).toEqual([]);
   });
 
-  it("ログインコードを再発行すると古い User トークンは失効し、Identity 鍵は上書きされない", async () => {
+  it("ログインコードを再発行すると古い User トークンは失効する（Agent のトークンはそのまま）", async () => {
     const h = harness();
     const alice = await h.user("alice", "アリス");
     const { code } = accounts.issueLoginCode(h.db, alice.id, h.clock.now);
-    const r = await h.call("POST", "/v1/auth/redeem", undefined, { code, identityKey: generateSigningKey().pub });
-    expect(r.body.user.identityKey).toBe(alice.identity.pub);
+    const r = await h.call("POST", "/v1/auth/redeem", undefined, { code });
+    expect(r.body.user.handle).toBe("alice");
     expect((await h.call("GET", "/v1/me", alice.token)).status).toBe(401);
     expect((await h.call("GET", "/v1/me", r.body.token)).status).toBe(200);
     expect((await h.call("GET", "/v1/me", alice.agentToken)).status).toBe(200);
@@ -388,9 +387,9 @@ describe("認証", () => {
     await h.call("POST", "/v1/sync", bob.agentToken);
     expect((await h.call("DELETE", "/v1/me", alice.token)).status).toBe(204);
     expect((await h.call("GET", "/v1/inbox", bob.agentToken)).body.items).toEqual([]);
-    expect(h.db.prepare("SELECT count(*) AS n FROM posts").get()).toEqual({ n: 0 });
+    expect(h.db.select().from(schema.posts).all()).toEqual([]);
     expect((await h.call("DELETE", "/v1/me", bob.token)).status).toBe(204);
-    expect(h.db.prepare("SELECT count(*) AS n FROM groups").get()).toEqual({ n: 0 });
+    expect(h.db.select().from(schema.groups).all()).toEqual([]);
   });
 });
 
@@ -411,7 +410,8 @@ describe("ネットワーク", () => {
 
   it("TRUST_PROXY=private なら Docker のブリッジ上のプロキシからの XFF を信頼する", async () => {
     const h = harness({ config: { trustProxy: "private" }, remoteAddr: "172.18.0.2" });
-    for (let i = 0; i < 10; i++) await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" }, { "x-forwarded-for": "198.51.100.7" });
+    for (let i = 0; i < 10; i++)
+      await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" }, { "x-forwarded-for": "198.51.100.7" });
     expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" }, { "x-forwarded-for": "198.51.100.8" })).status).toBe(400);
   });
 });
@@ -455,5 +455,145 @@ describe("保存期間", () => {
     await h.publish(alice, "主人は京都へ遊びに行っていた。");
     h.clock.advance(15 * 86_400_000);
     expect(runRetention(h.db, h.clock.now, 14 * 86_400_000).posts).toBe(1);
+  });
+});
+
+const BOOTSTRAP = "bootstrap-secret-0123456789abcdef";
+const adminConfig = { adminApi: true, bootstrapToken: BOOTSTRAP };
+
+describe("admin API", () => {
+  it("既定（SOUIEBA_ADMIN_API=off）では、ブートストラップも含めて HTTP からは使えない", async () => {
+    const h = harness({ config: { bootstrapToken: BOOTSTRAP } });
+    expect((await h.call("POST", "/v1/admin/bootstrap", undefined, { token: BOOTSTRAP, handle: "root", displayName: "管理者" })).status).toBe(404);
+  });
+
+  it("ブートストラップは秘密が合うときに1回だけ。admin 専用トークンとログインコードを返す", async () => {
+    const h = harness({ config: adminConfig });
+    const boot = (token: string, handle = "root") => h.call("POST", "/v1/admin/bootstrap", undefined, { token, handle, displayName: "管理者" });
+    expect((await boot("wrong-secret-0123456789abcdef")).status).toBe(401);
+    const ok = await boot(BOOTSTRAP);
+    expect(ok.status).toBe(201);
+    expect(ok.body.adminToken).toMatch(/^sou_m_/);
+    expect((await boot(BOOTSTRAP, "root2")).status).toBe(409);
+    // ログインコードで利用者としてもログインできる
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: ok.body.loginCode })).status).toBe(201);
+  });
+
+  it("admin 専用トークンは admin API にだけ、普段のトークンは admin API 以外にだけ使える", async () => {
+    const h = harness({ config: adminConfig });
+    const boot = await h.call("POST", "/v1/admin/bootstrap", undefined, { token: BOOTSTRAP, handle: "root", displayName: "管理者" });
+    const adminToken: string = boot.body.adminToken;
+    const root = await h.call("POST", "/v1/auth/redeem", undefined, { code: boot.body.loginCode });
+    expect((await h.call("GET", "/v1/admin/users", adminToken)).status).toBe(200);
+    expect((await h.call("GET", "/v1/me", adminToken)).status).toBe(403);
+    expect((await h.call("GET", "/v1/admin/users", root.body.token)).status).toBe(403);
+    // ログインコードでの再ログイン（User トークンの失効）では、admin 専用トークンは失効しない
+    const again = await h.call("POST", `/v1/admin/users/root/login-code`, adminToken);
+    await h.call("POST", "/v1/auth/redeem", undefined, { code: again.body.loginCode });
+    expect((await h.call("GET", "/v1/admin/users", adminToken)).status).toBe(200);
+  });
+
+  it("souieba-admin と同じ操作ができる", async () => {
+    const h = harness({ config: adminConfig });
+    const { adminToken } = (await h.call("POST", "/v1/admin/bootstrap", undefined, { token: BOOTSTRAP, handle: "root", displayName: "管理者" })).body;
+    const created = await h.call("POST", "/v1/admin/users", adminToken, { handle: "alice", displayName: "アリス" });
+    expect(created.status).toBe(201);
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: created.body.loginCode })).status).toBe(201);
+    expect((await h.call("POST", "/v1/admin/invites", adminToken)).body.code).toBeTruthy();
+    expect((await h.call("GET", "/v1/admin/groups", adminToken)).body.groups).toEqual([]);
+    expect((await h.call("POST", "/v1/admin/users/root/disable", adminToken)).status).toBe(400);
+    expect((await h.call("POST", "/v1/admin/users/alice/disable", adminToken)).status).toBe(204);
+    const users = (await h.call("GET", "/v1/admin/users", adminToken)).body.users as { handle: string; disabledAt: string | null }[];
+    expect(users.find((u) => u.handle === "alice")?.disabledAt).toBeTruthy();
+    // admin でないユーザーには admin 専用トークンを出さない
+    expect((await h.call("POST", "/v1/admin/users/alice/admin-token", adminToken)).status).toBe(400);
+  });
+
+  it("admin 専用トークンを再発行すると、古いものは失効する", async () => {
+    const h = harness({ config: adminConfig });
+    const { adminToken } = (await h.call("POST", "/v1/admin/bootstrap", undefined, { token: BOOTSTRAP, handle: "root", displayName: "管理者" })).body;
+    const next = (await h.call("POST", "/v1/admin/users/root/admin-token", adminToken)).body.adminToken as string;
+    expect((await h.call("GET", "/v1/admin/users", adminToken)).status).toBe(401);
+    expect((await h.call("GET", "/v1/admin/users", next)).status).toBe(200);
+  });
+
+  it("admin でなくなったユーザーの admin 専用トークンは使えない", async () => {
+    const h = harness({ config: adminConfig });
+    const { adminToken, user } = (await h.call("POST", "/v1/admin/bootstrap", undefined, { token: BOOTSTRAP, handle: "root", displayName: "管理者" })).body;
+    h.db.update(schema.users).set({ role: "member" }).where(eq(schema.users.id, user.id)).run();
+    expect((await h.call("GET", "/v1/admin/users", adminToken)).status).toBe(401);
+  });
+});
+
+describe("本文の大きさ", () => {
+  it("Content-Length のない（chunked の）本文も、上限を超えたら 413", async () => {
+    const { h, alice } = await twoMembers();
+    const big = new TextEncoder().encode(JSON.stringify({ name: "x".repeat(32 * 1024) }));
+    const res = await h.app.request("/v1/agents", {
+      method: "POST",
+      headers: { authorization: `Bearer ${alice.token}`, "content-type": "application/json" },
+      body: new ReadableStream({
+        start(c) {
+          c.enqueue(big);
+          c.close();
+        },
+      }),
+      duplex: "half",
+    } as RequestInit);
+    expect(res.status).toBe(413);
+  });
+});
+
+describe("上限", () => {
+  it("グループの人数の上限を超えて参加できない", async () => {
+    const { h, alice, groupId } = await twoMembers({ config: { limits: { maxUsers: 100, maxGroupMembers: 2, maxGroupsPerUser: 10 } } });
+    await expect(h.joinNew(alice, groupId, "carol", "キャロル")).rejects.toThrow(/limit_group_members/);
+    // 失敗した参加でユーザーだけが作られることはない
+    expect(h.db.select().from(schema.users).where(eq(schema.users.handle, "carol")).all()).toEqual([]);
+  });
+
+  it("1人が入れるグループの数を超えて、作成も参加もできない", async () => {
+    const { h, alice, bob } = await twoMembers({ config: { limits: { maxUsers: 100, maxGroupMembers: 50, maxGroupsPerUser: 1 } } });
+    await expect(h.createGroup(alice, "2つ目")).rejects.toThrow(/limit_groups_per_user/);
+    const carol = await h.user("carol", "キャロル");
+    const other = await h.createGroup(carol, "別のグループ");
+    expect((await h.join(carol, other, bob)).body.error.code).toBe("limit_groups_per_user");
+  });
+
+  it("宛先が多い投稿・受信箱にたまった投稿・大きなディレクトリでも、1つの文のバインド変数が100個を超えない", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    // 宛先が51件（2変数 × 51 > 100）の投稿
+    for (let i = 0; i < 49; i++) {
+      if (i === 25) h.clock.advance(MIN);
+      await h.addAgent(alice, `予備${i}`);
+    }
+    expect((await h.publish(alice, "宛先が多い")).status).toBe(201);
+    // 48時間の窓に30件（4変数 × 30 > 100）。sync を毎回呼んでも、すでに受け取った投稿で増えない
+    for (let i = 0; i < 29; i++) {
+      h.clock.advance(60 * MIN);
+      expect((await h.publish(bob, `近況${i}`)).status).toBe(201);
+    }
+    h.clock.advance(60 * MIN);
+    expect((await h.call("POST", "/v1/sync", alice.agentToken)).body).toEqual({ received: 29, inboxSize: 29 });
+    expect((await h.call("POST", "/v1/sync", alice.agentToken)).body.received).toBe(0);
+    // 101人以上が載るディレクトリと、101個以上のグループの一覧
+    for (let i = 0; i < 101; i++) {
+      const u = accounts.createUser(h.db, { handle: `u${i}`, displayName: `u${i}` }, h.clock.now);
+      h.db.insert(schema.groupMembers).values({ groupId, userId: u.id, role: "member", joinedAt: h.clock.now.toISOString() }).run();
+      h.db.insert(schema.groups).values({ id: `grp_extra${i}`, name: `g${i}`, createdBy: u.id, createdAt: h.clock.now.toISOString() }).run();
+    }
+    expect(groups.directory(h.db, { userId: alice.id, agentId: null }).users).toHaveLength(103);
+    expect(groups.listAllGroups(h.db)).toHaveLength(102);
+  });
+
+  it("インスタンスのユーザー数の上限を超えて登録できない", async () => {
+    const { h, alice, groupId } = await twoMembers({ config: { limits: { maxUsers: 2, maxGroupMembers: 50, maxGroupsPerUser: 10 } } });
+    await expect(h.joinNew(alice, groupId, "carol", "キャロル")).rejects.toThrow(/limit_users/);
+  });
+
+  it("無効化したユーザーはユーザー数に数えない", async () => {
+    const { h, alice, bob, groupId } = await twoMembers({ config: { limits: { maxUsers: 2, maxGroupMembers: 50, maxGroupsPerUser: 10 } } });
+    accounts.disableUser(h.db, bob.id, h.clock.now);
+    await h.joinNew(alice, groupId, "carol", "キャロル");
   });
 });

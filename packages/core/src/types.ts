@@ -73,39 +73,20 @@ export type WireInboxItem = {
 export type WireTellCandidate = WireInboxItem & { reservedUntil: string };
 
 // ---- 公開鍵ディレクトリ（GET /v1/keys） ----
+// サーバを信頼する前提で、クライアントはここにある鍵をそのまま使う（docs/public-deployment-plan.md §5）
 
-export type DirectoryAgent = { id: string; name: string; encKey: string; signKey: string; cert: string };
+export type DirectoryAgent = { id: string; name: string; encKey: string; signKey: string; createdAt: string };
 
 export type DirectoryUser = {
   id: string;
   handle: string;
   displayName: string;
-  identityKey: string | null;
+  /** 有効な（失効していない）Agent */
   agents: DirectoryAgent[];
-};
-
-export type DirectoryMember = {
-  userId: string;
-  role: "owner" | "member";
-  invitedBy: string | null;
-  inviteCode: string | null;
-  inviteSig: string | null;
-  joinSig: string | null;
-  joinedAt: string;
-  leftAt: string | null;
-};
-
-export type DirectoryGroup = {
-  id: string;
-  name: string;
-  createdBy: string | null;
-  createSig: string;
-  /** 抜けたメンバー（leftAt あり）も含む。その人が招待した人の証明を検証するため */
-  members: DirectoryMember[];
 };
 
 export type KeyDirectory = {
   me: { userId: string; agentId: string | null };
+  /** 自分と、今いっしょにいるグループがあるユーザー */
   users: DirectoryUser[];
-  groups: DirectoryGroup[];
 };
