@@ -1,6 +1,8 @@
 import {
   CLIENT_VERSION_HEADER,
+  type GroupNameBox,
   type KeyDirectory,
+  type WireGroup,
   type PostEnvelope,
   type PublishResult,
   type SyncResult,
@@ -73,6 +75,13 @@ export class HttpTransport {
 
   publishEnvelope(envelope: PostEnvelope) {
     return this.client.request<PublishResult>("POST", "/v1/posts", { envelope }, 15_000);
+  }
+  /** 自分が入っているグループ。会話の始め（tell）でも呼ぶので、短いタイムアウトにする */
+  async groups() {
+    return (await this.client.request<{ groups: WireGroup[] }>("GET", "/v1/groups", undefined, this.interactiveMs)).groups;
+  }
+  putNameBoxes(groupId: string, input: { version: number; boxes: { agentId: string; box: GroupNameBox }[]; clearPlain?: boolean }) {
+    return this.client.request<void>("PUT", `/v1/groups/${encodeURIComponent(groupId)}/name-boxes`, input, this.interactiveMs);
   }
   /** 公開鍵ディレクトリ。会話の始め（tell）でも呼ぶので、短いタイムアウトにする */
   keys() {

@@ -1,11 +1,11 @@
-import { AGENT_SCOPES, isPublicKey } from "@souieba/core";
-import { and, count, eq, isNull, ne } from "drizzle-orm";
+import { AGENT_SCOPES, MAX_DISPLAY_NAME_LENGTH, displayNameKey, isPublicKey, isValidDisplayName } from "@souieba/core";
+import { and, count, eq, isNull, ne, sql } from "drizzle-orm";
 import type { Limits } from "../config.ts";
 import { newCode, newId, newToken, sha256 } from "../crypto.ts";
 import type { DB } from "../db/index.ts";
 import { type AgentRow, type UserRow, agents, credentials, invites, users } from "../db/schema.ts";
 import { badRequest, conflict, notFound } from "../errors.ts";
-import { deleteEmptyGroups, displayNameTakenAmongCoMembers, findUsableInvite, joinWithInvite } from "./groups.ts";
+import { deleteEmptyGroups, findUsableInvite, joinWithInvite } from "./groups.ts";
 
 export type { AgentRow, UserRow };
 
@@ -33,8 +33,27 @@ export function getUserByHandle(db: DB, handle: string): UserRow | undefined {
 
 export function validateDisplayName(displayName: string): string {
   const name = displayName.trim();
-  if (name.length < 1 || name.length > 40) throw badRequest("invalid_display_name", "表示名は1〜40文字にしてください");
+  if (name.length < 1 || name.length > MAX_DISPLAY_NAME_LENGTH) {
+    throw badRequest("invalid_display_name", `表示名は1〜${MAX_DISPLAY_NAME_LENGTH}文字にしてください`);
+  }
+  if (!isValidDisplayName(name)) {
+    throw badRequest("invalid_display_name", "表示名に使えない文字か表現が含まれています（日本語・英数字・一部の記号のみ）");
+  }
   return name;
+}
+
+/**
+ * 表示名はインスタンス全体で一意にする（英字の大文字・小文字は区別しない）。
+ * Tell 文（「あ、そういえば○○さん、…」）は表示名だけで人を呼ぶので、同じ名前の人がいると見分けられず、なりすましにも使える。
+ * 無効化したユーザーの名前も使えない（有効に戻したときに重ならないように）。
+ */
+function requireDisplayNameAvailable(db: DB, name: string, exceptUserId?: string) {
+  const taken = db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(sql`lower(${users.displayName}) = ${displayNameKey(name)}`, exceptUserId ? ne(users.id, exceptUserId) : undefined))
+    .get();
+  if (taken) throw conflict("display_name_taken", "その表示名は使われています。別の表示名にしてください");
 }
 
 function validateProfile(handle: string, displayName: string) {
@@ -50,6 +69,7 @@ export function createUser(
 ): UserRow {
   const displayName = validateProfile(input.handle, input.displayName);
   if (getUserByHandle(db, input.handle)) throw conflict("handle_taken", "その handle は使われています");
+  requireDisplayNameAvailable(db, displayName);
   // 無効化したユーザーは数えない（無効化すれば枠が空く）
   if (limits && db.select({ n: count() }).from(users).where(isNull(users.disabledAt)).get()!.n >= limits.maxUsers) {
     throw conflict("limit_users", "このインスタンスのユーザー数が上限に達しています。管理者に連絡してください");
@@ -67,16 +87,11 @@ export function createUser(
     .get();
 }
 
-/**
- * 表示名の変更。Tell 文（「あ、そういえば○○さん、…」）で人を見分けられるよう、
- * いっしょにいるグループのメンバーと同じ表示名にはできない。
- */
+/** 表示名の変更。ほかの人と同じ表示名にはできない */
 export function setDisplayName(db: DB, userId: string, displayName: string): UserRow {
   const name = validateDisplayName(displayName);
   return db.transaction(() => {
-    if (displayNameTakenAmongCoMembers(db, userId, name)) {
-      throw conflict("display_name_taken", "同じグループに、同じ表示名の人がいます。別の表示名にしてください");
-    }
+    requireDisplayNameAvailable(db, name, userId);
     return db.update(users).set({ displayName: name }).where(eq(users.id, userId)).returning().get();
   });
 }
@@ -176,7 +191,8 @@ export type RedeemInput = {
 export type RedeemResult = {
   user: UserRow;
   token: string;
-  group: { id: string; name: string } | null;
+  /** 名前はサーバでは読めないので、招待者が添えた封（nameBox、招待コードで開く）か、暗号化する前の平文の名前（legacyName） */
+  group: { id: string; nameVersion: number; legacyName: string | null; nameBox: string | null } | null;
   inviter: { id: string; handle: string; displayName: string } | null;
 };
 

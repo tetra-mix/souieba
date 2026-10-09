@@ -72,6 +72,35 @@ export type WireInboxItem = {
 
 export type WireTellCandidate = WireInboxItem & { reservedUntil: string };
 
+/** Agent 1つ宛てに封をしたグループ名。封をした Agent（sender）の署名つき */
+export type GroupNameBox = {
+  v: 1;
+  groupId: string;
+  /** グループ名の版。名前を変えるたびに増える */
+  version: number;
+  senderAgentId: string;
+  recipientAgentId: string;
+  epk: string;
+  iv: string;
+  ciphertext: string;
+  sig: string;
+};
+
+/** GET /v1/groups の1件 */
+export type WireGroup = {
+  id: string;
+  role: "owner" | "member";
+  memberCount: number;
+  createdAt: string;
+  nameVersion: number;
+  /** 暗号化する前に作られたグループの平文の名前。メンバーが封をし直すと消える */
+  legacyName: string | null;
+  /** 自分の Agent 宛ての封（Agent トークンならその Agent の分だけ） */
+  nameBoxes: GroupNameBox[];
+  /** 今の版の封をまだ持っていない、メンバーの有効な Agent */
+  missingAgentIds: string[];
+};
+
 // ---- 公開鍵ディレクトリ（GET /v1/keys） ----
 // サーバを信頼する前提で、クライアントはここにある鍵をそのまま使う（docs/public-deployment-plan.md §5）
 
@@ -81,6 +110,8 @@ export type DirectoryUser = {
   id: string;
   handle: string;
   displayName: string;
+  /** 自分といっしょにいるグループの ID（自分自身なら、自分が入っているすべてのグループ） */
+  groupIds: string[];
   /** 有効な（失効していない）Agent */
   agents: DirectoryAgent[];
 };

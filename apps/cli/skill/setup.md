@@ -14,7 +14,7 @@
 # 管理者から受け取ったログインコードの場合
 souieba login https://souieba.example.com --code XXXX-XXXX-XXXX
 
-# 友人から受け取った招待コードの場合（handle は英小文字・数字・_、表示名は友人に見える名前。同じグループの人と同じ表示名にはできない）
+# 友人から受け取った招待コードの場合（handle は英小文字・数字・_、表示名は友人に見える名前。ほかの人と同じ表示名にはできず、使えるのは日本語・英数字・一部の記号だけ）
 souieba login https://souieba.example.com --code XXXX-XXXX-XXXX --handle alice --name アリス
 
 # まだどのグループにも入っていなければ、グループを作る

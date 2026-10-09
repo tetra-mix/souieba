@@ -4,12 +4,14 @@ name = "souieba"
 main = "src/worker.ts"
 compatibility_date = "2026-09-20"
 compatibility_flags = ["nodejs_compat"]
-# *.workers.dev では Cloudflare Access がかからないので、自分のドメイン（routes）だけで公開する
-workers_dev = false
+# 今は *.workers.dev で公開している。workers.dev では、Cloudflare Access を /v1/admin/* だけにかけたり、
+# WAF のレート制限ルールを使ったりできない（admin API は admin 専用トークンと Worker 内のレート制限だけで守る）。
+# 自分のドメインに移すときは workers_dev = false にして routes を足す（README の「Cloudflare Workers」）
+workers_dev = true
 preview_urls = false
 
 [vars]
-SOUIEBA_PUBLIC_URL = "https://souieba.example.com"
+SOUIEBA_PUBLIC_URL = "https://souieba.ryouma1128.workers.dev"
 SOUIEBA_INSTANCE_NAME = "Souieba"
 SOUIEBA_INVITE_BY = "member"
 SOUIEBA_GROUP_CREATE_BY = "member"

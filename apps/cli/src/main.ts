@@ -3,14 +3,33 @@ import { parseArgs } from "node:util";
 import * as agentCmd from "./agent.ts";
 import {
   CLIENT_VERSION_HEADER,
+  type KeyDirectory,
   type KeyPair,
   type PostEnvelope,
+  type WireGroup,
   compareVersions,
   generateEncryptionKey,
   generateSigningKey,
+  isValidDisplayName,
+  openInviteName,
   openPost,
+  sealInviteName,
 } from "@souieba/core";
-import { HttpClient, SetLogApiError, configPath, loadClientConfig, saveClientConfig } from "@souieba/sdk";
+import {
+  type ClientConfig,
+  GroupNameCache,
+  type GroupNameApi,
+  HttpClient,
+  type LocalAgentKeys,
+  type NamedGroup,
+  SetLogApiError,
+  configPath,
+  displayGroupName,
+  loadClientConfig,
+  loadGroupNames,
+  saveClientConfig,
+  sealForMembers,
+} from "@souieba/sdk";
 import { SKILL_TOPICS, installedSkills, isSkillTopic, skillText, skillVersionAdvice } from "./skill.ts";
 import { CLI_VERSION } from "./version.ts";
 
@@ -45,10 +64,10 @@ const USAGE = `使い方: souieba <command>
 <グループ> は名前か ID。設定ファイル: ${configPath()}（環境変数 SOUIEBA_HOME で場所を変更できます）`;
 
 type Me = { id: string; handle: string; displayName: string; role: string };
-type Group = { id: string; name: string; role: string; memberCount: number };
+type Group = NamedGroup;
 type Member = { userId: string; handle: string; displayName: string; role: string; joinedAt: string };
 type JoinResult = {
-  group: { id: string; name: string } | null;
+  group: { id: string; nameVersion: number; legacyName: string | null; nameBox: string | null } | null;
   inviter: { id: string; handle: string; displayName: string } | null;
 };
 
@@ -67,12 +86,55 @@ async function publicGet<T>(baseUrl: string, path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+// ---- グループ名（暗号化されている。#16） ----
+
+function localAgentKeys(cfg: ClientConfig): LocalAgentKeys[] {
+  return Object.values(cfg.agents).flatMap((a) => (a.keys ? [{ agentId: a.id, keys: a.keys }] : []));
+}
+
+function groupApi(client: HttpClient): GroupNameApi {
+  return {
+    groups: async () => (await client.request<{ groups: WireGroup[] }>("GET", "/v1/groups")).groups,
+    keys: () => client.request<KeyDirectory>("GET", "/v1/keys"),
+    putNameBoxes: (id, input) => client.request("PUT", `/v1/groups/${encodeURIComponent(id)}/name-boxes`, input),
+  };
+}
+
+/** 自分のグループを、復号した名前つきで取る（まだ封のないメンバーの Agent には、手元の Agent で封をし直す） */
+function namedGroups(client: HttpClient): Promise<Group[]> {
+  return loadGroupNames(groupApi(client), localAgentKeys(loadClientConfig()));
+}
+
+/** 出力用のグループ名。名前は他のメンバーが付けたもので、この出力はエージェントも読む */
+function label(g: { name: string | null }): string {
+  return displayGroupName(g.name) ?? (g.name ? "（表示できない名前）" : "（名前はまだ読めません）");
+}
+
+function requireGroupName(name: string): string {
+  const n = name.trim();
+  if (!isValidDisplayName(n)) throw new Error("グループ名は1〜40文字で、日本語・英数字・一部の記号だけにしてください");
+  return n;
+}
+
+/** 招待で参加したグループの名前を、招待コードで開いて手元に覚える */
+function rememberJoinedName(r: JoinResult, code: string): string | null {
+  if (!r.group) return null;
+  let name = r.group.legacyName;
+  if (!name && r.group.nameBox) {
+    try {
+      name = openInviteName(r.group.nameBox, code, r.group.id);
+    } catch {}
+  }
+  if (name) new GroupNameCache().set(r.group.id, r.group.nameVersion, name);
+  return name;
+}
+
 async function resolveGroup(client: HttpClient, ref: string | undefined): Promise<Group> {
-  const { groups } = await client.request<{ groups: Group[] }>("GET", "/v1/groups");
+  const groups = await namedGroups(client);
   if (groups.length === 0) throw new Error("どのグループにも入っていません。`souieba groups create <名前>` で作るか、招待コードで参加してください");
   if (!ref) {
     if (groups.length === 1) return groups[0]!;
-    throw new Error(`グループを指定してください（--group）。所属: ${groups.map((g) => g.name).join(", ")}`);
+    throw new Error(`グループを指定してください（--group）。所属: ${groups.map((g) => `${label(g)}（${g.id}）`).join(", ")}`);
   }
   const hits = groups.filter((g) => g.id === ref || g.name === ref);
   if (hits.length === 1) return hits[0]!;
@@ -132,7 +194,10 @@ async function main(argv: string[]) {
       saveClientConfig({ serverUrl: baseUrl, userToken: data.token, user, agents });
 
       console.log(`${instance.name}${instance.version ? `（v${instance.version}）` : ""} に @${user.handle} としてログインしました`);
-      if (data.group) console.log(`グループ「${data.group.name}」に参加しました（招待した人: @${data.inviter?.handle}）`);
+      if (data.group) {
+        const name = displayGroupName(rememberJoinedName(data, values.code));
+        console.log(`グループ${name ? `「${name}」` : ""}に参加しました（招待した人: @${data.inviter?.handle}）`);
+      }
       if (Object.keys(agents).length === 0) console.log("次に: souieba agent add <Agent名>");
       break;
     }
@@ -158,7 +223,14 @@ async function main(argv: string[]) {
       const client = userClient();
       const group = await resolveGroup(client, values.group);
       const r = await client.request<{ code: string; expiresAt: string }>("POST", `/v1/groups/${encodeURIComponent(group.id)}/invites`);
-      console.log(`グループ「${group.name}」への招待コード: ${r.code}（${r.expiresAt} まで有効、1回限り）`);
+      // 参加する人は Agent の鍵をまだ持っていないので、招待コードから作った鍵でグループ名を封をして添える
+      if (group.name) {
+        await client.request("PUT", `/v1/groups/${encodeURIComponent(group.id)}/invites/name-box`, {
+          code: r.code,
+          box: sealInviteName(group.name, r.code, group.id),
+        });
+      }
+      console.log(`グループ「${label(group)}」への招待コード: ${r.code}（${r.expiresAt} まで有効、1回限り）`);
       console.log(`初めての人: souieba login ${cfg.serverUrl} --code ${r.code} --handle <handle> --name <表示名>`);
       console.log(`登録済みの人: souieba groups join ${r.code}`);
       break;
@@ -180,6 +252,8 @@ async function main(argv: string[]) {
         cfg.agents[name] = { id: r.agent.id, token: r.token, keys: { enc, sign } };
         saveClientConfig(cfg);
         console.log(`Agent「${name}」を登録しました（${r.agent.id}）。トークンと鍵は ${configPath()} に保存しました`);
+        // 手元で覚えているグループ名を、新しい Agent 宛てにも封をしておく
+        await namedGroups(client).catch(() => {});
       } else if (sub === "revoke") {
         if (!rest[0]) throw new Error("souieba agent revoke <id>");
         await client.request("DELETE", `/v1/agents/${encodeURIComponent(rest[0])}`);
@@ -297,16 +371,19 @@ async function groupsCommand(sub: string | undefined, rest: string[]) {
   switch (sub) {
     case undefined:
     case "list": {
-      const { groups } = await client.request<{ groups: Group[] }>("GET", "/v1/groups");
+      const groups = await namedGroups(client);
       if (groups.length === 0) console.log("（どのグループにも入っていません）");
-      for (const g of groups) console.log(`${g.id}\t${g.name}\t${g.role}\t${g.memberCount}人`);
+      for (const g of groups) console.log(`${g.id}\t${label(g)}\t${g.role}\t${g.memberCount}人`);
       return;
     }
     case "create": {
-      const name = rest.join(" ");
-      if (!name) throw new Error("souieba groups create <名前>");
-      const g = await client.request<{ id: string; name: string }>("POST", "/v1/groups", { name });
-      console.log(`グループ「${g.name}」を作りました（${g.id}）`);
+      if (rest.length === 0) throw new Error("souieba groups create <名前>");
+      const name = requireGroupName(rest.join(" "));
+      // 名前はサーバに送らず、手元に覚えてから自分の Agent 宛てに封をして置く
+      const g = await client.request<{ id: string; nameVersion: number }>("POST", "/v1/groups", {});
+      new GroupNameCache().set(g.id, g.nameVersion, name);
+      await namedGroups(client).catch(() => {});
+      console.log(`グループ「${name}」を作りました（${g.id}）`);
       console.log(`次に: souieba invite --group ${JSON.stringify(name)}`);
       return;
     }
@@ -314,7 +391,9 @@ async function groupsCommand(sub: string | undefined, rest: string[]) {
       const code = rest[0];
       if (!code) throw new Error("souieba groups join <コード>");
       const r = await client.request<JoinResult>("POST", "/v1/groups/join", { code });
-      console.log(`グループ「${r.group?.name}」に参加しました（招待した人: @${r.inviter?.handle}）`);
+      const name = displayGroupName(rememberJoinedName(r, code));
+      await namedGroups(client).catch(() => {});
+      console.log(`グループ${name ? `「${name}」` : ""}に参加しました（招待した人: @${r.inviter?.handle}）`);
       return;
     }
     case "members": {
@@ -327,7 +406,7 @@ async function groupsCommand(sub: string | undefined, rest: string[]) {
     case "leave": {
       const group = await resolveGroup(client, rest[0]);
       await client.request("DELETE", `/v1/groups/${encodeURIComponent(group.id)}/members/${encodeURIComponent(cfg.user!.id)}`);
-      console.log(`グループ「${group.name}」を抜けました`);
+      console.log(`グループ「${label(group)}」を抜けました`);
       return;
     }
     case "remove": {
@@ -337,15 +416,22 @@ async function groupsCommand(sub: string | undefined, rest: string[]) {
       const target = (await members(client, group.id)).find((m) => m.handle === handle.replace(/^@/, ""));
       if (!target) throw new Error(`@${handle} はこのグループにいません`);
       await client.request("DELETE", `/v1/groups/${encodeURIComponent(group.id)}/members/${encodeURIComponent(target.userId)}`);
-      console.log(`@${target.handle} をグループ「${group.name}」から外しました`);
+      console.log(`@${target.handle} をグループ「${label(group)}」から外しました`);
       return;
     }
     case "rename": {
       const [ref, ...nameParts] = rest;
       if (!ref || nameParts.length === 0) throw new Error("souieba groups rename <グループ> <新しい名前>");
+      const name = requireGroupName(nameParts.join(" "));
       const group = await resolveGroup(client, ref);
-      await client.request("PATCH", `/v1/groups/${encodeURIComponent(group.id)}`, { name: nameParts.join(" ") });
-      console.log("変更しました");
+      // 新しい名前は、メンバーの Agent 全員宛てに封をし直す。封をする（署名する）には手元の Agent の鍵が要る
+      const sender = localAgentKeys(cfg)[0];
+      if (!sender) throw new Error("グループ名を変えるには、この PC に Agent が必要です。先に souieba agent add <名前> を実行してください");
+      const version = group.nameVersion + 1;
+      const dir = await client.request<KeyDirectory>("GET", "/v1/keys");
+      await client.request("PATCH", `/v1/groups/${encodeURIComponent(group.id)}`, { version, boxes: sealForMembers(name, group.id, version, dir, sender) });
+      new GroupNameCache().set(group.id, version, name);
+      console.log(`グループ名を「${name}」に変更しました`);
       return;
     }
     default:
@@ -409,8 +495,13 @@ async function doctor() {
   }
   const client = userClient();
   try {
-    await client.request("GET", "/v1/me");
+    const me = await client.request<{ user: Me }>("GET", "/v1/me");
     ok("User トークンは有効です");
+    if (isValidDisplayName(me.user.displayName)) ok(`表示名「${me.user.displayName}」`);
+    else
+      ng(
+        `表示名「${me.user.displayName}」に使えない文字か表現が含まれているため、友人に近況が届きません。souieba profile --name <新しい表示名> で変えてください（日本語・英数字・一部の記号のみ）`,
+      );
   } catch (err) {
     return ng(`User トークンが無効です: ${err instanceof Error ? err.message : err}`);
   }

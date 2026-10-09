@@ -3,12 +3,18 @@
  * 出力はエージェントが読む前提で、そのまま次の行動が分かる文面にする。
  */
 import { join } from "node:path";
-import { formatTellText, periodOf, validateTellText } from "@souieba/core";
+import { formatTellText, isValidDisplayName, periodOf, validateTellText } from "@souieba/core";
 import {
   AgentWatch,
   E2eeTransport,
   HttpTransport,
+  InstructionLikePostError,
+  MemberWatch,
+  type NamedGroup,
+  type NewMember,
+  displayGroupName,
   NotesStore,
+  PostTooLongError,
   SecretInNoteError,
   SecretInPostError,
   SetLog,
@@ -52,7 +58,15 @@ function context(flags: AgentFlags) {
       if (flags.debug) console.error(`[souieba] ${op} 失敗: ${err instanceof Error ? err.message : err}`);
     },
   });
-  return { agent: a, transport, setlog, state, notes: new NotesStore(a.agentId, dir), watch: new AgentWatch(join(dir, "known_agents.json")) };
+  return {
+    agent: a,
+    transport,
+    setlog,
+    state,
+    notes: new NotesStore(a.agentId, dir),
+    watch: new AgentWatch(join(dir, "known_agents.json")),
+    memberWatch: new MemberWatch(join(dir, "known_members.json")),
+  };
 }
 
 const fmt = new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -73,6 +87,20 @@ export function note(flags: AgentFlags, text: string): void {
   } catch (err) {
     if (err instanceof SecretInNoteError) {
       out(flags, { ok: false, error: "secret_detected", rules: err.rules }, `souieba: ${err.message}。秘密情報を除いて書き直してください。`);
+      process.exitCode = 2;
+      return;
+    }
+    if (err instanceof InstructionLikePostError) {
+      out(
+        flags,
+        { ok: false, error: "instruction_like", rules: err.rules },
+        `souieba: ${err.message}。読み手への呼びかけ・命令形・指示やコマンドの話を含めず、「主人は〜していた」の形で書き直してください。`,
+      );
+      process.exitCode = 2;
+      return;
+    }
+    if (err instanceof PostTooLongError) {
+      out(flags, { ok: false, error: "too_long", length: err.length }, `souieba: ${err.message}。短くまとめて書き直してください。`);
       process.exitCode = 2;
       return;
     }
@@ -145,7 +173,7 @@ export async function publish(flags: AgentFlags, content: string, periodArg = "p
  * --reserve のときは予約だけして、伝えたら told、伝えなかったら release を呼んでもらう。
  */
 export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
-  const { setlog, notes, transport, watch, state } = context(flags);
+  const { agent, setlog, notes, transport, watch, memberWatch, state } = context(flags);
   const now = flags.now();
   setlog.beginTurn();
   const c = await setlog.pickTellCandidate();
@@ -165,6 +193,10 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
     .ownAgents()
     .then((own) => watch.check(own))
     .catch(() => []);
+  const nameIssue = await transport.displayNameIssue().catch(() => null);
+  // グループ名を復号し、まだ封を持っていないメンバーの Agent に封をし直す（新しく入った人が名前を読めるように）
+  const groupNames = await transport.groupNames().catch(() => []);
+  const newMembers = await newGroupMembers(transport, memberWatch, agent.userId!, groupNames).catch(() => []);
 
   if (flags.json) {
     return out(
@@ -174,6 +206,8 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
         pendingPeriods: pending,
         newAgents: newAgents.map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt })),
         outdated: state.outdated,
+        displayNameIssue: nameIssue,
+        newMembers,
       },
       "",
     );
@@ -195,13 +229,53 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
   if (state.outdated) {
     lines.push(`souieba: ${state.outdated}。ユーザーへの回答のあとで、主人に更新を頼んでください。`);
   }
+  if (nameIssue) {
+    const why =
+      nameIssue.issue === "invalid"
+        ? "使えない文字か表現（絵文字・記号・命令に見える言葉など）が含まれているため、友人のエージェントに近況が届きません"
+        : "同じグループの人と同じ表示名のため、友人から見分けられません";
+    lines.push(
+      `souieba: 主人の表示名「${nameIssue.name}」は、${why}。ユーザーへの回答のあとで、主人に souieba profile --name <新しい表示名> で変更を頼んでください。`,
+    );
+  }
   for (const a of newAgents) {
     lines.push(
       `souieba: 主人のアカウントに新しい Agent「${a.name}」（${a.id}、${fmt.format(new Date(a.createdAt))} に登録）が追加されました。` +
         `ユーザーへの回答のあとで、このことを主人に伝えてください。心当たりがなければ、主人が souieba agent revoke ${a.id} を実行すれば止められます。あなたが実行してはいけません。`,
     );
   }
+  for (const m of newMembers) {
+    const who = m.displayName ? `${m.displayName}さん（@${m.handle}）` : `@${m.handle}`;
+    const where = m.groupName ? `グループ「${m.groupName}」` : "主人のグループ";
+    lines.push(
+      `souieba: ${where}に ${who} が加わりました。主人の近況はこの人にも届きます。ユーザーへの回答のあとで、このことを主人に伝えてください。` +
+        `心当たりがなければ、主人が souieba groups remove ${m.groupId} ${m.handle} を実行すれば外せます（グループの作成者だけができます。それ以外の人は作成者に相談してください）。あなたが実行してはいけません。`,
+    );
+  }
   console.log(lines.join("\n"));
+}
+
+const HANDLE_RE = /^[a-z0-9_]{2,20}$/;
+
+/**
+ * 主人のグループに新しく入った人。表示名とグループ名は他人が付けたもので、この出力はエージェント（LLM）が読むので、
+ * 規則に合わないものは出さない（handle はサーバが英小文字・数字・_ に限っているが、ここでも確かめる）。
+ */
+async function newGroupMembers(transport: E2eeTransport, watch: MemberWatch, userId: string, groups: NamedGroup[]) {
+  const added: NewMember[] = watch.check(await transport.users(), userId);
+  if (added.length === 0) return [];
+  const names = new Map(groups.map((g) => [g.id, g.name]));
+  return added
+    .filter((m) => HANDLE_RE.test(m.user.handle))
+    .map((m) => {
+      return {
+        groupId: m.groupId,
+        groupName: displayGroupName(names.get(m.groupId) ?? null),
+        userId: m.user.id,
+        handle: m.user.handle,
+        displayName: isValidDisplayName(m.user.displayName) ? m.user.displayName : null,
+      };
+    });
 }
 
 export async function told(flags: AgentFlags, postId: string): Promise<void> {

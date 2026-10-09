@@ -14,13 +14,13 @@ import * as groups from "./services/groups.ts";
 import * as inboxSvc from "./services/inbox.ts";
 import * as posts from "./services/posts.ts";
 
-export const VERSION = "0.4.0";
+export const VERSION = "0.5.0";
 
 /**
  * これより古いクライアントと、バージョンを送らないクライアントは 426 で断る（黙って壊れないように、更新を促す）。
  * API に互換性のない変更をしたら上げる
  */
-export const MIN_CLIENT_VERSION = "0.4.0";
+export const MIN_CLIENT_VERSION = "0.5.0";
 
 export type AppDeps = {
   db: DB;
@@ -62,6 +62,20 @@ const EnvelopeSchema = z.object({
     .max(posts.MAX_RECIPIENTS),
   sig,
 });
+
+const NameBoxSchema = z.object({
+  v: z.literal(1),
+  groupId: z.string().min(1).max(64),
+  version: z.number().int().min(1),
+  senderAgentId: z.string().min(1).max(64),
+  recipientAgentId: z.string().min(1).max(64),
+  epk: key,
+  iv: z.string().regex(/^[A-Za-z0-9_-]{16}$/),
+  // グループ名は40文字までなので、暗号文は小さい
+  ciphertext: z.string().regex(/^[A-Za-z0-9_-]{1,400}$/),
+  sig,
+});
+const NameBoxesSchema = z.array(z.object({ agentId: z.string().min(1).max(64), box: NameBoxSchema })).max(posts.MAX_RECIPIENTS);
 
 /** /v1/posts は宛先の数だけ大きくなるので、他より上限を大きくする */
 const BODY_LIMIT = 16 * 1024;
@@ -228,7 +242,7 @@ export function createApp(deps: AppDeps) {
       exportedAt: now().toISOString(),
       user: accounts.publicUser(accounts.getUser(db, a.userId)!),
       agents: accounts.listAgents(db, a.userId).map(accounts.publicAgent),
-      groups: groups.listGroups(db, a.userId),
+      groups: groups.listGroups(db, { userId: a.userId, agentId: null }),
       postsAboutMe: posts.listMyPosts(db, a.userId),
     });
   });
@@ -262,15 +276,29 @@ export function createApp(deps: AppDeps) {
   });
 
   // グループ
-  v1.get("/groups", (c) => c.json({ groups: groups.listGroups(db, c.get("auth").userId) }));
-  v1.post("/groups", async (c) => {
+  v1.get("/groups", (c) => {
+    const a = c.get("auth");
+    return c.json({ groups: groups.listGroups(db, { userId: a.userId, agentId: a.agentId }) });
+  });
+  // グループ名はサーバに送らない（暗号化してから name-boxes で置く。#16）
+  v1.post("/groups", (c) => {
     const a = requireUser(c);
-    const input = await body(c, z.object({ name: z.string() }));
-    return c.json(groups.createGroup(db, a, input, { createBy: config.groupCreateBy, limits: config.limits }, now()), 201);
+    return c.json(groups.createGroup(db, a, { createBy: config.groupCreateBy, limits: config.limits }, now()), 201);
   });
   v1.patch("/groups/:id", async (c) => {
-    const { name } = await body(c, z.object({ name: z.string() }));
-    groups.renameGroup(db, requireUser(c).userId, c.req.param("id"), name);
+    const input = await body(c, z.object({ version: z.number().int().min(2), boxes: NameBoxesSchema }));
+    groups.renameGroup(db, requireUser(c).userId, c.req.param("id"), input, now());
+    return c.body(null, 204);
+  });
+  // まだ封を持っていないメンバーの Agent に封を置く。tell の中でも呼ぶので Agent トークンでも使える
+  v1.put("/groups/:id/name-boxes", async (c) => {
+    const input = await body(c, z.object({ version: z.number().int().min(1), boxes: NameBoxesSchema, clearPlain: z.boolean().optional() }));
+    groups.putNameBoxes(db, c.get("auth").userId, c.req.param("id"), input, now());
+    return c.body(null, 204);
+  });
+  v1.put("/groups/:id/invites/name-box", async (c) => {
+    const input = await body(c, z.object({ code: z.string().min(1).max(40), box: z.string().regex(/^[A-Za-z0-9_-]{16}\.[A-Za-z0-9_-]{1,400}$/) }));
+    groups.setInviteNameBox(db, requireUser(c).userId, c.req.param("id"), input);
     return c.body(null, 204);
   });
   v1.post("/groups/join", async (c) => {

@@ -58,7 +58,10 @@ export const credentials = sqliteTable(
 
 export const groups = sqliteTable("groups", {
   id: text().primaryKey(),
+  /** 暗号化する前の平文の名前。封をし直したら空文字にする（名前は group_name_boxes にある） */
   name: text().notNull(),
+  /** グループ名の版。名前を変えるたびに増える */
+  nameVersion: integer("name_version").notNull().default(1),
   createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
   createdAt: text("created_at").notNull(),
 });
@@ -99,6 +102,8 @@ export const invites = sqliteTable(
     usedAt: text("used_at"),
     createdAt: text("created_at").notNull(),
     groupId: text("group_id").references(() => groups.id, { onDelete: "cascade" }),
+    /** 招待コードから作った鍵で封をしたグループ名（招待者が添える。参加する前の人が読む） */
+    nameBox: text("name_box"),
   },
   (t) => [check("invites_kind_check", sql`${t.kind} IN ('invite','login')`)],
 );
@@ -163,3 +168,20 @@ export type UserRow = typeof users.$inferSelect;
 export type AgentRow = typeof agents.$inferSelect;
 export type InviteRow = typeof invites.$inferSelect;
 export type MemberRow = typeof groupMembers.$inferSelect;
+
+/** Agent ごとに封をしたグループ名（GroupNameBox の JSON）。サーバは中身を読めない */
+export const groupNameBoxes = sqliteTable(
+  "group_name_boxes",
+  {
+    groupId: text("group_id")
+      .notNull()
+      .references(() => groups.id, { onDelete: "cascade" }),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => agents.id, { onDelete: "cascade" }),
+    version: integer().notNull(),
+    box: text().notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.groupId, t.agentId] })],
+);

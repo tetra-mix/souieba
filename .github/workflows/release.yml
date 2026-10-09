@@ -1,15 +1,18 @@
 name: Release
 
-# v0.4.0 のようなタグを push すると、CLI（npm の souieba）を publish して GitHub Release を作る。
+# Actions の画面で main を選んで「Run workflow」を押すと、今の main のバージョンで CLI（npm の souieba）を publish し、
+# タグ（v0.5.0 など）と GitHub Release を作る。
+# バージョンは、dev への PR で `node scripts/set-version.mjs <x.y.z>` を実行して上げておき、dev を main にマージしてから押す。
+# すでに publish 済み・Release 作成済みの手順は飛ばすので、途中で失敗したら同じバージョンでもう一度押せばよい。
+# サーバのデプロイと MIN_CLIENT_VERSION の引き上げは、ここでは行わない。
 # npm への publish は Trusted Publishing（OIDC）で行い、長期のトークンは使わない。provenance は自動で付く。
 # 手順: docs/client-distribution-plan.md §5
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
-  contents: write # GitHub Release を作る
+  contents: write # GitHub Release（とタグ）を作る
   id-token: write # npm の Trusted Publishing（OIDC）
 
 concurrency:
@@ -18,6 +21,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,15 +34,27 @@ jobs:
       # Trusted Publishing には npm 11.5.1 以上が要る
       - run: npm install -g npm@^11.5.1
       - run: pnpm install --frozen-lockfile
-      - run: node scripts/check-version.mjs "$GITHUB_REF_NAME"
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p 'require("./apps/cli/package.json").version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ -n "$(npm view "souieba@$version" version 2>/dev/null)" ]; then echo "published=true" >> "$GITHUB_OUTPUT"; fi
+          if gh release view "v$version" > /dev/null 2>&1; then echo "released=true" >> "$GITHUB_OUTPUT"; fi
+      - run: node scripts/check-version.mjs "v${{ steps.version.outputs.version }}"
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build:cli
       # 公開するのはバンドル済みの1ファイルなので、開発用の依存（workspace:*）は package.json から外す
-      - working-directory: apps/cli
+      - if: steps.version.outputs.published != 'true'
+        working-directory: apps/cli
         run: npm pkg delete devDependencies scripts
-      - working-directory: apps/cli
+      - if: steps.version.outputs.published != 'true'
+        working-directory: apps/cli
         run: npm publish --access public
-      - env:
+      - if: steps.version.outputs.released != 'true'
+        env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+          TAG: v${{ steps.version.outputs.version }}
+        run: gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --title "$TAG"

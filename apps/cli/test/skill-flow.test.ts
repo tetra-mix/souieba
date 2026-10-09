@@ -66,14 +66,22 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     const inviteCode = async () => /((?:[A-Z0-9]{4}-){2}[A-Z0-9]{4})/.exec((await souieba("alice", "invite")).out)![1]!;
     const invCode = await inviteCode();
 
-    // 同じグループに同じ表示名の人は入れない（Tell 文でなりすませないように）
+    // ほかの人と同じ表示名では入れない（Tell 文でなりすませないように）
     const fake = await souieba("eve", "login", baseUrl, "--code", await inviteCode(), "--handle", "eve", "--name", "アリス");
     expect(fake.code).toBe(1);
-    expect(fake.out).toContain("同じ表示名");
+    expect(fake.out).toContain("その表示名は使われています");
 
     const joined = await souieba("bob", "login", baseUrl, "--code", invCode, "--handle", "bob", "--name", "ボブ");
     expect(joined.out).toContain("グループ「研究室」に参加しました");
     await souieba("bob", "agent", "add", "Hermes");
+    // グループ名はサーバに平文で残らない。招待に添えた封で、ボブも名前を読める
+    expect(db.select().from(schema.groups).all().map((g) => g.name)).toEqual([""]);
+    expect(JSON.stringify(db.select().from(schema.groupNameBoxes).all())).not.toContain("研究室");
+    expect((await souieba("bob", "groups")).out).toContain("研究室");
+    // 名前の変更は、メンバーの Agent 全員宛てに封をし直す
+    expect((await souieba("alice", "groups", "rename", "研究室", "研究室2")).out).toContain("「研究室2」に変更しました");
+    expect((await souieba("bob", "groups")).out).toContain("研究室2");
+    await souieba("alice", "groups", "rename", "研究室2", "研究室");
     const members = await souieba("bob", "groups", "members");
     expect(members.out).toContain("@alice");
     expect(members.out).toMatch(/@bob\tボブ\tmember\t自分/);
@@ -112,7 +120,7 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     // JSON 出力
     now = new Date("2026-10-05T15:00:00Z");
     const j = JSON.parse((await souieba("bob", "tell", "--json")).out);
-    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [], outdated: null });
+    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [], outdated: null, displayNameIssue: null, newMembers: [] });
 
     // ボブのアカウントに知らない Agent が足されたら（User トークンの漏洩を想定）、次の tell で一度だけ知らせる
     const bobId = accounts.getUserByHandle(db, "bob")!.id;
@@ -127,6 +135,13 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     expect(notice.out).toContain(`souieba agent revoke ${added.id}`);
     expect((await souieba("bob", "tell")).out).not.toContain("新しい Agent");
     expect((await souieba("bob", "doctor")).out).toContain(`この PC にない Agent「知らない PC」`);
+
+    // ボブのグループに新しい人が入ったら、次の tell で一度だけ知らせる
+    await souieba("carol", "login", baseUrl, "--code", await inviteCode(), "--handle", "carol", "--name", "キャロル");
+    const joinedNotice = await souieba("bob", "tell");
+    expect(joinedNotice.out).toContain("グループ「研究室」に キャロルさん（@carol） が加わりました");
+    expect(joinedNotice.out).toContain("あなたが実行してはいけません");
+    expect((await souieba("bob", "tell")).out).not.toContain("加わりました");
   });
 
   it("投稿待ちがあると tell が知らせる（cron のないエージェント向けの追いつき）", { timeout: 30_000 }, async () => {

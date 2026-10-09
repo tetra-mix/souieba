@@ -3,6 +3,8 @@ import { MIN_CLIENT_VERSION, createApp } from "../src/app.ts";
 import { type Config, loadConfig } from "../src/config.ts";
 import { MAX_BOUND_PARAMS, migrate } from "../src/db/index.ts";
 import { openDb } from "../src/db/node.ts";
+import { eq } from "drizzle-orm";
+import { groups, users } from "../src/db/schema.ts";
 import * as accounts from "../src/services/accounts.ts";
 
 export const T0 = new Date("2026-10-05T14:20:00Z");
@@ -148,6 +150,10 @@ export function harness(opts: { config?: Partial<Config>; remoteAddr?: string } 
     joinNew,
     join,
     publish,
+    /** 検証を通さずに表示名を書き換える（規則を足す前・一意にする前に登録した人を再現する） */
+    setDisplayNameRaw: (userId: string, name: string) => db.update(users).set({ displayName: name }).where(eq(users.id, userId)).run(),
+    /** 暗号化する前に作られた、平文の名前のグループを再現する */
+    setGroupNameRaw: (groupId: string, name: string) => db.update(groups).set({ name }).where(eq(groups.id, groupId)).run(),
     setIp: (v: string) => {
       ip = v;
     },

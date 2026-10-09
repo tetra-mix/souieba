@@ -1,6 +1,8 @@
 import {
   type CreatePostInput,
   DecryptError,
+  displayNameKey,
+  MAX_POST_LENGTH,
   type DirectoryAgent,
   type DirectoryUser,
   type InboxItem,
@@ -10,12 +12,15 @@ import {
   type TellCandidate,
   type WireInboxItem,
   openPost,
+  findInstructionLike,
+  isValidDisplayName,
   sanitizeContent,
   scanSecrets,
   sealPost,
   verifyPostSignature,
 } from "@souieba/core";
 import type { AgentKeys } from "./config.ts";
+import { type GroupNameCache, type NamedGroup, loadGroupNames } from "./group-names.ts";
 import type { HttpTransport } from "./http.ts";
 import type { SetLogTransport } from "./transport.ts";
 
@@ -25,13 +30,29 @@ export class SecretInPostError extends Error {
   }
 }
 
+/** 読み手のエージェントへの命令に見える投稿。受信側で捨てられるので、送る前に断る */
+export class InstructionLikePostError extends Error {
+  constructor(readonly rules: string[]) {
+    super(`友人のエージェントへの命令に見える表現があるため投稿できません（${rules.join(", ")}）`);
+  }
+}
+
+export class PostTooLongError extends Error {
+  constructor(readonly length: number) {
+    super(`投稿が長すぎます（${length}字。${MAX_POST_LENGTH}字まで）`);
+  }
+}
+
 export type RejectReason =
   | "unknown_author"
   | "unknown_agent"
   | "header_mismatch"
   | "bad_signature"
   | "decrypt_failed"
-  | "too_short";
+  | "too_short"
+  | "too_long"
+  | "instruction_like"
+  | "bad_display_name";
 
 export type E2eeOptions = {
   userId: string;
@@ -53,6 +74,7 @@ type Directory = {
  */
 export class E2eeTransport implements SetLogTransport {
   private dir: Promise<Directory> | null = null;
+  private rawKeys: Promise<KeyDirectory> | null = null;
 
   constructor(
     readonly inner: HttpTransport,
@@ -61,7 +83,7 @@ export class E2eeTransport implements SetLogTransport {
 
   /** 公開鍵ディレクトリ。1つのインスタンス（＝1回のコマンド）の中だけキャッシュする */
   directory(): Promise<Directory> {
-    this.dir ??= this.inner.keys().then((d: KeyDirectory) => {
+    this.dir ??= this.keys().then((d: KeyDirectory) => {
       if (d.me.userId !== this.opts.userId || d.me.agentId !== this.opts.agentId) {
         throw new Error("サーバが返したディレクトリの持ち主が、この Agent と一致しません");
       }
@@ -75,6 +97,42 @@ export class E2eeTransport implements SetLogTransport {
     return this.dir;
   }
 
+  /**
+   * 自分の表示名に、近況が友人に届かなくなる問題がないか。
+   * invalid: 規則に合わない（受信側で捨てられる）。duplicate: いっしょにいる人に同じ表示名の人がいる（一意にする前の登録）
+   */
+  async displayNameIssue(): Promise<{ name: string; issue: "invalid" | "duplicate" } | null> {
+    const dir = await this.directory();
+    const me = dir.users.get(this.opts.userId);
+    if (!me) return null;
+    if (!isValidDisplayName(me.displayName)) return { name: me.displayName, issue: "invalid" };
+    const key = displayNameKey(me.displayName);
+    for (const u of dir.users.values()) {
+      if (u.id !== me.id && displayNameKey(u.displayName) === key) return { name: me.displayName, issue: "duplicate" };
+    }
+    return null;
+  }
+
+  /** 自分と、今いっしょにいるグループがあるユーザー（グループの ID つき） */
+  async users(): Promise<DirectoryUser[]> {
+    return [...(await this.directory()).users.values()];
+  }
+
+  /** 自分のグループと、復号したグループ名（名前は他のメンバーが付けたもので、信頼できない入力）。まだ封のない Agent に封をし直す */
+  groupNames(cache?: GroupNameCache): Promise<NamedGroup[]> {
+    const api = { groups: () => this.inner.groups(), keys: () => this.keys(), putNameBoxes: this.inner.putNameBoxes.bind(this.inner) };
+    return loadGroupNames(api, [{ agentId: this.opts.agentId, keys: this.opts.keys }], cache);
+  }
+
+  /** サーバが返した公開鍵ディレクトリそのもの。directory() と同じく1回のコマンドの中だけキャッシュする */
+  private keys(): Promise<KeyDirectory> {
+    this.rawKeys ??= this.inner.keys();
+    this.rawKeys.catch(() => {
+      this.rawKeys = null;
+    });
+    return this.rawKeys;
+  }
+
   /** 自分のアカウントに登録されている、有効な Agent */
   async ownAgents(): Promise<DirectoryAgent[]> {
     return (await this.directory()).users.get(this.opts.userId)?.agents ?? [];
@@ -86,6 +144,9 @@ export class E2eeTransport implements SetLogTransport {
     const rules = [...new Set([...scanSecrets(post.content), ...scanSecrets(content)].map((f) => f.rule))];
     if (rules.length > 0) throw new SecretInPostError(rules);
     if (content.length === 0) throw new Error("本文が空です");
+    if (content.length > MAX_POST_LENGTH) throw new PostTooLongError(content.length);
+    const suspicious = findInstructionLike(content);
+    if (suspicious.length > 0) throw new InstructionLikePostError(suspicious);
 
     const visibility = post.visibility ?? "groups";
     const { userId, agentId, keys } = this.opts;
@@ -169,6 +230,10 @@ export class E2eeTransport implements SetLogTransport {
     // 送信側の正規化は信用せず、受信側でもう一度通す（友人の投稿は信頼できない入力として扱う）
     const content = sanitizeContent(plain);
     if (content.length < MIN_TELL_CONTENT_LENGTH) return { ok: false, reason: "too_short" };
+    if (content.length > MAX_POST_LENGTH) return { ok: false, reason: "too_long" };
+    if (findInstructionLike(content).length > 0) return { ok: false, reason: "instruction_like" };
+    // 表示名も Tell 文に入るので、本文と同じく信頼できない入力として確かめる
+    if (!isValidDisplayName(owner.displayName)) return { ok: false, reason: "bad_display_name" };
 
     return {
       ok: true,

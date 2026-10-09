@@ -108,16 +108,21 @@ metadata: {"openclaw": {"requires": {"bins": ["souieba"]},
 
 ## 5. リリースの流れ
 
-GitHub Actions で、タグの push をきっかけに行う。
+GitHub Actions の画面からボタンで行う（`.github/workflows/release.yml`）。
 
 ```
-git tag v0.2.0 && git push --tags
+dev への PR で node scripts/set-version.mjs 0.5.1（CLI・サーバ・SKILL.md のバージョンを上げる）
+dev を main にマージ
+Actions → Release → main を選んで Run workflow
+  → バージョン（CLI・サーバ・SKILL.md）が揃っているかを検査
   → typecheck・test
   → build（apps/cli/dist/souieba.mjs）
-  → バージョン（CLI・サーバ・SKILL.md）が揃っているかを検査
   → npm publish --provenance（Trusted Publishing）
-  → GitHub Release を作る
+  → タグ（v0.5.1）と GitHub Release を作る
 ```
+
+すでに publish 済み・Release 作成済みの手順は飛ばすので、途中で失敗したら同じ main でもう一度押せばよい。
+サーバのデプロイは別に行う。API に互換性のない変更をしたときは、`MIN_CLIENT_VERSION`（`apps/server/src/app.ts`）も手で上げる。
 
 ### 5.1 サプライチェーンの安全性
 

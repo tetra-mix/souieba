@@ -15,6 +15,13 @@
       "when": 1791517379763,
       "tag": "0001_trust_server",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791532079132,
+      "tag": "0002_group_name_boxes",
+      "breakpoints": true
     }
   ]
 }
