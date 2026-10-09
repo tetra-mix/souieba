@@ -214,11 +214,11 @@ Agent のトークンだけが漏れた場合は、署名鍵がないので偽�
 
 ## 7. SDK・CLI
 
-### 7.1 SetLog の Transport 抽象化を使う
+### 7.1 Souieba の Transport 抽象化を使う
 
 ```ts
 // packages/sdk/src/e2ee.ts
-export class E2eeTransport implements SetLogTransport {
+export class E2eeTransport implements SouiebaTransport {
   constructor(private inner: HttpTransport, private keys: AgentKeys, private keyring: Keyring) {}
 
   async publish(post: CreatePostInput) {     // 平文を受け取り、封筒にして送る
@@ -236,7 +236,7 @@ export class E2eeTransport implements SetLogTransport {
 }
 ```
 
-- `SetLog` クラス、`tell` / `note` / `compose` / `publish` のコマンド、SKILL.md のエージェント向けの手順は変えない
+- `Souieba` クラス、`tell` / `note` / `compose` / `publish` のコマンド、SKILL.md のエージェント向けの手順は変えない
 - ディレクトリは1回のコマンド実行の中でだけキャッシュする。`tell` は sync・claim・keys の3回の通信になるが、今の 1.5 秒のタイムアウトのまま扱える
 - 暗号の処理（鍵の生成、署名、封筒、証明の検証）は `packages/core/src/crypto.ts` と `trust.ts` に純関数として置く。サーバも証明書と署名の形式の検証に使う
 

@@ -22,7 +22,7 @@ import {
   HttpClient,
   type LocalAgentKeys,
   type NamedGroup,
-  SetLogApiError,
+  SouiebaApiError,
   configPath,
   displayGroupName,
   loadClientConfig,
@@ -544,6 +544,6 @@ async function readStdin(): Promise<string> {
 }
 
 main(process.argv.slice(2)).catch((err) => {
-  console.error(err instanceof SetLogApiError ? `エラー（${err.code}）: ${err.message}` : err instanceof Error ? err.message : err);
+  console.error(err instanceof SouiebaApiError ? `エラー（${err.code}）: ${err.message}` : err instanceof Error ? err.message : err);
   process.exit(1);
 });

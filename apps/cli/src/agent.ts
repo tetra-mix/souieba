@@ -17,8 +17,8 @@ import {
   PostTooLongError,
   SecretInNoteError,
   SecretInPostError,
-  SetLog,
-  SetLogApiError,
+  Souieba,
+  SouiebaApiError,
   resolveAgent,
   souiebaHome,
 } from "@souieba/sdk";
@@ -48,20 +48,20 @@ function context(flags: AgentFlags) {
     keys: a.keys,
     onReject: (postId, reason) => debug(`${postId} を受け取りませんでした（${reason}）`),
   });
-  const setlog = new SetLog({
+  const souieba = new Souieba({
     transport,
     statePath: join(dir, "session.json"),
     sessionGapMs: Number(process.env.SOUIEBA_SESSION_GAP_MIN ?? 30) * 60_000,
     now: flags.now,
     onError: (op, err) => {
-      if (err instanceof SetLogApiError && err.code === "client_outdated") state.outdated = err.message;
+      if (err instanceof SouiebaApiError && err.code === "client_outdated") state.outdated = err.message;
       if (flags.debug) console.error(`[souieba] ${op} 失敗: ${err instanceof Error ? err.message : err}`);
     },
   });
   return {
     agent: a,
     transport,
-    setlog,
+    souieba,
     state,
     notes: new NotesStore(a.agentId, dir),
     watch: new AgentWatch(join(dir, "known_agents.json")),
@@ -179,17 +179,17 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
 
 /** tell の結果を、JSON と、エージェントが読む文面の両方で返す（souieba hook からも使う） */
 export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{ json: unknown; text: string }> {
-  const { agent, setlog, notes, transport, watch, memberWatch, state } = context(flags);
+  const { agent, souieba, notes, transport, watch, memberWatch, state } = context(flags);
   const now = flags.now();
-  setlog.beginTurn();
-  const c = await setlog.pickTellCandidate();
+  souieba.beginTurn();
+  const c = await souieba.pickTellCandidate();
 
   let text: string | null = null;
   if (c) {
     const t = formatTellText(c.owner.displayName, c.content);
     if (validateTellText(t, c.owner.displayName) !== null) {
-      await setlog.release(c.postId);
-    } else if (reserve || (await setlog.markAsTold(c.postId))) {
+      await souieba.release(c.postId);
+    } else if (reserve || (await souieba.markAsTold(c.postId))) {
       text = t;
     }
   }
@@ -279,11 +279,11 @@ async function newGroupMembers(transport: E2eeTransport, watch: MemberWatch, use
 }
 
 export async function told(flags: AgentFlags, postId: string): Promise<void> {
-  const ok = await context(flags).setlog.markAsTold(postId);
+  const ok = await context(flags).souieba.markAsTold(postId);
   out(flags, { ok }, ok ? "souieba: 伝えたことを記録しました。" : "souieba: 記録できませんでした（予約の期限切れか、通信できません）。");
 }
 
 export async function release(flags: AgentFlags, postId: string): Promise<void> {
-  await context(flags).setlog.release(postId);
+  await context(flags).souieba.release(postId);
   out(flags, { ok: true }, "souieba: 予約を解除しました。");
 }

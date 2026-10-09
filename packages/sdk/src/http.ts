@@ -10,7 +10,7 @@ import {
   type WireTellCandidate,
 } from "@souieba/core";
 
-export class SetLogApiError extends Error {
+export class SouiebaApiError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
@@ -54,7 +54,7 @@ export class HttpClient {
     if (res.status === 204) return undefined as T;
     const data = (await res.json().catch(() => ({}))) as { error?: { code: string; message: string } };
     if (!res.ok) {
-      throw new SetLogApiError(res.status, data.error?.code ?? "http_error", data.error?.message ?? `HTTP ${res.status}`);
+      throw new SouiebaApiError(res.status, data.error?.code ?? "http_error", data.error?.message ?? `HTTP ${res.status}`);
     }
     return data as T;
   }
