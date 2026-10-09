@@ -111,6 +111,16 @@ export class E2eeTransport implements SetLogTransport {
     return null;
   }
 
+  /** 自分と、今いっしょにいるグループがあるユーザー（グループの ID つき） */
+  async users(): Promise<DirectoryUser[]> {
+    return [...(await this.directory()).users.values()];
+  }
+
+  /** 自分が入っているグループの ID と名前（名前は他のメンバーが付けたもので、信頼できない入力） */
+  groups(): Promise<{ id: string; name: string }[]> {
+    return this.inner.groups();
+  }
+
   /** 自分のアカウントに登録されている、有効な Agent */
   async ownAgents(): Promise<DirectoryAgent[]> {
     return (await this.directory()).users.get(this.opts.userId)?.agents ?? [];

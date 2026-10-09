@@ -81,6 +81,8 @@ export type DirectoryUser = {
   id: string;
   handle: string;
   displayName: string;
+  /** 自分といっしょにいるグループの ID（自分自身なら、自分が入っているすべてのグループ） */
+  groupIds: string[];
   /** 有効な（失効していない）Agent */
   agents: DirectoryAgent[];
 };

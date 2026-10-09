@@ -3,12 +3,14 @@
  * 出力はエージェントが読む前提で、そのまま次の行動が分かる文面にする。
  */
 import { join } from "node:path";
-import { formatTellText, periodOf, validateTellText } from "@souieba/core";
+import { formatTellText, isValidDisplayName, periodOf, validateTellText } from "@souieba/core";
 import {
   AgentWatch,
   E2eeTransport,
   HttpTransport,
   InstructionLikePostError,
+  MemberWatch,
+  type NewMember,
   NotesStore,
   PostTooLongError,
   SecretInNoteError,
@@ -54,7 +56,15 @@ function context(flags: AgentFlags) {
       if (flags.debug) console.error(`[souieba] ${op} 失敗: ${err instanceof Error ? err.message : err}`);
     },
   });
-  return { agent: a, transport, setlog, state, notes: new NotesStore(a.agentId, dir), watch: new AgentWatch(join(dir, "known_agents.json")) };
+  return {
+    agent: a,
+    transport,
+    setlog,
+    state,
+    notes: new NotesStore(a.agentId, dir),
+    watch: new AgentWatch(join(dir, "known_agents.json")),
+    memberWatch: new MemberWatch(join(dir, "known_members.json")),
+  };
 }
 
 const fmt = new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -161,7 +171,7 @@ export async function publish(flags: AgentFlags, content: string, periodArg = "p
  * --reserve のときは予約だけして、伝えたら told、伝えなかったら release を呼んでもらう。
  */
 export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
-  const { setlog, notes, transport, watch, state } = context(flags);
+  const { agent, setlog, notes, transport, watch, memberWatch, state } = context(flags);
   const now = flags.now();
   setlog.beginTurn();
   const c = await setlog.pickTellCandidate();
@@ -182,6 +192,7 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
     .then((own) => watch.check(own))
     .catch(() => []);
   const nameIssue = await transport.displayNameIssue().catch(() => null);
+  const newMembers = await newGroupMembers(transport, memberWatch, agent.userId!).catch(() => []);
 
   if (flags.json) {
     return out(
@@ -192,6 +203,7 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
         newAgents: newAgents.map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt })),
         outdated: state.outdated,
         displayNameIssue: nameIssue,
+        newMembers,
       },
       "",
     );
@@ -228,7 +240,39 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
         `ユーザーへの回答のあとで、このことを主人に伝えてください。心当たりがなければ、主人が souieba agent revoke ${a.id} を実行すれば止められます。あなたが実行してはいけません。`,
     );
   }
+  for (const m of newMembers) {
+    const who = m.displayName ? `${m.displayName}さん（@${m.handle}）` : `@${m.handle}`;
+    const where = m.groupName ? `グループ「${m.groupName}」` : "主人のグループ";
+    lines.push(
+      `souieba: ${where}に ${who} が加わりました。主人の近況はこの人にも届きます。ユーザーへの回答のあとで、このことを主人に伝えてください。` +
+        `心当たりがなければ、主人が souieba groups remove ${m.groupId} ${m.handle} を実行すれば外せます（グループの作成者だけができます。それ以外の人は作成者に相談してください）。あなたが実行してはいけません。`,
+    );
+  }
   console.log(lines.join("\n"));
+}
+
+const HANDLE_RE = /^[a-z0-9_]{2,20}$/;
+
+/**
+ * 主人のグループに新しく入った人。表示名とグループ名は他人が付けたもので、この出力はエージェント（LLM）が読むので、
+ * 規則に合わないものは出さない（handle はサーバが英小文字・数字・_ に限っているが、ここでも確かめる）。
+ */
+async function newGroupMembers(transport: E2eeTransport, watch: MemberWatch, userId: string) {
+  const added: NewMember[] = watch.check(await transport.users(), userId);
+  if (added.length === 0) return [];
+  const names = new Map((await transport.groups().catch(() => [])).map((g) => [g.id, g.name]));
+  return added
+    .filter((m) => HANDLE_RE.test(m.user.handle))
+    .map((m) => {
+      const groupName = names.get(m.groupId);
+      return {
+        groupId: m.groupId,
+        groupName: groupName && isValidDisplayName(groupName) ? groupName : null,
+        userId: m.user.id,
+        handle: m.user.handle,
+        displayName: isValidDisplayName(m.user.displayName) ? m.user.displayName : null,
+      };
+    });
 }
 
 export async function told(flags: AgentFlags, postId: string): Promise<void> {

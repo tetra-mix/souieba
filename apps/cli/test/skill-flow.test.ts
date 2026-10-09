@@ -112,7 +112,7 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     // JSON 出力
     now = new Date("2026-10-05T15:00:00Z");
     const j = JSON.parse((await souieba("bob", "tell", "--json")).out);
-    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [], outdated: null, displayNameIssue: null });
+    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [], outdated: null, displayNameIssue: null, newMembers: [] });
 
     // ボブのアカウントに知らない Agent が足されたら（User トークンの漏洩を想定）、次の tell で一度だけ知らせる
     const bobId = accounts.getUserByHandle(db, "bob")!.id;
@@ -127,6 +127,13 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     expect(notice.out).toContain(`souieba agent revoke ${added.id}`);
     expect((await souieba("bob", "tell")).out).not.toContain("新しい Agent");
     expect((await souieba("bob", "doctor")).out).toContain(`この PC にない Agent「知らない PC」`);
+
+    // ボブのグループに新しい人が入ったら、次の tell で一度だけ知らせる
+    await souieba("carol", "login", baseUrl, "--code", await inviteCode(), "--handle", "carol", "--name", "キャロル");
+    const joinedNotice = await souieba("bob", "tell");
+    expect(joinedNotice.out).toContain("グループ「研究室」に キャロルさん（@carol） が加わりました");
+    expect(joinedNotice.out).toContain("あなたが実行してはいけません");
+    expect((await souieba("bob", "tell")).out).not.toContain("加わりました");
   });
 
   it("投稿待ちがあると tell が知らせる（cron のないエージェント向けの追いつき）", { timeout: 30_000 }, async () => {
