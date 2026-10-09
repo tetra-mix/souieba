@@ -101,7 +101,7 @@ CLI とスキルは別々に更新されるので、`souieba doctor` がずれ�
 
 ### リリース
 
-CLI・サーバ・スキルのバージョンを揃え（`pnpm check:version`）、`v0.4.0` のようなタグを push すると、GitHub Actions が npm に publish して GitHub Release を作ります（`.github/workflows/release.yml`。Trusted Publishing で、長期のトークンは使いません）。
+CLI・サーバ・スキルのバージョンを `node scripts/set-version.mjs <x.y.z>` で揃えて main に入れ、GitHub Actions の画面で Release ワークフローを main で実行すると、npm に publish してタグと GitHub Release を作ります（`.github/workflows/release.yml`。Trusted Publishing で、長期のトークンは使いません）。
 API に互換性のない変更をしたら、`apps/server/src/app.ts` の `MIN_CLIENT_VERSION` も上げます。
 
 クラウドで動くエージェント（OpenAI Dots など）は、利用者の PC のシェルを使えず、投稿を暗号化する秘密鍵も手元にあるため未対応です（[計画 §13.5](docs/implementation-plan.md)）。
