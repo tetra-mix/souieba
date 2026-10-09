@@ -269,7 +269,7 @@ PR #1（公開・グループ・E2EE）をマージしてから、別の PR で�
   - `souieba-admin --url`（または `SOUIEBA_ADMIN_URL`）で HTTP から使う。トークンは `SOUIEBA_ADMIN_TOKEN`・`SOUIEBA_BOOTSTRAP_TOKEN`、Access の service token は `CF_ACCESS_CLIENT_ID`・`CF_ACCESS_CLIENT_SECRET` で渡す。`admin-token` コマンドは、サーバ上（DB を直接開く）でも使える
 - **上限**（§3.2）: `SOUIEBA_MAX_USERS`（既定 500）・`SOUIEBA_MAX_GROUP_MEMBERS`（50）・`SOUIEBA_MAX_GROUPS_PER_USER`（20）。超えると 409（`limit_users`・`limit_group_members`・`limit_groups_per_user`）
 - **Worker の入口**（§8）: `src/edge.ts`。API 以外のパスは 404、認証の要るエンドポイントで `Authorization` の形が正しくなければ 401、本文が 64KB を超えれば 413。Rate Limiting バインディングで IP ごとに 1分 120 回。WAF のルールと Access は Cloudflare 側で設定する（README）
-- **Workers の設定**: `apps/server/wrangler.toml`。`workers_dev = false`（Access のかからない URL を作らない）、Cron で毎日 03:17 UTC に retention。Durable Object は `idFromName("default")` の1個
+- **Workers の設定**: `apps/server/wrangler.toml`。当初は `workers_dev = false`（Access のかからない URL を作らない）にしていたが、2026-10-09 の最初のデプロイでは、自分のドメインを用意せず `*.workers.dev` で公開した（Access と WAF のルールなし。admin API は admin 専用トークンと Worker 内のレート制限で守る）、Cron で毎日 03:17 UTC に retention。Durable Object は `idFromName("default")` の1個
 - **型検査**: Workers の入口（`src/worker.ts`）だけを `wrangler types` で作った型（`worker-configuration.d.ts`）で検査する（`apps/server/tsconfig.worker.json`）。他は今どおり Node の型
 - **workerd での確認**: Ed25519 の署名・検証と sha256 は `nodejs_compat` で動く。X25519 の鍵交換は動かないが、暗号化と復号はクライアントだけで行うので影響しない。`test/worker.test.ts` で、wrangler の `unstable_dev` を使い、ブートストラップから E2EE の投稿・Tell・アカウント削除までを HTTP 越しに通している
 - **未対応**: Cloudflare への実際のデプロイ、Access と WAF の設定手順の検証、Durable Object の location hint、Workers からの DB のエクスポート（§12）
