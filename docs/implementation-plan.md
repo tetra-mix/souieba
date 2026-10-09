@@ -44,7 +44,7 @@
 ```
 souieba/  (pnpm workspace)
 ├─ packages/core        型・zod スキーマ・Tell 選択や Session 判定などの純関数・秘密情報スキャナ
-├─ packages/sdk         SetLog クライアント、SetLogTransport、HttpTransport、ローカル状態
+├─ packages/sdk         Souieba クライアント、SouiebaTransport、HttpTransport、ローカル状態
 ├─ apps/server          Hono + SQLite (Drizzle)。REST API + 管理用 CLI（souieba-admin）。Docker イメージにする
 ├─ apps/cli             CLI（利用者用: login / agent add / posts / friends、エージェント用: tell / note / compose / publish）
 ├─ skills/souieba      Agent Skill（SKILL.md + CLI を1ファイルにまとめた scripts/souieba.mjs）
@@ -278,7 +278,7 @@ cron がない   souieba tell が「投稿待ちが N 件」と知らせ、次�
 ### M1 縦切りデモ（3〜4日）※最優先
 - server: users / credentials / agents / friendships / posts / deliveries、§4 の API のうち posts・sync・claim・told・release・friends
 - `scripts/seed.ts`: User A・B、それぞれの Agent、相互 Friend を作り、トークンを `.env.demo` に出力する
-- sdk: `SetLog`、`HttpTransport`、Session 判定（ローカル状態ファイル）
+- sdk: `Souieba`、`HttpTransport`、Session 判定（ローカル状態ファイル）
 - cli: `souieba publish` で手動投稿。Tell 文はテンプレート
 - AC: **§24 のシナリオ（投稿 → 同期 → 予約 → Tell 文 → TOLD）が SDK 経由で再現できる。** 同じ Session で2回目の Tell が出ない。30分空ける（テストでは時間を注入する）と再び出る
 

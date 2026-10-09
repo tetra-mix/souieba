@@ -10,10 +10,10 @@ import {
   periodOf,
 } from "@souieba/core";
 import { souiebaHome, writeSecretJson } from "./config.ts";
-import type { SetLogTransport } from "./transport.ts";
+import type { SouiebaTransport } from "./transport.ts";
 
-export type SetLogOptions = {
-  transport: SetLogTransport;
+export type SouiebaOptions = {
+  transport: SouiebaTransport;
   /** Session 状態の保存先。省略時は ~/.souieba/state/<stateKey>.json */
   statePath?: string;
   stateKey?: string;
@@ -24,11 +24,11 @@ export type SetLogOptions = {
 };
 
 /**
- * Agent 実装から使う高水準 API。SetLog の内部構造（受信箱・予約・Session）を意識させない。
+ * Agent 実装から使う高水準 API。Souieba の内部構造（受信箱・予約・Session）を意識させない。
  * ネットワーク障害で会話を止めないよう、Tell 系は失敗しても null を返す。
  */
-export class SetLog {
-  private readonly transport: SetLogTransport;
+export class Souieba {
+  private readonly transport: SouiebaTransport;
   private readonly statePath: string;
   private readonly gapMs: number;
   private readonly maxTells: number;
@@ -36,7 +36,7 @@ export class SetLog {
   private readonly onError: (op: string, err: unknown) => void;
   private state: SessionState | null;
 
-  constructor(opts: SetLogOptions) {
+  constructor(opts: SouiebaOptions) {
     this.transport = opts.transport;
     this.statePath = opts.statePath ?? join(souiebaHome(), "state", `${opts.stateKey ?? "default"}.json`);
     this.gapMs = opts.sessionGapMs ?? DEFAULT_SESSION_GAP_MS;

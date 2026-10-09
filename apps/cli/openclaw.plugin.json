@@ -1,0 +1,13 @@
+{
+  "id": "souieba",
+  "name": "Souieba",
+  "description": "主人の発言ごとに友人の近況（souieba tell）を確かめ、近況のメモの手引きをエージェントに渡す",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "agent": { "type": "string", "description": "Souieba に登録した Agent の名前（同じ PC に複数の Agent がある場合）" }
+    }
+  }
+}

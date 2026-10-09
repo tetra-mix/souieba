@@ -26,6 +26,19 @@ const { db } = openDb(":memory:");
 const tmp = mkdtempSync(join(tmpdir(), "souieba-skill-"));
 
 /** Skill から呼ばれるのと同じ形で CLI を実行する */
+/** エージェントのフックと同じく、標準入力に JSON を渡して souieba hook を実行する */
+function hook(home: string, target: string, input: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      TSX,
+      [CLI, "hook", target],
+      { env: { ...process.env, HOME: join(tmp, home), SOUIEBA_HOME: join(tmp, home), SOUIEBA_NOW: now.toISOString(), SOUIEBA_AGENT: "" } },
+      (err, stdout) => (err ? reject(err) : resolve(stdout.trim())),
+    );
+    child.stdin!.end(input);
+  });
+}
+
 async function souieba(home: string, ...args: string[]) {
   try {
     const r = await run(TSX, [CLI, ...args], {
@@ -149,6 +162,20 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     await souieba("alice", "note", "主人はSouiebaのスキルを書いていた");
     now = new Date("2026-10-05T17:00:00Z");
     expect((await souieba("alice", "tell")).out).toContain("投稿待ちの時間帯が 1 件あります");
+  });
+
+  it("souieba hook は、エージェントのフックの形で tell の結果とメモの手引きを返す", { timeout: 30_000 }, async () => {
+    expect((await souieba("alice", "publish", "--period", "2026-10-05T15:00:00.000Z", "主人はSouiebaのスキルを書いていた。")).code).toBe(0);
+    now = new Date("2026-10-05T18:00:00Z");
+    // Hermes の cron では何も出さず、近況も消費しない
+    expect(await hook("bob", "hermes", '{"hook_event_name":"pre_llm_call","extra":{"platform":"cron"}}')).toBe("");
+    const claude = await hook("bob", "claude-code", '{"hook_event_name":"UserPromptSubmit","prompt":"こんにちは"}');
+    expect(claude).toContain("あ、そういえばアリスさん、Souiebaのスキルを書いていたみたいですよ。");
+    expect(claude).toContain("souieba note");
+    // 同じ Session の次の発言では近況は出ないが、メモの手引きは毎回渡す
+    const { context } = JSON.parse(await hook("bob", "hermes", '{"hook_event_name":"pre_llm_call","extra":{"platform":"telegram"}}'));
+    expect(context).not.toContain("<souieba_tell");
+    expect(context).toContain("souieba note");
   });
 
   it("--version と skill get は、同梱の手順とバージョンを出し、入っているスキルとのずれを知らせる", { timeout: 30_000 }, async () => {
