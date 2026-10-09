@@ -13,7 +13,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MIN_CLIENT_VERSION as clientVersion } from "../../../apps/server/src/app.ts";
 import { type TestUser, harness } from "../../../apps/server/test/harness.ts";
-import { AgentWatch, E2eeTransport, HttpTransport, InstructionLikePostError, SecretInPostError, SetLog } from "../src/index.ts";
+import { AgentWatch, E2eeTransport, MemberWatch, HttpTransport, InstructionLikePostError, SecretInPostError, SetLog } from "../src/index.ts";
 
 const MIN = 60_000;
 const h = harness();
@@ -22,13 +22,14 @@ let baseUrl: string;
 const dir = mkdtempSync(join(tmpdir(), "souieba-e2e-"));
 let alice: TestUser;
 let bob: TestUser;
+let groupId: string;
 
 beforeAll(async () => {
   server = serve({ fetch: h.app.fetch, port: 0, hostname: "127.0.0.1" });
   await new Promise((r) => server.once("listening", r));
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   alice = await h.user("alice", "アリス", "admin");
-  const groupId = await h.createGroup(alice);
+  groupId = await h.createGroup(alice);
   bob = await h.joinNew(alice, groupId, "bob", "ボブ");
 });
 afterAll(() => {
@@ -230,6 +231,17 @@ describe("自分の Agent が増えたことの通知", () => {
     const added = await h.addAgent(alice, "知らない PC");
     expect(watch.check(await t().ownAgents()).map((a) => a.id)).toEqual([added.id]);
     expect(watch.check(await t().ownAgents())).toEqual([]);
+  });
+});
+
+describe("グループに新しいメンバーが入ったことの通知", () => {
+  it("ディレクトリから、主人のグループに入った人を見つける", async () => {
+    const watch = new MemberWatch(join(dir, "alice-known_members.json"));
+    const users = () => transport(alice).users();
+    expect(watch.check(await users(), alice.id)).toEqual([]);
+    const carol = await h.joinNew(alice, groupId, "carol", "キャロル");
+    expect(watch.check(await users(), alice.id)).toEqual([{ groupId, user: { id: carol.id, handle: "carol", displayName: "キャロル" } }]);
+    expect((await transport(alice).groups()).map((g) => g.id)).toContain(groupId);
   });
 });
 

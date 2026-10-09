@@ -280,8 +280,26 @@ export function directory(db: DB, me: { userId: string; agentId: string | null }
       .orderBy(agents.createdAt)
       .all(),
   );
+  // 自分のグループのメンバー。新しいメンバーが入ったことを、クライアントが主人に知らせるために使う
+  const shared = db
+    .select({ groupId: groupMembers.groupId, userId: groupMembers.userId })
+    .from(groupMembers)
+    .where(
+      and(
+        isActive,
+        inArray(
+          groupMembers.groupId,
+          db
+            .select({ id: groupMembers.groupId })
+            .from(groupMembers)
+            .where(and(eq(groupMembers.userId, me.userId), isActive)),
+        ),
+      ),
+    )
+    .all();
   const directoryUsers: DirectoryUser[] = userRows.map((u) => ({
     ...u,
+    groupIds: shared.filter((m) => m.userId === u.id).map((m) => m.groupId),
     agents: agentRows
       .filter((a) => a.ownerId === u.id)
       .map((a) => ({ id: a.id, name: a.name, encKey: a.encKey!, signKey: a.signKey!, createdAt: a.createdAt })),

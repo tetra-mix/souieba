@@ -74,6 +74,10 @@ export class HttpTransport {
   publishEnvelope(envelope: PostEnvelope) {
     return this.client.request<PublishResult>("POST", "/v1/posts", { envelope }, 15_000);
   }
+  /** 自分が入っているグループ。会話の始め（tell）でも呼ぶので、短いタイムアウトにする */
+  async groups() {
+    return (await this.client.request<{ groups: { id: string; name: string }[] }>("GET", "/v1/groups", undefined, this.interactiveMs)).groups;
+  }
   /** 公開鍵ディレクトリ。会話の始め（tell）でも呼ぶので、短いタイムアウトにする */
   keys() {
     return this.client.request<KeyDirectory>("GET", "/v1/keys", undefined, this.interactiveMs);

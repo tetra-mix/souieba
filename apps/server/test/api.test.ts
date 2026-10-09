@@ -268,6 +268,18 @@ describe("グループ", () => {
       { id: alice.agentId, name: "アリスのAgent", encKey: alice.agent.keys.enc.pub, signKey: alice.agent.keys.sign.pub, createdAt: expect.any(String) },
     ]);
   });
+
+  it("ディレクトリの groupIds は、自分といっしょにいるグループだけ（相手が入っている他のグループは見せない）", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const other = await h.createGroup(bob, "ボブだけのグループ");
+    const dir = (await h.call("GET", "/v1/keys", alice.agentToken)).body;
+    const byId = (id: string) => dir.users.find((u: { id: string }) => u.id === id);
+    expect(byId(alice.id).groupIds).toEqual([groupId]);
+    expect(byId(bob.id).groupIds).toEqual([groupId]);
+    // ボブ自身からは、自分の2つのグループが見える
+    const own = (await h.call("GET", "/v1/keys", bob.agentToken)).body.users.find((u: { id: string }) => u.id === bob.id);
+    expect(own.groupIds.sort()).toEqual([groupId, other].sort());
+  });
 });
 
 describe("鍵", () => {
