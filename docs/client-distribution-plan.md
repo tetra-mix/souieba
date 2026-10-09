@@ -121,7 +121,7 @@ git tag v0.2.0 && git push --tags
 
 ### 5.1 サプライチェーンの安全性
 
-このクライアントは Identity 鍵と Agent の秘密鍵を扱う。配布物がすり替えられると E2EE が根本から破れるので、次を守る。
+このクライアントは Agent の秘密鍵とトークンを扱う。配布物がすり替えられると E2EE が根本から破れるので、次を守る。
 
 - publish は GitHub Actions の Trusted Publishing だけで行う。長期の npm トークンを作らない
 - provenance を付け、どのコミットからビルドしたかを検証できるようにする

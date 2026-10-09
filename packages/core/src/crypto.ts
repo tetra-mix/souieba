@@ -6,7 +6,6 @@ import {
   type KeyObject,
   createCipheriv,
   createDecipheriv,
-  createHash,
   createPrivateKey,
   createPublicKey,
   diffieHellman,
@@ -16,7 +15,6 @@ import {
   sign,
   verify,
 } from "node:crypto";
-import { normalizeCode } from "./code.ts";
 import type { EnvelopeRecipient, PostEnvelope, Visibility } from "./types.ts";
 
 export type KeyPair = { pub: string; priv: string };
@@ -33,7 +31,7 @@ function generate(kind: Kind): KeyPair {
   return { pub: jwk.x!, priv: jwk.d! };
 }
 
-/** Identity 鍵・Agent 署名鍵 */
+/** Agent 署名鍵 */
 export const generateSigningKey = () => generate("ed25519");
 /** Agent 暗号鍵 */
 export const generateEncryptionKey = () => generate("x25519");
@@ -66,30 +64,6 @@ export function verifyText(pub: string, text: string, sig: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Identity 公開鍵の指紋（例: 4F2A-91C3-77DE）。招待コードに添えて、サーバの外で照合する */
-export function fingerprint(identityKey: string): string {
-  const hex = createHash("sha256").update(unb64(identityKey)).digest("hex").slice(0, 12).toUpperCase();
-  return hex.replace(/(.{4})(?=.)/g, "$1-");
-}
-
-export function normalizeFingerprint(fp: string): string {
-  return fp.toUpperCase().replace(/[^0-9A-F]/g, "").replace(/(.{4})(?=.)/g, "$1-");
-}
-
-// ---- 署名する文面 ----
-
-export const signedText = {
-  agentCert: (userId: string, encKey: string, signKey: string) => `souieba/agent/v1\n${userId}\n${encKey}\n${signKey}`,
-  groupCreate: (groupId: string, userId: string) => `souieba/group-create/v1\n${groupId}\n${userId}`,
-  invite: (groupId: string, inviterId: string, commit: string) => `souieba/invite/v1\n${groupId}\n${inviterId}\n${commit}`,
-  join: (code: string) => `souieba/join/v1\n${normalizeCode(code)}`,
-};
-
-/** 招待コードへのコミットメント。サーバはここからコードを逆算できない（コードが十分長いため） */
-export function inviteCommit(groupId: string, code: string): string {
-  return b64(createHash("sha256").update(`souieba/invite-code/v1\n${groupId}\n${normalizeCode(code)}`).digest());
 }
 
 // ---- 投稿の封筒 ----

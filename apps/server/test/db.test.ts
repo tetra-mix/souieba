@@ -73,9 +73,7 @@ describe("マイグレーション", () => {
     `);
     migrate(db, { legacyVersion: () => storage.legacyVersion() });
     expect(pendingMigrations(db)).toBe(0);
-    expect(db.select({ handle: schema.users.handle, identityKey: schema.users.identityKey }).from(schema.users).all()).toEqual([
-      { handle: "alice", identityKey: "k" },
-    ]);
+    expect(db.select({ handle: schema.users.handle }).from(schema.users).all()).toEqual([{ handle: "alice" }]);
     // 引き継いだ後も、外部キーの ON DELETE CASCADE が効く
     db.delete(schema.users).run();
     expect(db.select().from(schema.agents).all()).toEqual([]);

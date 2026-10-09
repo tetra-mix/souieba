@@ -7,4 +7,3 @@ export * from "./tell.ts";
 export * from "./tell-text.ts";
 export * from "./code.ts";
 export * from "./crypto.ts";
-export * from "./trust.ts";

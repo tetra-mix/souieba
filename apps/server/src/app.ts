@@ -13,7 +13,7 @@ import * as groups from "./services/groups.ts";
 import * as inboxSvc from "./services/inbox.ts";
 import * as posts from "./services/posts.ts";
 
-export const VERSION = "0.3.0";
+export const VERSION = "0.4.0";
 
 export type AppDeps = {
   db: DB;
@@ -137,8 +137,6 @@ export function createApp(deps: AppDeps) {
         code: z.string().min(1).max(40),
         handle: z.string().optional(),
         displayName: z.string().optional(),
-        identityKey: z.string().max(64).optional(),
-        joinSig: sig.optional(),
       }),
     );
     const r = accounts.redeemCode(db, input, now(), config.limits);
@@ -195,11 +193,10 @@ export function createApp(deps: AppDeps) {
     return c.json({ user: accounts.publicUser(user), agent: agent ? accounts.publicAgent(agent) : null });
   });
 
-  v1.put("/me/identity", async (c) => {
+  v1.patch("/me", async (c) => {
     const a = requireUser(c);
-    const { identityKey } = await body(c, z.object({ identityKey: z.string().max(64) }));
-    accounts.setIdentityKey(db, a.userId, identityKey);
-    return c.body(null, 204);
+    const { displayName } = await body(c, z.object({ displayName: z.string() }));
+    return c.json({ user: accounts.publicUser(accounts.setDisplayName(db, a.userId, displayName)) });
   });
 
   v1.get("/me/export", (c) => {
@@ -225,7 +222,7 @@ export function createApp(deps: AppDeps) {
     const a = requireUser(c);
     const input = await body(
       c,
-      z.object({ name: z.string(), provider: z.string().max(40).optional(), encKey: z.string().max(64), signKey: z.string().max(64), cert: sig }),
+      z.object({ name: z.string(), provider: z.string().max(40).optional(), encKey: z.string().max(64), signKey: z.string().max(64) }),
     );
     const { agent, token } = accounts.createAgent(db, a.userId, input, now());
     return c.json({ agent: accounts.publicAgent(agent), token }, 201);
@@ -235,7 +232,7 @@ export function createApp(deps: AppDeps) {
     return c.body(null, 204);
   });
 
-  // 公開鍵ディレクトリ（User・Agent のどちらでも。検証はクライアントが行う）
+  // 公開鍵ディレクトリ（User・Agent のどちらでも）
   v1.get("/keys", (c) => {
     const a = c.get("auth");
     return c.json(groups.directory(db, { userId: a.userId, agentId: a.agentId }));
@@ -245,7 +242,7 @@ export function createApp(deps: AppDeps) {
   v1.get("/groups", (c) => c.json({ groups: groups.listGroups(db, c.get("auth").userId) }));
   v1.post("/groups", async (c) => {
     const a = requireUser(c);
-    const input = await body(c, z.object({ id: z.string().max(80), name: z.string(), createSig: sig }));
+    const input = await body(c, z.object({ name: z.string() }));
     return c.json(groups.createGroup(db, a, input, { createBy: config.groupCreateBy, limits: config.limits }, now()), 201);
   });
   v1.patch("/groups/:id", async (c) => {
@@ -255,13 +252,13 @@ export function createApp(deps: AppDeps) {
   });
   v1.post("/groups/join", async (c) => {
     const a = requireUser(c);
-    const input = await body(c, z.object({ code: z.string().min(1).max(40), joinSig: sig }));
+    const input = await body(c, z.object({ code: z.string().min(1).max(40) }));
     return c.json(accounts.joinGroup(db, a.userId, input, now(), config.limits), 201);
   });
-  v1.post("/groups/:id/invites", async (c) => {
+  v1.get("/groups/:id/members", (c) => c.json({ members: groups.listMembers(db, requireUser(c).userId, c.req.param("id")) }));
+  v1.post("/groups/:id/invites", (c) => {
     const a = requireUser(c);
-    const input = await body(c, z.object({ codeHash: z.string(), commit: z.string(), inviteSig: sig }));
-    return c.json(groups.createGroupInvite(db, a.userId, c.req.param("id"), input, { inviteBy: config.inviteBy }, now()), 201);
+    return c.json(groups.createGroupInvite(db, a.userId, c.req.param("id"), { inviteBy: config.inviteBy }, now()), 201);
   });
   v1.delete("/groups/:id/members/:userId", (c) => {
     groups.removeMember(db, requireUser(c).userId, c.req.param("id"), c.req.param("userId"), now());

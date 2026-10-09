@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { serve } from "@hono/node-server";
+import { generateEncryptionKey, generateSigningKey } from "@souieba/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../../server/src/app.ts";
 import { loadConfig } from "../../server/src/config.ts";
@@ -59,25 +60,22 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     const { code } = accounts.issueLoginCode(db, u.id, now);
     const login = await souieba("alice", "login", baseUrl, "--code", code);
     expect(login.out).toContain("@alice");
-    expect(login.out).toMatch(/Identity 鍵の指紋: [0-9A-F]{4}-/);
     expect((await souieba("alice", "groups", "create", "研究室")).out).toContain("グループ「研究室」を作りました");
     expect((await souieba("alice", "agent", "add", "OpenClaw")).code).toBe(0);
-    const inv = await souieba("alice", "invite");
-    const invCode = /((?:[A-Z0-9]{4}-){4}[A-Z0-9]{4})/.exec(inv.out)![1]!;
-    const fp = /--verify ([0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4})/.exec(inv.out)![1]!;
+    const inviteCode = async () => /((?:[A-Z0-9]{4}-){2}[A-Z0-9]{4})/.exec((await souieba("alice", "invite")).out)![1]!;
+    const invCode = await inviteCode();
 
-    // 指紋が違えば参加を中止する（サーバによる鍵のすり替えを想定）
-    const inv2 = /((?:[A-Z0-9]{4}-){4}[A-Z0-9]{4})/.exec((await souieba("alice", "invite")).out)![1]!;
-    const wrong = await souieba("eve", "login", baseUrl, "--code", inv2, "--verify", "0000-0000-0000", "--handle", "eve", "--name", "イヴ");
-    expect(wrong.code).toBe(1);
-    expect(wrong.out).toContain("指紋が一致しません");
+    // 同じグループに同じ表示名の人は入れない（Tell 文でなりすませないように）
+    const fake = await souieba("eve", "login", baseUrl, "--code", await inviteCode(), "--handle", "eve", "--name", "アリス");
+    expect(fake.code).toBe(1);
+    expect(fake.out).toContain("同じ表示名");
 
-    const joined = await souieba("bob", "login", baseUrl, "--code", invCode, "--verify", fp, "--handle", "bob", "--name", "ボブ");
+    const joined = await souieba("bob", "login", baseUrl, "--code", invCode, "--handle", "bob", "--name", "ボブ");
     expect(joined.out).toContain("グループ「研究室」に参加しました");
     await souieba("bob", "agent", "add", "Hermes");
     const members = await souieba("bob", "groups", "members");
     expect(members.out).toContain("@alice");
-    expect(members.out).toContain("検証済み");
+    expect(members.out).toMatch(/@bob\tボブ\tmember\t自分/);
 
     // 会話中のメモ（13時台）。秘密情報は拒否される
     expect((await souieba("alice", "note", "主人はM5Stackでロボットを作っていた")).out).toContain("メモしました");
@@ -113,7 +111,21 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     // JSON 出力
     now = new Date("2026-10-05T15:00:00Z");
     const j = JSON.parse((await souieba("bob", "tell", "--json")).out);
-    expect(j).toEqual({ tell: null, pendingPeriods: 0 });
+    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [] });
+
+    // ボブのアカウントに知らない Agent が足されたら（User トークンの漏洩を想定）、次の tell で一度だけ知らせる
+    const bobId = accounts.getUserByHandle(db, "bob")!.id;
+    const { agent: added } = accounts.createAgent(
+      db,
+      bobId,
+      { name: "知らない PC", encKey: generateEncryptionKey().pub, signKey: generateSigningKey().pub },
+      now,
+    );
+    const notice = await souieba("bob", "tell");
+    expect(notice.out).toContain(`新しい Agent「知らない PC」（${added.id}`);
+    expect(notice.out).toContain(`souieba agent revoke ${added.id}`);
+    expect((await souieba("bob", "tell")).out).not.toContain("新しい Agent");
+    expect((await souieba("bob", "doctor")).out).toContain(`この PC にない Agent「知らない PC」`);
   });
 
   it("投稿待ちがあると tell が知らせる（cron のないエージェント向けの追いつき）", { timeout: 30_000 }, async () => {

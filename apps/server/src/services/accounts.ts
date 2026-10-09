@@ -1,11 +1,11 @@
-import { AGENT_SCOPES, isPublicKey, signedText, verifyText } from "@souieba/core";
+import { AGENT_SCOPES, isPublicKey } from "@souieba/core";
 import { and, count, eq, isNull, ne } from "drizzle-orm";
 import type { Limits } from "../config.ts";
 import { newCode, newId, newToken, sha256 } from "../crypto.ts";
 import type { DB } from "../db/index.ts";
 import { type AgentRow, type UserRow, agents, credentials, invites, users } from "../db/schema.ts";
 import { badRequest, conflict, notFound } from "../errors.ts";
-import { deleteEmptyGroups, findUsableInvite, joinWithInvite } from "./groups.ts";
+import { deleteEmptyGroups, displayNameTakenAmongCoMembers, findUsableInvite, joinWithInvite } from "./groups.ts";
 
 export type { AgentRow, UserRow };
 
@@ -19,7 +19,6 @@ export function publicUser(u: UserRow) {
     handle: u.handle,
     displayName: u.displayName,
     role: u.role,
-    identityKey: u.identityKey,
     createdAt: u.createdAt,
   };
 }
@@ -32,21 +31,20 @@ export function getUserByHandle(db: DB, handle: string): UserRow | undefined {
   return db.select().from(users).where(eq(users.handle, handle)).get();
 }
 
-function validateProfile(handle: string, displayName: string) {
-  if (!HANDLE_RE.test(handle)) throw badRequest("invalid_handle", "handle は英小文字・数字・_ の2〜20文字にしてください");
+export function validateDisplayName(displayName: string): string {
   const name = displayName.trim();
   if (name.length < 1 || name.length > 40) throw badRequest("invalid_display_name", "表示名は1〜40文字にしてください");
   return name;
 }
 
-function requireIdentityKey(key: unknown): string {
-  if (!isPublicKey("ed25519", key)) throw badRequest("invalid_identity_key", "Identity 鍵（Ed25519 の公開鍵）が必要です");
-  return key;
+function validateProfile(handle: string, displayName: string) {
+  if (!HANDLE_RE.test(handle)) throw badRequest("invalid_handle", "handle は英小文字・数字・_ の2〜20文字にしてください");
+  return validateDisplayName(displayName);
 }
 
 export function createUser(
   db: DB,
-  input: { handle: string; displayName: string; role?: "admin" | "member"; identityKey?: string | null },
+  input: { handle: string; displayName: string; role?: "admin" | "member" },
   now: Date,
   limits?: Pick<Limits, "maxUsers">,
 ): UserRow {
@@ -63,22 +61,24 @@ export function createUser(
       handle: input.handle,
       displayName,
       role: input.role ?? "member",
-      identityKey: input.identityKey ?? null,
       createdAt: now.toISOString(),
     })
     .returning()
     .get();
 }
 
-/** Identity 鍵の登録。サーバが勝手に差し替えられないよう、未登録のときだけ受け付ける */
-export function setIdentityKey(db: DB, userId: string, key: unknown): void {
-  const updated = db
-    .update(users)
-    .set({ identityKey: requireIdentityKey(key) })
-    .where(and(eq(users.id, userId), isNull(users.identityKey)))
-    .returning({ id: users.id })
-    .all();
-  if (updated.length === 0) throw conflict("identity_exists", "Identity 鍵はすでに登録されています");
+/**
+ * 表示名の変更。Tell 文（「あ、そういえば○○さん、…」）で人を見分けられるよう、
+ * いっしょにいるグループのメンバーと同じ表示名にはできない。
+ */
+export function setDisplayName(db: DB, userId: string, displayName: string): UserRow {
+  const name = validateDisplayName(displayName);
+  return db.transaction(() => {
+    if (displayNameTakenAmongCoMembers(db, userId, name)) {
+      throw conflict("display_name_taken", "同じグループに、同じ表示名の人がいます。別の表示名にしてください");
+    }
+    return db.update(users).set({ displayName: name }).where(eq(users.id, userId)).returning().get();
+  });
 }
 
 /** admin 専用トークンの scope。User トークンと同じ kind = 'user' の行に入れ、scope で見分ける */
@@ -157,10 +157,7 @@ export function issueLoginCode(db: DB, userId: string, now: Date): { code: strin
   return { code, expiresAt };
 }
 
-/**
- * アカウント作成用の招待コード（どのグループにも入らない）。管理者が発行する。
- * グループへの招待はメンバーのクライアントが署名して作る（groups.createGroupInvite）。
- */
+/** アカウント作成用の招待コード（どのグループにも入らない）。管理者が発行する。グループへの招待は groups.createGroupInvite */
 export function createAccountInvite(db: DB, now: Date): { code: string; expiresAt: string } {
   const code = newCode();
   const expiresAt = new Date(now.getTime() + ACCOUNT_INVITE_TTL_MS).toISOString();
@@ -174,15 +171,13 @@ export type RedeemInput = {
   code: string;
   handle?: string;
   displayName?: string;
-  identityKey?: string;
-  joinSig?: string;
 };
 
 export type RedeemResult = {
   user: UserRow;
   token: string;
   group: { id: string; name: string } | null;
-  inviter: { id: string; handle: string; displayName: string; identityKey: string } | null;
+  inviter: { id: string; handle: string; displayName: string } | null;
 };
 
 function markInviteUsed(db: DB, inviteId: string, userId: string, now: Date) {
@@ -208,23 +203,15 @@ export function redeemCode(db: DB, input: RedeemInput, now: Date, limits: Limits
           ),
         )
         .run();
-      // 移行前のユーザーは、ここで Identity 鍵を登録できる（未登録のときだけ）
-      if (!user.identityKey && input.identityKey) {
-        db.update(users)
-          .set({ identityKey: requireIdentityKey(input.identityKey) })
-          .where(eq(users.id, user.id))
-          .run();
-      }
       markInviteUsed(db, inv.id, user.id, now);
-      return { user: getUser(db, user.id)!, token: issueCredential(db, "user", user.id, null, now), group: null, inviter: null };
+      return { user, token: issueCredential(db, "user", user.id, null, now), group: null, inviter: null };
     }
 
     if (!input.handle || !input.displayName) throw badRequest("profile_required", "handle と displayName が必要です");
-    const identityKey = requireIdentityKey(input.identityKey);
-    const user = createUser(db, { handle: input.handle, displayName: input.displayName, identityKey }, now, limits);
+    const user = createUser(db, { handle: input.handle, displayName: input.displayName }, now, limits);
     let joined: Pick<RedeemResult, "group" | "inviter"> = { group: null, inviter: null };
     if (inv.groupId) {
-      joined = joinWithInvite(db, inv, { userId: user.id, identityKey, code: input.code, joinSig: input.joinSig }, now, limits);
+      joined = joinWithInvite(db, inv, user, now, limits);
     } else {
       markInviteUsed(db, inv.id, user.id, now);
     }
@@ -233,13 +220,11 @@ export function redeemCode(db: DB, input: RedeemInput, now: Date, limits: Limits
 }
 
 /** 既存のユーザーが招待コードで別のグループに参加する */
-export function joinGroup(db: DB, userId: string, input: { code: string; joinSig?: string }, now: Date, limits: Limits) {
+export function joinGroup(db: DB, userId: string, input: { code: string }, now: Date, limits: Limits) {
   return db.transaction(() => {
     const inv = findUsableInvite(db, input.code, now);
     if (inv.kind !== "invite" || !inv.groupId) throw badRequest("invalid_code", "コードが無効か、期限が切れています");
-    const user = getUser(db, userId)!;
-    if (!user.identityKey) throw conflict("identity_required", "Identity 鍵が未登録です");
-    return joinWithInvite(db, inv, { userId, identityKey: user.identityKey, code: input.code, joinSig: input.joinSig }, now, limits);
+    return joinWithInvite(db, inv, getUser(db, userId)!, now, limits);
   });
 }
 
@@ -250,31 +235,25 @@ export function publicAgent(a: AgentRow) {
     provider: a.provider,
     encKey: a.encKey,
     signKey: a.signKey,
-    cert: a.cert,
     revokedAt: a.revokedAt,
     createdAt: a.createdAt,
   };
 }
 
 /**
- * Agent の登録。鍵と、持ち主の Identity 鍵による証明書が必須。
- * サーバが証明書を検証するのはゴミを入れないため（信頼の根拠は受信側の検証）。
+ * Agent の登録。暗号鍵（X25519）と署名鍵（Ed25519）の公開鍵が必須。
+ * 受信側はサーバが配るこの鍵をそのまま使う（サーバを信頼する。docs/public-deployment-plan.md §5）
  */
 export function createAgent(
   db: DB,
   ownerId: string,
-  input: { name: string; provider?: string; encKey: string; signKey: string; cert: string },
+  input: { name: string; provider?: string; encKey: string; signKey: string },
   now: Date,
 ): { agent: AgentRow; token: string } {
   const name = input.name.trim();
   if (name.length < 1 || name.length > 40) throw badRequest("invalid_name", "Agent 名は1〜40文字にしてください");
   if (!isPublicKey("x25519", input.encKey) || !isPublicKey("ed25519", input.signKey)) {
     throw badRequest("invalid_agent_keys", "Agent の鍵の形式が不正です");
-  }
-  const owner = getUser(db, ownerId)!;
-  if (!owner.identityKey) throw conflict("identity_required", "先に Identity 鍵を登録してください");
-  if (!verifyText(owner.identityKey, signedText.agentCert(ownerId, input.encKey, input.signKey), input.cert)) {
-    throw badRequest("invalid_signature", "Agent の証明書を検証できません");
   }
   return db.transaction(() => {
     const agent = db
@@ -286,7 +265,6 @@ export function createAgent(
         provider: input.provider ?? null,
         encKey: input.encKey,
         signKey: input.signKey,
-        cert: input.cert,
         createdAt: now.toISOString(),
       })
       .returning()
