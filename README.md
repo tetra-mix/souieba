@@ -142,7 +142,7 @@ npx wrangler secret delete SOUIEBA_BOOTSTRAP_TOKEN
 SOUIEBA_ADMIN_TOKEN=... pnpm admin --url https://souieba.example.com create-user --handle alice --name アリス
 ```
 
-- `*.workers.dev` では Cloudflare Access がかからないので無効にしています（`workers_dev = false`）。自分のドメインの routes で公開してください
+- 今の設定は `*.workers.dev`（`https://souieba.ryouma1128.workers.dev`）で公開しています。workers.dev では Cloudflare Access を `/v1/admin/*` だけにかけられず、WAF のレート制限ルールも使えないので、admin API は admin 専用トークンと Worker の中のレート制限だけで守ります。自分のドメインに移すときは `workers_dev = false` にして routes を足し、下の Access と WAF を設定してください（利用者は `souieba login` し直す必要があります）
 - `/v1/admin/*` には Cloudflare Access をかけることを推奨します。かけた場合は `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`（service token）を設定して `souieba-admin --url` を使います
 - 招待コードの使用（`/v1/auth/redeem`）とブートストラップには、WAF のレート制限ルールを IP 単位でかけることを推奨します。Worker 側でも IP ごとに、全体で 1分 120 回、この2つは 1分 10 回までに制限しています（`[[ratelimits]]`）。Durable Object の中の制限（招待コードは 1時間 10 回など）はメモリ上にあり、Durable Object が入れ替わると数え直しになるためです
 - ブートストラップの秘密が設定されていると、有効な admin がいなくなったとき（唯一の admin がアカウントを削除したときなど）にまた使えるようになります。これは admin を失ったときの復旧手段です。普段は秘密を消しておいてください
