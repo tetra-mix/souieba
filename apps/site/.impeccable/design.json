@@ -1,0 +1,678 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-08T15:53:58+00:00",
+  "title": "Design System: Souieba",
+  "extensions": {
+    "colorMeta": {
+      "sl-color-white": {
+        "role": "neutral",
+        "displayName": "文字（最も強い）（ダーク）",
+        "canonical": "hsl(0, 0%, 98%)",
+        "cssVar": "--sl-color-white",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(0, 0%, 15%)",
+          "hsl(0, 0%, 26%)",
+          "hsl(0, 0%, 38%)",
+          "hsl(0, 0%, 50%)",
+          "hsl(0, 0%, 62%)",
+          "hsl(0, 0%, 74%)",
+          "hsl(0, 0%, 85%)",
+          "hsl(0, 0%, 95%)"
+        ]
+      },
+      "sl-color-gray-1": {
+        "role": "neutral",
+        "displayName": "本文グレー 1（ダーク）",
+        "canonical": "hsl(240, 5%, 88%)",
+        "cssVar": "--sl-color-gray-1",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "sl-color-gray-2": {
+        "role": "neutral",
+        "displayName": "本文グレー 2（ダーク）",
+        "canonical": "hsl(240, 5%, 70%)",
+        "cssVar": "--sl-color-gray-2",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "sl-color-gray-3": {
+        "role": "neutral",
+        "displayName": "説明グレー（ダーク）",
+        "canonical": "hsl(240, 4%, 52%)",
+        "cssVar": "--sl-color-gray-3",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(240, 4%, 15%)",
+          "hsl(240, 4%, 26%)",
+          "hsl(240, 4%, 38%)",
+          "hsl(240, 4%, 50%)",
+          "hsl(240, 4%, 62%)",
+          "hsl(240, 4%, 74%)",
+          "hsl(240, 4%, 85%)",
+          "hsl(240, 4%, 95%)"
+        ]
+      },
+      "sl-color-gray-4": {
+        "role": "neutral",
+        "displayName": "控えめな印 4（ダーク）",
+        "canonical": "hsl(240, 4%, 32%)",
+        "cssVar": "--sl-color-gray-4",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(240, 4%, 15%)",
+          "hsl(240, 4%, 26%)",
+          "hsl(240, 4%, 38%)",
+          "hsl(240, 4%, 50%)",
+          "hsl(240, 4%, 62%)",
+          "hsl(240, 4%, 74%)",
+          "hsl(240, 4%, 85%)",
+          "hsl(240, 4%, 95%)"
+        ]
+      },
+      "sl-color-gray-5": {
+        "role": "neutral",
+        "displayName": "控えめな印 5（ダーク）",
+        "canonical": "hsl(240, 4%, 17%)",
+        "cssVar": "--sl-color-gray-5",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(240, 4%, 15%)",
+          "hsl(240, 4%, 26%)",
+          "hsl(240, 4%, 38%)",
+          "hsl(240, 4%, 50%)",
+          "hsl(240, 4%, 62%)",
+          "hsl(240, 4%, 74%)",
+          "hsl(240, 4%, 85%)",
+          "hsl(240, 4%, 95%)"
+        ]
+      },
+      "sl-color-gray-6": {
+        "role": "neutral",
+        "displayName": "Starlight の面（ダーク）",
+        "canonical": "hsl(240, 5%, 9%)",
+        "cssVar": "--sl-color-gray-6",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "sl-color-black": {
+        "role": "neutral",
+        "displayName": "地（ダーク）",
+        "canonical": "hsl(0, 0%, 4%)",
+        "cssVar": "--sl-color-black",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(0, 0%, 15%)",
+          "hsl(0, 0%, 26%)",
+          "hsl(0, 0%, 38%)",
+          "hsl(0, 0%, 50%)",
+          "hsl(0, 0%, 62%)",
+          "hsl(0, 0%, 74%)",
+          "hsl(0, 0%, 85%)",
+          "hsl(0, 0%, 95%)"
+        ]
+      },
+      "sl-color-accent-low": {
+        "role": "primary",
+        "displayName": "淡い青（ダーク）",
+        "canonical": "hsl(214, 60%, 16%)",
+        "cssVar": "--sl-color-accent-low",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(214, 60%, 15%)",
+          "hsl(214, 60%, 26%)",
+          "hsl(214, 60%, 38%)",
+          "hsl(214, 60%, 50%)",
+          "hsl(214, 60%, 62%)",
+          "hsl(214, 60%, 74%)",
+          "hsl(214, 60%, 85%)",
+          "hsl(214, 60%, 95%)"
+        ]
+      },
+      "sl-color-accent": {
+        "role": "primary",
+        "displayName": "控えめな青（ダーク）",
+        "canonical": "hsl(212, 100%, 62%)",
+        "cssVar": "--sl-color-accent",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(212, 100%, 15%)",
+          "hsl(212, 100%, 26%)",
+          "hsl(212, 100%, 38%)",
+          "hsl(212, 100%, 50%)",
+          "hsl(212, 100%, 62%)",
+          "hsl(212, 100%, 74%)",
+          "hsl(212, 100%, 85%)",
+          "hsl(212, 100%, 95%)"
+        ]
+      },
+      "sl-color-accent-high": {
+        "role": "primary",
+        "displayName": "濃い青（ダーク）",
+        "canonical": "hsl(212, 100%, 80%)",
+        "cssVar": "--sl-color-accent-high",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(212, 100%, 15%)",
+          "hsl(212, 100%, 26%)",
+          "hsl(212, 100%, 38%)",
+          "hsl(212, 100%, 50%)",
+          "hsl(212, 100%, 62%)",
+          "hsl(212, 100%, 74%)",
+          "hsl(212, 100%, 85%)",
+          "hsl(212, 100%, 95%)"
+        ]
+      },
+      "sb-border": {
+        "role": "neutral",
+        "displayName": "罫線（ダーク）",
+        "canonical": "hsl(240, 4%, 16%)",
+        "cssVar": "--sb-border",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(240, 4%, 15%)",
+          "hsl(240, 4%, 26%)",
+          "hsl(240, 4%, 38%)",
+          "hsl(240, 4%, 50%)",
+          "hsl(240, 4%, 62%)",
+          "hsl(240, 4%, 74%)",
+          "hsl(240, 4%, 85%)",
+          "hsl(240, 4%, 95%)"
+        ]
+      },
+      "sb-surface": {
+        "role": "neutral",
+        "displayName": "一段上の面（ダーク）",
+        "canonical": "hsl(240, 5%, 7%)",
+        "cssVar": "--sb-surface",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "sb-tell": {
+        "role": "primary",
+        "displayName": "Tell の青（ダーク）",
+        "canonical": "hsl(212, 100%, 72%)",
+        "cssVar": "--sb-tell",
+        "theme": "dark",
+        "tonalRamp": [
+          "hsl(212, 100%, 15%)",
+          "hsl(212, 100%, 26%)",
+          "hsl(212, 100%, 38%)",
+          "hsl(212, 100%, 50%)",
+          "hsl(212, 100%, 62%)",
+          "hsl(212, 100%, 74%)",
+          "hsl(212, 100%, 85%)",
+          "hsl(212, 100%, 95%)"
+        ]
+      },
+      "light-sl-color-white": {
+        "role": "neutral",
+        "displayName": "文字（最も強い）（ライト）",
+        "canonical": "hsl(240, 10%, 6%)",
+        "cssVar": "--sl-color-white",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 10%, 15%)",
+          "hsl(240, 10%, 26%)",
+          "hsl(240, 10%, 38%)",
+          "hsl(240, 10%, 50%)",
+          "hsl(240, 10%, 62%)",
+          "hsl(240, 10%, 74%)",
+          "hsl(240, 10%, 85%)",
+          "hsl(240, 10%, 95%)"
+        ]
+      },
+      "light-sl-color-gray-1": {
+        "role": "neutral",
+        "displayName": "本文グレー 1（ライト）",
+        "canonical": "hsl(240, 6%, 14%)",
+        "cssVar": "--sl-color-gray-1",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 6%, 15%)",
+          "hsl(240, 6%, 26%)",
+          "hsl(240, 6%, 38%)",
+          "hsl(240, 6%, 50%)",
+          "hsl(240, 6%, 62%)",
+          "hsl(240, 6%, 74%)",
+          "hsl(240, 6%, 85%)",
+          "hsl(240, 6%, 95%)"
+        ]
+      },
+      "light-sl-color-gray-2": {
+        "role": "neutral",
+        "displayName": "本文グレー 2（ライト）",
+        "canonical": "hsl(240, 5%, 28%)",
+        "cssVar": "--sl-color-gray-2",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "light-sl-color-gray-3": {
+        "role": "neutral",
+        "displayName": "説明グレー（ライト）",
+        "canonical": "hsl(240, 4%, 44%)",
+        "cssVar": "--sl-color-gray-3",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 4%, 15%)",
+          "hsl(240, 4%, 26%)",
+          "hsl(240, 4%, 38%)",
+          "hsl(240, 4%, 50%)",
+          "hsl(240, 4%, 62%)",
+          "hsl(240, 4%, 74%)",
+          "hsl(240, 4%, 85%)",
+          "hsl(240, 4%, 95%)"
+        ]
+      },
+      "light-sl-color-gray-4": {
+        "role": "neutral",
+        "displayName": "控えめな印 4（ライト）",
+        "canonical": "hsl(240, 4%, 62%)",
+        "cssVar": "--sl-color-gray-4",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 4%, 15%)",
+          "hsl(240, 4%, 26%)",
+          "hsl(240, 4%, 38%)",
+          "hsl(240, 4%, 50%)",
+          "hsl(240, 4%, 62%)",
+          "hsl(240, 4%, 74%)",
+          "hsl(240, 4%, 85%)",
+          "hsl(240, 4%, 95%)"
+        ]
+      },
+      "light-sl-color-gray-5": {
+        "role": "neutral",
+        "displayName": "控えめな印 5（ライト）",
+        "canonical": "hsl(240, 5%, 87%)",
+        "cssVar": "--sl-color-gray-5",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "light-sl-color-gray-6": {
+        "role": "neutral",
+        "displayName": "Starlight の面（ライト）",
+        "canonical": "hsl(240, 5%, 94%)",
+        "cssVar": "--sl-color-gray-6",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "light-sl-color-gray-7": {
+        "role": "neutral",
+        "displayName": "Starlight の面（ライト）",
+        "canonical": "hsl(240, 5%, 97%)",
+        "cssVar": "--sl-color-gray-7",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "light-sl-color-black": {
+        "role": "neutral",
+        "displayName": "地（ライト）",
+        "canonical": "hsl(0, 0%, 100%)",
+        "cssVar": "--sl-color-black",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(0, 0%, 15%)",
+          "hsl(0, 0%, 26%)",
+          "hsl(0, 0%, 38%)",
+          "hsl(0, 0%, 50%)",
+          "hsl(0, 0%, 62%)",
+          "hsl(0, 0%, 74%)",
+          "hsl(0, 0%, 85%)",
+          "hsl(0, 0%, 95%)"
+        ]
+      },
+      "light-sl-color-accent-low": {
+        "role": "primary",
+        "displayName": "淡い青（ライト）",
+        "canonical": "hsl(212, 100%, 94%)",
+        "cssVar": "--sl-color-accent-low",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(212, 100%, 15%)",
+          "hsl(212, 100%, 26%)",
+          "hsl(212, 100%, 38%)",
+          "hsl(212, 100%, 50%)",
+          "hsl(212, 100%, 62%)",
+          "hsl(212, 100%, 74%)",
+          "hsl(212, 100%, 85%)",
+          "hsl(212, 100%, 95%)"
+        ]
+      },
+      "light-sl-color-accent": {
+        "role": "primary",
+        "displayName": "控えめな青（ライト）",
+        "canonical": "hsl(212, 100%, 45%)",
+        "cssVar": "--sl-color-accent",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(212, 100%, 15%)",
+          "hsl(212, 100%, 26%)",
+          "hsl(212, 100%, 38%)",
+          "hsl(212, 100%, 50%)",
+          "hsl(212, 100%, 62%)",
+          "hsl(212, 100%, 74%)",
+          "hsl(212, 100%, 85%)",
+          "hsl(212, 100%, 95%)"
+        ]
+      },
+      "light-sl-color-accent-high": {
+        "role": "primary",
+        "displayName": "濃い青（ライト）",
+        "canonical": "hsl(214, 100%, 35%)",
+        "cssVar": "--sl-color-accent-high",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(214, 100%, 15%)",
+          "hsl(214, 100%, 26%)",
+          "hsl(214, 100%, 38%)",
+          "hsl(214, 100%, 50%)",
+          "hsl(214, 100%, 62%)",
+          "hsl(214, 100%, 74%)",
+          "hsl(214, 100%, 85%)",
+          "hsl(214, 100%, 95%)"
+        ]
+      },
+      "light-sb-border": {
+        "role": "neutral",
+        "displayName": "罫線（ライト）",
+        "canonical": "hsl(240, 5%, 89%)",
+        "cssVar": "--sb-border",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "light-sb-surface": {
+        "role": "neutral",
+        "displayName": "一段上の面（ライト）",
+        "canonical": "hsl(240, 5%, 98%)",
+        "cssVar": "--sb-surface",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(240, 5%, 15%)",
+          "hsl(240, 5%, 26%)",
+          "hsl(240, 5%, 38%)",
+          "hsl(240, 5%, 50%)",
+          "hsl(240, 5%, 62%)",
+          "hsl(240, 5%, 74%)",
+          "hsl(240, 5%, 85%)",
+          "hsl(240, 5%, 95%)"
+        ]
+      },
+      "light-sb-tell": {
+        "role": "primary",
+        "displayName": "Tell の青（ライト）",
+        "canonical": "hsl(212, 100%, 42%)",
+        "cssVar": "--sb-tell",
+        "theme": "light",
+        "tonalRamp": [
+          "hsl(212, 100%, 15%)",
+          "hsl(212, 100%, 26%)",
+          "hsl(212, 100%, 38%)",
+          "hsl(212, 100%, 50%)",
+          "hsl(212, 100%, 62%)",
+          "hsl(212, 100%, 74%)",
+          "hsl(212, 100%, 85%)",
+          "hsl(212, 100%, 95%)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "トップのヒーロー見出しだけ。最大幅 14em、中央揃え。"
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "トップの節見出しと結びの見出し。中央揃え。"
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "パネルの中の小見出し。"
+      },
+      "lead": {
+        "displayName": "Lead",
+        "purpose": "見出しの下に一文だけ添える説明。最大幅 34rem、sl-color-gray-3。"
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "パネル内の説明文とリスト。ガイドページ本文は Starlight の 1rem。"
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "ボタンの文字。"
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "端末ウィンドウの本文。"
+      },
+      "mono-sm": {
+        "displayName": "Mono Small",
+        "purpose": "コマンドの枠、端末のタイトル、手順番号、ツール出力。"
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "state-change",
+        "value": "0.15s ease-out",
+        "purpose": "ボタンの面の色と罫線の色の変化。"
+      },
+      {
+        "name": "tell-arrive",
+        "value": "0.9s cubic-bezier(0.16, 1, 0.3, 1) 0.6s",
+        "purpose": "端末の Tell の一行だけが、0.35rem 下・不透明度 0.35 から現れる。prefers-reduced-motion: no-preference のときのみ。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "wide",
+        "value": "50rem"
+      }
+    ],
+    "focus": {
+      "value": "outline: 2px solid var(--sl-color-accent); outline-offset: 2px",
+      "purpose": "すべての :focus-visible。"
+    },
+    "themes": {
+      "default": "dark (:root)",
+      "light": ":root[data-theme=\"light\"] — frontmatter の light- 接頭辞の値"
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "文字色の面に地の色の文字。ダークで白、ライトで黒。ヒーローと結びの主操作。",
+      "html": "<a class=\"ds-btn ds-btn-primary\" href=\"#\">はじめかた</a>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;gap:.4rem;height:2.5rem;padding:0 1.1rem;border-radius:.5rem;font-family:var(--sl-font);font-size:.875rem;font-weight:500;text-decoration:none;border:0;cursor:pointer;transition:background-color .15s ease-out,border-color .15s ease-out}.ds-btn:focus-visible{outline:2px solid var(--sl-color-accent);outline-offset:2px}.ds-btn-primary{background:var(--sl-color-white);color:var(--sl-color-black)}.ds-btn-primary:hover{background:var(--sl-color-gray-1)}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "地の色の面に 1px の罫線。主ボタンの隣に一つだけ置く。",
+      "html": "<a class=\"ds-btn ds-btn-secondary\" href=\"#\">GitHub</a>",
+      "css": ".ds-btn{display:inline-flex;align-items:center;gap:.4rem;height:2.5rem;padding:0 1.1rem;border-radius:.5rem;font-family:var(--sl-font);font-size:.875rem;font-weight:500;text-decoration:none;border:0;cursor:pointer;transition:background-color .15s ease-out,border-color .15s ease-out}.ds-btn:focus-visible{outline:2px solid var(--sl-color-accent);outline-offset:2px}.ds-btn-secondary{background:var(--sl-color-black);color:var(--sl-color-white);border:1px solid var(--sb-border)}.ds-btn-secondary:hover{border-color:var(--sl-color-gray-4)}"
+    },
+    {
+      "name": "Terminal Window",
+      "kind": "custom",
+      "refersTo": "terminal-body",
+      "description": "この系の主役。会話の例の最後の行が Tell で、sb-tell の青で届く。",
+      "html": "<figure class=\"ds-term\"><div class=\"ds-term-bar\"><span class=\"ds-term-dots\"><i></i><i></i><i></i></span><span class=\"ds-term-title\">claude — ~/lab/thesis</span></div><div class=\"ds-term-body\"><p class=\"ds-term-user\"><span class=\"ds-term-dim\">&gt;</span> このテスト、なんで落ちるんだろう？</p><p><span class=\"ds-term-dim\">⏺</span> 期限の比較でタイムゾーンを見ていないためです。</p><p class=\"ds-term-tell\">あ、そういえばアリスさん、研究室の発表スライドを作っていたみたいですよ。</p></div><figcaption class=\"ds-term-cap\">会話は例です。</figcaption></figure>",
+      "css": ".ds-term{margin:0}.ds-term-bar,.ds-term-body{border:1px solid var(--sb-border);background:var(--sb-surface)}.ds-term-bar{position:relative;display:flex;align-items:center;justify-content:center;height:2.5rem;border-bottom:0;border-radius:.75rem .75rem 0 0}.ds-term-dots{position:absolute;left:1rem;display:flex;gap:.4rem}.ds-term-dots i{width:.65rem;height:.65rem;border-radius:50%;background:var(--sl-color-gray-5)}.ds-term-title{font-family:var(--sl-font-mono);font-size:.8125rem;color:var(--sl-color-gray-3)}.ds-term-body{display:grid;gap:.9rem;padding:1.75rem 2rem 2rem;border-radius:0 0 .75rem .75rem;font-family:var(--sl-font-mono);font-size:.875rem;line-height:1.75;color:var(--sl-color-gray-1)}.ds-term-body p{margin:0}.ds-term-user{color:var(--sl-color-white)}.ds-term-dim{margin-inline-end:.5rem;color:var(--sl-color-gray-3)}.ds-term-tell{padding-inline-start:1.35rem;font-size:1rem;color:var(--sb-tell);animation:ds-arrive .9s cubic-bezier(.16,1,.3,1) .6s both}@media (prefers-reduced-motion:reduce){.ds-term-tell{animation:none}}@keyframes ds-arrive{from{opacity:.35;transform:translateY(.35rem)}}.ds-term-cap{margin-top:.75rem;font-size:.8125rem;color:var(--sl-color-gray-3);text-align:center}"
+    },
+    {
+      "name": "Command Steps",
+      "kind": "card",
+      "refersTo": "panel-group",
+      "description": "一つの 12px の外枠の中を罫線で仕切った手順の段。番号・小見出し・説明・コマンド。",
+      "html": "<ol class=\"ds-steps\"><li><span class=\"ds-no\">1</span><h3>会話の中でメモする</h3><p>メモは手元の PC にだけ保存されます。</p><pre class=\"ds-cmd\"><span class=\"ds-ps\">$</span> souieba note \"…\"</pre></li><li><span class=\"ds-no\">2</span><h3>会話の始まりに受け取る</h3><p>近況を1件だけ受け取ります。</p><pre class=\"ds-cmd\"><span class=\"ds-ps\">$</span> souieba tell</pre></li></ol>",
+      "css": ".ds-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fit,minmax(14rem,1fr));border:1px solid var(--sb-border);border-radius:.75rem;overflow:hidden}.ds-steps li{display:flex;flex-direction:column;gap:.6rem;padding:1.75rem 1.5rem;background:var(--sl-color-black)}.ds-steps li+li{border-left:1px solid var(--sb-border)}.ds-no{display:grid;place-content:center;width:1.75rem;height:1.75rem;border:1px solid var(--sb-border);border-radius:.4rem;font-family:var(--sl-font-mono);font-size:.8125rem;color:var(--sl-color-gray-2)}.ds-steps h3{margin:.4rem 0 0;font-family:var(--sl-font);font-size:1.125rem;font-weight:600;letter-spacing:-.01em;color:var(--sl-color-white)}.ds-steps p{margin:0;font-family:var(--sl-font);font-size:.875rem;line-height:1.8;color:var(--sl-color-gray-3)}.ds-cmd{margin:auto 0 0;padding:.7rem .9rem;border:1px solid var(--sb-border);border-radius:.5rem;background:var(--sb-surface);font-family:var(--sl-font-mono);font-size:.8125rem;color:var(--sl-color-gray-1);white-space:pre-wrap}.ds-ps{color:var(--sl-color-gray-4)}"
+    },
+    {
+      "name": "Comparison Panel",
+      "kind": "card",
+      "refersTo": "panel-group",
+      "description": "見えるもの・見えないものを並べる2列。2列目だけ sb-surface。行頭は短い横線。",
+      "html": "<div class=\"ds-vis\"><div class=\"ds-col\"><h3>サーバに見えるもの</h3><ul><li>暗号化された投稿</li><li>誰がいつ投稿したか</li></ul></div><div class=\"ds-col\"><h3>サーバに見えないもの</h3><ul><li>投稿の本文</li><li>手元のメモ</li></ul></div></div>",
+      "css": ".ds-vis{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--sb-border);border-radius:.75rem;overflow:hidden;font-family:var(--sl-font)}.ds-col{padding:1.75rem 1.5rem}.ds-col+.ds-col{border-left:1px solid var(--sb-border);background:var(--sb-surface)}.ds-col h3{margin:0 0 1rem;font-size:1rem;font-weight:600;color:var(--sl-color-white)}.ds-col ul{list-style:none;margin:0;padding:0;display:grid;gap:.6rem}.ds-col li{position:relative;padding-inline-start:1.25rem;font-size:.875rem;line-height:1.7;color:var(--sl-color-gray-2)}.ds-col li::before{content:\"\";position:absolute;left:.15rem;top:.7em;width:.4rem;height:1px;background:var(--sl-color-gray-4)}"
+    },
+    {
+      "name": "Coda",
+      "kind": "card",
+      "refersTo": "coda",
+      "description": "ページの結び。sb-surface の箱に見出し・一文・ボタンを中央に置く。",
+      "html": "<div class=\"ds-coda\"><h2>招待コードを受け取ったら</h2><p>セットアップはエージェントに頼めます。</p><div class=\"ds-coda-actions\"><a class=\"ds-coda-btn ds-coda-primary\" href=\"#\">はじめかた</a><a class=\"ds-coda-btn ds-coda-secondary\" href=\"#\">仕組みを見る</a></div></div>",
+      "css": ".ds-coda{padding:4rem 1.5rem;border:1px solid var(--sb-border);border-radius:.75rem;background:var(--sb-surface);text-align:center;font-family:var(--sl-font)}.ds-coda h2{margin:0;font-weight:600;font-size:clamp(1.5rem,1.1rem + 1.6vw,2.25rem);letter-spacing:-.02em;line-height:1.3;color:var(--sl-color-white)}.ds-coda p{margin:.75rem 0 0;color:var(--sl-color-gray-3)}.ds-coda-actions{display:flex;justify-content:center;gap:.75rem;margin-top:2rem}.ds-coda-btn{display:inline-flex;align-items:center;height:2.5rem;padding:0 1.1rem;border-radius:.5rem;font-size:.875rem;font-weight:500;text-decoration:none;transition:background-color .15s ease-out,border-color .15s ease-out}.ds-coda-btn:focus-visible{outline:2px solid var(--sl-color-accent);outline-offset:2px}.ds-coda-primary{background:var(--sl-color-white);color:var(--sl-color-black)}.ds-coda-primary:hover{background:var(--sl-color-gray-1)}.ds-coda-secondary{border:1px solid var(--sb-border);background:var(--sl-color-black);color:var(--sl-color-white)}.ds-coda-secondary:hover{border-color:var(--sl-color-gray-4)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "端末の最後の一行",
+    "overview": "**Creative North Star: \"端末の最後の一行\"**\n\nSouieba の見た目は、開発者向けサービスの定番（Vercel・Linear）にそのまま並ぶことを目指す。皮肉も独自の比喩も持ち込まない。ほぼ黒（ライトでは白）の無地の地に、zinc 系のグレーの文字と 1px の細い罫線だけで面を区切り、主役は製品そのもの、つまり端末の中の会話に置く。その会話の最後に、友人の近況が「あ、そういえば」と青い一行で届く。この一行のために、ページの他の部分はすべて無彩色で静かにしてある。\n\n密度は中くらい。見出しは中央揃えで大きく、文字詰めは強め（字間をマイナスに）。本文と説明は小さめのグレーで、読ませる量を絞る。中身のまとまりは、角丸 12px の外枠を一つ持ち、その内側を 1px の罫線で仕切るパネルで見せる。影も、グラデーションも、背景の模様も使わない。\n\nダークが既定（`:root`）で、ライトは `:root[data-theme=\"light\"]` で同じ役割の値を反転させる。どちらの面でも、役割の名前（`--sl-color-*`, `--sb-*`）は同じで、値だけが入れ替わる。以前の「駅の伝言板」「手紙」の世界は、ユーザーが「AI っぽい」として退けた。",
+    "keyCharacteristics": [
+      "無彩色の地と文字、zinc 系グレーの段階で階層を作る",
+      "1px の罫線（`--sb-border`）で区切り、影は使わない",
+      "色は青ひとつ。リンク、フォーカス、そして端末の Tell の一行だけ",
+      "Geist / Geist Mono、日本語は Noto Sans JP。見出しは 600 で字間を詰める",
+      "端末ウィンドウと実際のコマンドを、図版の代わりに主役にする"
+    ],
+    "rules": [
+      {
+        "name": "The One Blue Rule",
+        "body": "色相を持つのは青だけで、使い道はリンク、フォーカス、選択、そして Tell の一行に限る。ヘッダーのロゴ、GitHub アイコン、テーマ切り替えは `!important` で無彩色に戻してある。ボタンもバッジも青く塗らない。",
+        "section": "colors"
+      },
+      {
+        "name": "The Tell Owns Its Color Rule",
+        "body": "`sb-tell` は Tell の文のためだけにある。他の強調に流用すると、ページが見せたい一行が埋もれる。",
+        "section": "colors"
+      },
+      {
+        "name": "The Tight Heading Rule",
+        "body": "見出しはすべて 600 で、字間はマイナス（表示用 -0.035em、節 -0.02em、小見出し -0.01em）。700 以上の太字は使わない。",
+        "section": "typography"
+      },
+      {
+        "name": "The Phrase Break Rule",
+        "body": "日本語の見出しと本文は `word-break: auto-phrase` で文節の切れ目で折り、見出しは `text-wrap: balance`、本文は `text-wrap: pretty`。改行で語が割れないことを、字詰めと同じくらい大事にする。",
+        "section": "typography"
+      },
+      {
+        "name": "The Plain Ground Rule",
+        "body": "背景は無地。グリッド線、点の模様、グラデーション、光のにじみは置かない（グリッド線は生成 UI の定番の印として検出され、退けた）。パネルの内側の仕切り線は区切りであって背景の模様ではない。",
+        "section": "layout"
+      },
+      {
+        "name": "The Line Not Shadow Rule",
+        "body": "面を区切るのは 1px の罫線。`box-shadow` やドロップシャドウで浮かせない。",
+        "section": "elevation"
+      },
+      {
+        "name": "The Shared Border Rule",
+        "body": "並ぶ項目は、別々のカードにせず、一つの 12px の外枠（`overflow: hidden`）の中を 1px の罫線で仕切る。カードを間隔を空けて並べない。",
+        "section": "shapes"
+      }
+    ],
+    "dos": [
+      "**Do** 色を足したくなったら、まず `sl-color-gray-1`〜`sl-color-gray-4` の段階で階層を作る。青はリンク、フォーカス、Tell の一行だけに使う。",
+      "**Do** 面の区切りには 1px の `sb-border` を使い、一段上げたいときは `sb-surface` に替える。",
+      "**Do** 並ぶ項目は一つの 12px の外枠に入れ、内側を罫線で仕切る。50rem 未満では縦に積み、仕切りを上辺に移す。",
+      "**Do** 見出しは 600 で字間をマイナスにし、日本語は `word-break: auto-phrase` と `text-wrap: balance` で文節で折る。",
+      "**Do** 製品を見せるときは、架空の画像ではなく端末ウィンドウと実際のコマンドで見せ、例であることをキャプションで明記する。",
+      "**Do** 新しい色を足すときは、ダークの `:root` とライトの `:root[data-theme=\"light\"]` の両方に同じ名前で値を置く。"
+    ],
+    "donts": [
+      "**Don't** 背景にグリッド線、点の模様、グラデーション、光のにじみを置かない。",
+      "**Don't** `box-shadow` やドロップシャドウで面を浮かせない。hover でも浮かせない。",
+      "**Don't** 青以外の色相を足さない。ボタン、番号、見出しを青く塗らない。",
+      "**Don't** `sb-tell` を Tell の一行以外に使わない。",
+      "**Don't** 見出しを 700 以上の太字にしない。",
+      "**Don't** 手紙・駅の伝言板などの比喩や、独自の世界観の飾りを持ち込まない（ユーザーが「AI っぽい」として退けた）。",
+      "**Don't** 角丸を 12px より大きくしない。"
+    ]
+  }
+}
