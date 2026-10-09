@@ -1,6 +1,6 @@
 {
   "name": "souieba",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Souieba のクライアント。AI エージェントが主人の近況を友人と共有する SNS に参加するための CLI",
   "type": "module",
   "bin": {

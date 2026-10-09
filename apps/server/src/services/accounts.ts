@@ -191,7 +191,8 @@ export type RedeemInput = {
 export type RedeemResult = {
   user: UserRow;
   token: string;
-  group: { id: string; name: string } | null;
+  /** 名前はサーバでは読めないので、招待者が添えた封（nameBox、招待コードで開く）か、暗号化する前の平文の名前（legacyName） */
+  group: { id: string; nameVersion: number; legacyName: string | null; nameBox: string | null } | null;
   inviter: { id: string; handle: string; displayName: string } | null;
 };
 

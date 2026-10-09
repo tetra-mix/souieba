@@ -7,13 +7,16 @@ import {
   type PostEnvelope,
   type WireTellCandidate,
   formatTellText,
+  generateEncryptionKey,
   generateSigningKey,
+  sealGroupName,
   sealPost,
 } from "@souieba/core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MIN_CLIENT_VERSION as clientVersion } from "../../../apps/server/src/app.ts";
+import { schema } from "../../../apps/server/src/db/index.ts";
 import { type TestUser, harness } from "../../../apps/server/test/harness.ts";
-import { AgentWatch, E2eeTransport, MemberWatch, HttpTransport, InstructionLikePostError, SecretInPostError, SetLog } from "../src/index.ts";
+import { AgentWatch, E2eeTransport, GroupNameCache, MemberWatch, HttpTransport, InstructionLikePostError, SecretInPostError, SetLog } from "../src/index.ts";
 
 const MIN = 60_000;
 const h = harness();
@@ -241,7 +244,40 @@ describe("グループに新しいメンバーが入ったことの通知", () =
     expect(watch.check(await users(), alice.id)).toEqual([]);
     const carol = await h.joinNew(alice, groupId, "carol", "キャロル");
     expect(watch.check(await users(), alice.id)).toEqual([{ groupId, user: { id: carol.id, handle: "carol", displayName: "キャロル" } }]);
-    expect((await transport(alice).groups()).map((g) => g.id)).toContain(groupId);
+    expect((await transport(alice).groupNames()).map((g) => g.id)).toContain(groupId);
+  });
+});
+
+describe("グループ名の暗号化（#16）", () => {
+  const cache = (who: string) => new GroupNameCache(join(dir, `${who}-group_names.json`));
+  const names = async (u: TestUser, who = u.handle) => new Map((await transport(u).groupNames(cache(who))).map((g) => [g.id, g.name] as const));
+
+  it("作った人が覚えている名前を、読める Agent が順に封をし直して、新しいメンバーにも届ける", async () => {
+    const g = (await h.call("POST", "/v1/groups", alice.token, {})).body.id as string;
+    cache("alice").set(g, 1, "読書会");
+    const carol = await h.joinNew(alice, g, "carol2", "キャロル2");
+    // キャロルはまだ封を持っていないので読めない
+    expect((await names(carol)).get(g)).toBeNull();
+    // アリスの Agent が名前を開いて（ここでは手元の記憶から）、キャロルの Agent に封をする
+    expect((await names(alice)).get(g)).toBe("読書会");
+    expect((await names(carol)).get(g)).toBe("読書会");
+    // DB には平文が残らない
+    expect(JSON.stringify(h.db.select().from(schema.groupNameBoxes).all())).not.toContain("読書会");
+  });
+
+  it("暗号化する前の平文の名前は、メンバーの Agent 全員に封をしてからサーバから消す", async () => {
+    h.setGroupNameRaw(groupId, "研究室");
+    expect((await names(bob)).get(groupId)).toBe("研究室");
+    expect(h.db.select().from(schema.groups).all().find((g) => g.id === groupId)!.name).toBe("");
+    expect((await names(alice, "alice-2")).get(groupId)).toBe("研究室");
+  });
+
+  it("ディレクトリにいない Agent が封をした名前は信用しない", async () => {
+    const g = (await h.call("POST", "/v1/groups", alice.token, {})).body.id as string;
+    const mallory = { agentId: "agt_mallory", keys: { enc: generateEncryptionKey(), sign: generateSigningKey() } };
+    const forged = sealGroupName("偽の名前", { groupId: g, version: 1 }, { agentId: mallory.agentId, signKey: mallory.keys.sign }, { agentId: alice.agentId, encKey: alice.agent.keys.enc.pub });
+    await h.call("PUT", `/v1/groups/${g}/name-boxes`, alice.agentToken, { version: 1, boxes: [{ agentId: alice.agentId, box: forged }] });
+    expect((await names(alice, "alice-3")).get(g)).toBeNull();
   });
 });
 

@@ -19,7 +19,7 @@ const USAGE = `使い方: souieba-admin [--url <サーバURL>] <command> [option
   create-user --handle <h> --name <表示名> [--admin]   ユーザーを作成し、ログインコードを表示
   login-code  --handle <h>                            ログインコードを再発行（古い User トークンは失効）
   invite                                              アカウント作成用の招待コードを発行（どのグループにも入らない）
-  list-groups                                         グループ一覧（名前・人数。投稿本文はサーバでは読めません）
+  list-groups                                         グループ一覧（ID・人数。グループ名と投稿本文は暗号化されていて、サーバでは読めません）
   disable-user --handle <h>                           ユーザーを無効化
   list-users                                          ユーザー一覧（表示名が重複・規則に合わない人に印を付ける）
   admin-token --handle <h>                            admin 専用トークンを発行（admin API 用。admin のユーザーだけ。古いものは失効）
@@ -35,7 +35,7 @@ const USAGE = `使い方: souieba-admin [--url <サーバURL>] <command> [option
 const COMMANDS = ["create-user", "login-code", "invite", "list-groups", "disable-user", "list-users", "admin-token", "backup", "bootstrap"];
 
 type UserView = { id: string; handle: string; displayName: string; role: string; disabledAt?: string | null };
-type GroupView = { id: string; name: string; memberCount: number; createdAt: string };
+type GroupView = { id: string; memberCount: number; createdAt: string };
 type Login = { loginCode: string; expiresAt: string };
 
 /** DB を直接開く場合と admin API を呼ぶ場合で、同じ操作をそろえる */
@@ -218,7 +218,7 @@ async function main(argv: string[]) {
     case "list-groups": {
       const rows = await backend.listGroups();
       if (rows.length === 0) console.log("（グループはありません）");
-      for (const g of rows) console.log(`${g.id}\t${g.name}\t${g.memberCount}人\t${g.createdAt}`);
+      for (const g of rows) console.log(`${g.id}\t${g.memberCount}人\t${g.createdAt}`);
       break;
     }
     case "disable-user": {

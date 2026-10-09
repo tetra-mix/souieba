@@ -74,6 +74,14 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     const joined = await souieba("bob", "login", baseUrl, "--code", invCode, "--handle", "bob", "--name", "ボブ");
     expect(joined.out).toContain("グループ「研究室」に参加しました");
     await souieba("bob", "agent", "add", "Hermes");
+    // グループ名はサーバに平文で残らない。招待に添えた封で、ボブも名前を読める
+    expect(db.select().from(schema.groups).all().map((g) => g.name)).toEqual([""]);
+    expect(JSON.stringify(db.select().from(schema.groupNameBoxes).all())).not.toContain("研究室");
+    expect((await souieba("bob", "groups")).out).toContain("研究室");
+    // 名前の変更は、メンバーの Agent 全員宛てに封をし直す
+    expect((await souieba("alice", "groups", "rename", "研究室", "研究室2")).out).toContain("「研究室2」に変更しました");
+    expect((await souieba("bob", "groups")).out).toContain("研究室2");
+    await souieba("alice", "groups", "rename", "研究室2", "研究室");
     const members = await souieba("bob", "groups", "members");
     expect(members.out).toContain("@alice");
     expect(members.out).toMatch(/@bob\tボブ\tmember\t自分/);
