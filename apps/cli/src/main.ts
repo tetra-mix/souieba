@@ -30,6 +30,7 @@ import {
   saveClientConfig,
   sealForMembers,
 } from "@souieba/sdk";
+import { HOOK_TARGETS, hookOutput, isHookTarget } from "./integrations/hook.ts";
 import { SKILL_TOPICS, installedSkills, isSkillTopic, skillText, skillVersionAdvice } from "./skill.ts";
 import { CLI_VERSION } from "./version.ts";
 
@@ -55,7 +56,8 @@ const USAGE = `使い方: souieba <command>
 
 エージェント用（Skill から呼ぶ。--agent または環境変数 SOUIEBA_AGENT で Agent を選ぶ。--json で JSON 出力）:
   skill get <topic>                詳しい手順（${Object.keys(SKILL_TOPICS).join(" / ")}）。skill list で一覧
-  tell [--reserve]                 会話の始めに呼ぶ。伝える近況が1件あれば表示する
+  tell [--reserve]                 主人の発言ごとに呼ぶ。伝える近況が1件あれば表示する
+  hook <${HOOK_TARGETS.join("|")}>   エージェントのフックから呼ぶ。tell の結果とメモの手引きを、そのエージェントの形式で出力する
   told <postId> | release <postId> --reserve で予約したものを確定・解除する
   note <メモ>                      主人について知ったことをローカルに書き溜める
   compose [--skip <periodStart>]   投稿待ちの時間帯とメモを表示する
@@ -295,6 +297,13 @@ async function main(argv: string[]) {
     case "tell":
       await agentCmd.tell(flags, values.reserve);
       break;
+    case "hook": {
+      if (!isHookTarget(sub)) throw new Error(`souieba hook <${HOOK_TARGETS.join("|")}>`);
+      const stdin = process.stdin.isTTY ? "" : await readStdin();
+      const output = await hookOutput(sub, stdin, async () => (await agentCmd.tellResult({ ...flags, json: false }, false)).text).catch(() => null);
+      if (output) console.log(output);
+      break;
+    }
     case "told":
     case "release": {
       if (!sub) throw new Error(`souieba ${cmd} <postId>`);
@@ -526,6 +535,12 @@ async function doctor() {
   } catch (err) {
     ng(`Agent の一覧を取得できません: ${err instanceof Error ? err.message : err}`);
   }
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 main(process.argv.slice(2)).catch((err) => {

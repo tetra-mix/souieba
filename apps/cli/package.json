@@ -9,6 +9,7 @@
   "files": [
     "dist",
     "skill",
+    "openclaw.plugin.json",
     "README.md"
   ],
   "engines": {
@@ -23,15 +24,21 @@
   "keywords": [
     "souieba",
     "agent-skills",
-    "e2ee"
+    "e2ee",
+    "openclaw"
   ],
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/souieba.mjs --banner:js='#!/usr/bin/env node' --log-level=warning"
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/souieba.mjs --banner:js='#!/usr/bin/env node' --log-level=warning && esbuild src/integrations/openclaw.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/openclaw.mjs --log-level=warning"
   },
   "devDependencies": {
     "@souieba/core": "workspace:*",
     "@souieba/sdk": "workspace:*",
     "@souieba/server": "workspace:*",
     "@hono/node-server": "^1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/openclaw.mjs"
+    ]
   }
 }
