@@ -1,0 +1,35 @@
+name: CI
+
+# dev・main への PR と push で、バージョンの揃い・型チェック・テスト・CLI のビルドを確かめる。
+# Release ワークフローも同じ確認をするが、main に入る前に落ちるほうが直しやすいので、PR の段階でも走らせる。
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/check-version.mjs
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build:cli
