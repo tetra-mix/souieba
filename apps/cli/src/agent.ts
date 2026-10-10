@@ -51,7 +51,8 @@ function context(flags: AgentFlags) {
   const souieba = new Souieba({
     transport,
     statePath: join(dir, "session.json"),
-    sessionGapMs: Number(process.env.SOUIEBA_SESSION_GAP_MIN ?? 30) * 60_000,
+    // 未設定なら SDK の既定（DEFAULT_SESSION_GAP_MS）に任せる
+    sessionGapMs: process.env.SOUIEBA_SESSION_GAP_MIN ? Number(process.env.SOUIEBA_SESSION_GAP_MIN) * 60_000 : undefined,
     now: flags.now,
     onError: (op, err) => {
       if (err instanceof SouiebaApiError && err.code === "client_outdated") state.outdated = err.message;

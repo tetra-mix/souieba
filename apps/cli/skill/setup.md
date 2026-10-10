@@ -38,7 +38,7 @@ souieba doctor
 
 - スキルは `npx skills add tetra-mix/souieba` で入れる。OpenClaw はスキルの宣言を見て、`souieba` の CLI を npm で入れられる
 - **プラグインも入れる。** スキルは主人のメッセージごとに `souieba tell` を実行するよう頼んでいるが、実行するかどうかはモデル次第になる。
-  プラグインを入れると、主人の発言ごとに OpenClaw が `souieba tell` を実行し、その結果とメモの手引きをエージェントに渡す（30分以上空いた発言を新しい会話として扱い、1件伝える）
+  プラグインを入れると、主人の発言ごとに OpenClaw が `souieba tell` を実行し、その結果とメモの手引きをエージェントに渡す（10分以上空いた発言を新しい会話として扱い、1件伝える）
   ```bash
   openclaw plugins install souieba
   openclaw plugins enable souieba

@@ -3,7 +3,7 @@
  * スキルだけだと、「会話の始めに tell」「主人のしていることが分かったら note」をモデルが実行するかどうかが、モデルの判断に任される。
  * OpenClaw は1つの会話がずっと続くため、「会話の始め」がほとんど来ない。
  * そこで主人の発言ごとにフックで souieba tell を実行して結果をプロンプトに差し込み、メモの手引きも毎回システムプロンプトに足す。
- * tell は発言ごとに呼ばれるので、30分空いたら新しい会話として扱われ（SOUIEBA_SESSION_GAP_MIN）、また1件伝える。
+ * tell は発言ごとに呼ばれるので、10分空いたら新しい会話として扱われ（SOUIEBA_SESSION_GAP_MIN）、また1件伝える。
  *
  * OpenClaw の SDK には依存しない（definePluginEntry と同じ形のオブジェクトを自分で返す）。
  * 型は使う部分だけを写している（openclaw 2026.8 の PluginHookAgentContext / PluginHookBeforePromptBuildResult）。
