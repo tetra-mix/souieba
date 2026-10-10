@@ -14,7 +14,7 @@ import * as groups from "./services/groups.ts";
 import * as inboxSvc from "./services/inbox.ts";
 import * as posts from "./services/posts.ts";
 
-export const VERSION = "0.6.0";
+export const VERSION = "0.6.1";
 
 /**
  * これより古いクライアントと、バージョンを送らないクライアントは 426 で断る（黙って壊れないように、更新を促す）。
