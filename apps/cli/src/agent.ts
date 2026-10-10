@@ -51,8 +51,9 @@ function context(flags: AgentFlags) {
   const souieba = new Souieba({
     transport,
     statePath: join(dir, "session.json"),
-    // 未設定なら SDK の既定（DEFAULT_SESSION_GAP_MS）に任せる
+    // 未設定なら SDK の既定（DEFAULT_SESSION_GAP_MS・DEFAULT_TELL_INTERVAL_MS）に任せる
     sessionGapMs: process.env.SOUIEBA_SESSION_GAP_MIN ? Number(process.env.SOUIEBA_SESSION_GAP_MIN) * 60_000 : undefined,
+    tellIntervalMs: process.env.SOUIEBA_TELL_INTERVAL_MIN ? Number(process.env.SOUIEBA_TELL_INTERVAL_MIN) * 60_000 : undefined,
     now: flags.now,
     onError: (op, err) => {
       if (err instanceof SouiebaApiError && err.code === "client_outdated") state.outdated = err.message;
@@ -169,7 +170,7 @@ export async function publish(flags: AgentFlags, content: string, periodArg = "p
 }
 
 /**
- * 主人の発言ごとに呼ぶ。この Session でまだ伝えていなければ、友人の近況を1件だけ返す。
+ * 主人の発言ごとに呼ぶ。この Session でまだ伝えていないか、前に伝えてから一定時間（既定10分）たっていれば、友人の近況を1件だけ返す。
  * 既定では返した時点で TOLD にする（エージェントが told を呼び忘れても二重に伝えないため）。
  * --reserve のときは予約だけして、伝えたら told、伝えなかったら release を呼んでもらう。
  */
