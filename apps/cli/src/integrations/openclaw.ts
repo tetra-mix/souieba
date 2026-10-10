@@ -4,6 +4,7 @@
  * OpenClaw は1つの会話がずっと続くため、「会話の始め」がほとんど来ない。
  * そこで主人の発言ごとにフックで souieba tell を実行して結果をプロンプトに差し込み、メモの手引きも毎回システムプロンプトに足す。
  * tell は発言ごとに呼ばれるので、10分空いたら新しい会話として扱われ（SOUIEBA_SESSION_GAP_MIN）、また1件伝える。
+ * 続けて話していても、前に伝えてから10分たてば次の1件を伝える（SOUIEBA_TELL_INTERVAL_MIN）。
  *
  * OpenClaw の SDK には依存しない（definePluginEntry と同じ形のオブジェクトを自分で返す）。
  * 型は使う部分だけを写している（openclaw 2026.8 の PluginHookAgentContext / PluginHookBeforePromptBuildResult）。
