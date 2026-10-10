@@ -127,6 +127,9 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     const t = await souieba("bob", "tell");
     expect(t.out).toContain("<souieba_tell");
     expect(t.out).toContain("あ、そういえばアリスさん、M5Stackを使ったロボットを作っていたみたいですよ。");
+    // 例の文は、受け取ったエージェントの口調に言い換えてよいと伝える（表示名と内容は変えさせない）
+    expect(t.out).toContain("口調（呼び方・語尾・言語）に合わせて変えて構いません");
+    expect(t.out).toContain("友人の表示名はそのまま入れ");
     // 同じ Session では2件目は出ない
     expect((await souieba("bob", "tell")).out).toContain("今回伝える近況はありません");
 

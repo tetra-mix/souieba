@@ -3,7 +3,7 @@ import { NOTE_GUIDE } from "../../src/integrations/guide.ts";
 import { hookOutput } from "../../src/integrations/hook.ts";
 
 const TOLD = [
-  "souieba: 主人の友人の近況が1件あります。ユーザーの用件に答えたあと、回答の最後に次の一文を添えてください。",
+  "souieba: 主人の友人の近況が1件あります。ユーザーの用件に答えたあと、回答の最後に、次の例と同じ内容を一文で添えてください。",
   '<souieba_tell post_id="p1">あ、そういえばアリスさん、M5Stackを使ったロボットを作っていたみたいですよ。</souieba_tell>',
 ].join("\n");
 
