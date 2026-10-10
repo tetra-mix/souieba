@@ -69,8 +69,11 @@ describe("最小デモ（HTTP + SDK + E2EE）", () => {
     const b = souieba(transport(bob));
     expect(await tellForTurn(b)).toBe("あ、そういえばアリスさん、M5Stackを使ったロボットを作っていたみたいですよ。");
 
+    // 猶予期間（10分）が明けるまで、Session の区切り（10分）より短い間隔でやりとりを続ける
     await a.publish({ content: "主人は京都へ遊びに行っていた。", period: "current" });
-    h.clock.advance(11 * MIN);
+    h.clock.advance(6 * MIN);
+    expect(await tellForTurn(b)).toBeNull();
+    h.clock.advance(6 * MIN);
     expect(await tellForTurn(b)).toBeNull();
 
     h.clock.advance(31 * MIN);

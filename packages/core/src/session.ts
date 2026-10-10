@@ -6,7 +6,7 @@ export type SessionState = {
   tellsInSession: number;
 };
 
-export const DEFAULT_SESSION_GAP_MS = 30 * 60 * 1000;
+export const DEFAULT_SESSION_GAP_MS = 10 * 60 * 1000;
 
 /** ユーザー発話のたびに呼ぶ。前回から gap 以上空いていれば新しい Session にする */
 export function advanceSession(

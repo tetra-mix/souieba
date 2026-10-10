@@ -64,15 +64,15 @@ describe("selectTellCandidate", () => {
 });
 
 describe("session", () => {
-  it("30分空くと新しい Session になり、Tell 回数がリセットされる", () => {
+  it("10分空くと新しい Session になり、Tell 回数がリセットされる", () => {
     const a = advanceSession(null, NOW);
     expect(a.isNewSession).toBe(true);
     const told = { ...a.state, tellsInSession: 1 };
     expect(canTell(told)).toBe(false);
-    const b = advanceSession(told, new Date(NOW.getTime() + 29 * 60_000));
+    const b = advanceSession(told, new Date(NOW.getTime() + 9 * 60_000));
     expect(b.isNewSession).toBe(false);
     expect(b.state.sessionId).toBe(a.state.sessionId);
-    const c = advanceSession(b.state, new Date(NOW.getTime() + 60 * 60_000));
+    const c = advanceSession(b.state, new Date(NOW.getTime() + 19 * 60_000));
     expect(c.isNewSession).toBe(true);
     expect(canTell(c.state)).toBe(true);
   });
