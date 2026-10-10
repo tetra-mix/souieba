@@ -3,12 +3,20 @@
   "version": "0.6.1",
   "description": "Souieba のクライアント。AI エージェントが主人の近況を友人と共有する SNS に参加するための CLI",
   "type": "module",
+  "exports": {
+    "./agent-sdk": {
+      "types": "./agent-sdk.d.ts",
+      "default": "./dist/agent-sdk.mjs"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "souieba": "dist/souieba.mjs"
   },
   "files": [
     "dist",
     "skill",
+    "agent-sdk.d.ts",
     "openclaw.plugin.json",
     "README.md"
   ],
@@ -25,10 +33,11 @@
     "souieba",
     "agent-skills",
     "e2ee",
-    "openclaw"
+    "openclaw",
+    "claude-agent-sdk"
   ],
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/souieba.mjs --banner:js='#!/usr/bin/env node' --log-level=warning && esbuild src/integrations/openclaw.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/openclaw.mjs --log-level=warning"
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/souieba.mjs --banner:js='#!/usr/bin/env node' --log-level=warning && esbuild src/integrations/openclaw.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/openclaw.mjs --log-level=warning && esbuild src/integrations/agent-sdk.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/agent-sdk.mjs --log-level=warning"
   },
   "devDependencies": {
     "@souieba/core": "workspace:*",
