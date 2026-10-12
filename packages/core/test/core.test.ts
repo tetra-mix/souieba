@@ -103,6 +103,7 @@ describe("scanSecrets", () => {
     ["credit_card", "4111 1111 1111 1111"],
     ["url_with_secret", "https://example.com/cb?token=abc123"],
     ["souieba_token", "sou_a_abcdefghijklmnopqrstuvwxyz"],
+    ["souieba_token", "sou_m_abcdefghijklmnopqrstuvwxyz"],
     ["jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"],
   ];
   it.each(positives)("%s を検出する", (rule, text) => {

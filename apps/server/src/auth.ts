@@ -3,7 +3,7 @@ import { sha256 } from "./crypto.ts";
 import { and, eq, isNull, or } from "drizzle-orm";
 import type { DB } from "./db/index.ts";
 import { agents, credentials, users } from "./db/schema.ts";
-import { ApiError, forbidden, unauthorized } from "./errors.ts";
+import { ApiError, forbidden, tooManyRequests, unauthorized } from "./errors.ts";
 import { ADMIN_SCOPE } from "./services/accounts.ts";
 
 export type Auth = {
@@ -25,7 +25,7 @@ export type AuthFailureGuard = {
 
 export function authenticate(db: DB, guard?: AuthFailureGuard): MiddlewareHandler<Env> {
   return async (c, next) => {
-    if (guard?.blocked(c)) throw new ApiError(429, "rate_limited", "認証の失敗が多すぎます。時間をおいてください");
+    if (guard?.blocked(c)) throw tooManyRequests("認証の失敗が多すぎます。時間をおいてください");
     const fail = () => {
       guard?.failed(c);
       return unauthorized();

@@ -211,6 +211,7 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
           SOUIEBA_HOME: join(tmp, "bob"),
           SOUIEBA_SERVER: `http://127.0.0.1:${(outdated.address() as AddressInfo).port}`,
           SOUIEBA_NOW: "2026-10-07T00:00:00Z",
+          SOUIEBA_AGENT: "",
         },
       });
       expect(r.stdout).toContain("今回伝える近況はありません");
@@ -223,7 +224,7 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
 
   it("サーバに届かなくても tell は正常終了する", { timeout: 30_000 }, async () => {
     const r = await run(TSX, [CLI, "tell"], {
-      env: { ...process.env, SOUIEBA_HOME: join(tmp, "bob"), SOUIEBA_SERVER: "http://127.0.0.1:9", SOUIEBA_NOW: "2026-10-06T00:00:00Z" },
+      env: { ...process.env, SOUIEBA_HOME: join(tmp, "bob"), SOUIEBA_SERVER: "http://127.0.0.1:9", SOUIEBA_NOW: "2026-10-06T00:00:00Z", SOUIEBA_AGENT: "" },
     });
     expect(r.stdout).toContain("今回伝える近況はありません");
   });

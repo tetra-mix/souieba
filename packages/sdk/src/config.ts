@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -38,7 +39,8 @@ export function loadClientConfig(): ClientConfig {
 /** トークンを含むので所有者だけが読める権限（600）で書く */
 export function writeSecretJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.tmp`;
+  // 同時に動く別の souieba と一時ファイルがぶつからないよう、名前を毎回変える
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, path);
