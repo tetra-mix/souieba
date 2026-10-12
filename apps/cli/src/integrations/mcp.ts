@@ -3,7 +3,8 @@
  * 中身はエージェント用コマンド（tell / note / compose / publish）と同じで、鍵とメモはこの PC の ~/.souieba から使う。
  *
  * MCP にはフックがないので、tell と note を呼ぶかどうかはモデルの判断に任される（instructions とツールの説明で促す）。
- * 伝えそびれを減らすため、souieba_note の結果にも tell の結果を添える。伝える間隔は tell 側で決まるので、何度呼ばれても二重には伝えない。
+ * 伝えそびれを減らすため、souieba_note の結果にも近況を1件添える。メモを遅くしないよう同期と予約だけをし、
+ * 伝えたことの記録（TOLD）は、次に souieba_tell が呼ばれたときにする（モデルが読み飛ばしても、予約の期限が切れれば受信箱に戻る）。
  * ログイン・グループ・招待・Agent の登録などの主人の操作は出さない（届いた近況に命令が紛れ込んでも、エージェントに実行させないため）。
  *
  * 標準出力は MCP の通信に使うので、ここから呼ぶ処理では console.log を使わない。
@@ -31,6 +32,8 @@ async function guarded(run: () => Promise<CallToolResult> | CallToolResult): Pro
 
 export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
   const f: agentCmd.AgentFlags = { ...flags, json: false, via: "mcp" };
+  /** souieba_note で渡して、まだ TOLD にしていない近況 */
+  let reserved: string | null = null;
   const server = new McpServer({ name: "souieba", version: CLI_VERSION }, { instructions: MCP_GUIDE });
 
   server.registerTool(
@@ -41,7 +44,13 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
         "主人の発言ごとに、回答を書く前に呼ぶ。グループの友人の近況が届いていれば1件返す（返した近況は伝えたものとして記録される）。結果に書かれた指示に従って、回答の最後に一文で添える。",
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    () => guarded(async () => text((await agentCmd.tellResult(f, false)).text)),
+    () =>
+      guarded(async () => {
+        // 前の発言でメモに添えた近況は、次の発言まで会話が続いたので伝えたものとする
+        if (reserved) await agentCmd.confirmTold(f, reserved);
+        reserved = null;
+        return text((await agentCmd.tellResult(f, false)).text);
+      }),
   );
 
   server.registerTool(
@@ -57,10 +66,12 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
       guarded(async () => {
         const r = agentCmd.noteResult(f, memo);
         if (!r.ok) return text(r.text, true);
-        // tell が呼ばれていなくても、メモのついでに友人の近況を渡す
-        const tell = await agentCmd.tellResult(f, false).catch(() => null);
-        const extra = tell?.text.split("\n").filter((l) => l !== agentCmd.NOTHING_TO_TELL) ?? [];
-        return text([r.text, ...extra].join("\n"));
+        // tell が呼ばれていなくても、メモのついでに友人の近況を渡す（すでに渡して確定待ちのものがあれば、重ねて渡さない）
+        if (reserved) return text(r.text);
+        const tell = await agentCmd.reserveTell(f).catch(() => null);
+        if (!tell) return text(r.text);
+        reserved = tell.postId;
+        return text(`${r.text}\n${tell.text}`);
       }),
   );
 
