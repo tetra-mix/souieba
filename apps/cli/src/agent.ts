@@ -29,7 +29,27 @@ export type AgentFlags = {
   json: boolean;
   debug: boolean;
   now: () => Date;
+  /** 呼び出し元。"mcp" のときは、次の行動を CLI のコマンドではなく MCP のツール名で案内する */
+  via?: "cli" | "mcp";
 };
+
+/** エージェント用コマンドの結果。text はエージェントが読む文面。ok が false なら書き直しを求めている */
+export type AgentResult = { ok: boolean; json: unknown; text: string };
+
+/** 次の行動の案内。CLI ならコマンド、MCP ならツールの呼び方 */
+function nextSteps(flags: AgentFlags) {
+  return flags.via === "mcp"
+    ? {
+        compose: "souieba_compose ツールを呼んで",
+        publish: (p: string) => `投稿: souieba_publish ツール（period: "${p}", content: "主人は……"）`,
+        skip: (p: string) => `スキップ: souieba_skip ツール（period: "${p}"）`,
+      }
+    : {
+        compose: "souieba compose を実行して",
+        publish: (p: string) => `投稿: souieba publish --period ${p} "主人は……"`,
+        skip: (p: string) => `スキップ: souieba compose --skip ${p}`,
+      };
+}
 
 function context(flags: AgentFlags) {
   const a = resolveAgent(flags.agent);
@@ -77,33 +97,45 @@ function out(flags: AgentFlags, json: unknown, text: string) {
   console.log(flags.json ? JSON.stringify(json) : text);
 }
 
+/** CLI での出力。書き直しを求める結果は終了コード 2 にする */
+function print(flags: AgentFlags, r: AgentResult) {
+  out(flags, r.json, r.text);
+  if (!r.ok) process.exitCode = 2;
+}
+
 /** 会話中に知った主人の活動をローカルに書き溜める（サーバには送らない） */
 export function note(flags: AgentFlags, text: string): void {
+  print(flags, noteResult(flags, text));
+}
+
+export function noteResult(flags: AgentFlags, text: string): AgentResult {
   const { notes } = context(flags);
   const now = flags.now();
   try {
     const n = notes.add(text, now);
     notes.prune(now);
-    out(flags, { ok: true, note: n }, "souieba: メモしました。");
+    return { ok: true, json: { ok: true, note: n }, text: "souieba: メモしました。" };
   } catch (err) {
     if (err instanceof SecretInNoteError) {
-      out(flags, { ok: false, error: "secret_detected", rules: err.rules }, `souieba: ${err.message}。秘密情報を除いて書き直してください。`);
-      process.exitCode = 2;
-      return;
+      return {
+        ok: false,
+        json: { ok: false, error: "secret_detected", rules: err.rules },
+        text: `souieba: ${err.message}。秘密情報を除いて書き直してください。`,
+      };
     }
     if (err instanceof InstructionLikePostError) {
-      out(
-        flags,
-        { ok: false, error: "instruction_like", rules: err.rules },
-        `souieba: ${err.message}。読み手への呼びかけ・命令形・指示やコマンドの話を含めず、「主人は〜していた」の形で書き直してください。`,
-      );
-      process.exitCode = 2;
-      return;
+      return {
+        ok: false,
+        json: { ok: false, error: "instruction_like", rules: err.rules },
+        text: `souieba: ${err.message}。読み手への呼びかけ・命令形・指示やコマンドの話を含めず、「主人は〜していた」の形で書き直してください。`,
+      };
     }
     if (err instanceof PostTooLongError) {
-      out(flags, { ok: false, error: "too_long", length: err.length }, `souieba: ${err.message}。短くまとめて書き直してください。`);
-      process.exitCode = 2;
-      return;
+      return {
+        ok: false,
+        json: { ok: false, error: "too_long", length: err.length },
+        text: `souieba: ${err.message}。短くまとめて書き直してください。`,
+      };
     }
     throw err;
   }
@@ -111,18 +143,22 @@ export function note(flags: AgentFlags, text: string): void {
 
 /** 投稿待ちの時間帯と、その材料のメモを表示する。--skip で投稿しない時間帯を確定する */
 export function compose(flags: AgentFlags, skip?: string): void {
+  print(flags, skip ? skipResult(flags, skip) : composeResult(flags));
+}
+
+export function skipResult(flags: AgentFlags, periodStart: string): AgentResult {
+  context(flags).notes.mark(periodStart, "skipped");
+  return { ok: true, json: { ok: true, skipped: periodStart }, text: "souieba: この時間帯は投稿しないことにしました。" };
+}
+
+export function composeResult(flags: AgentFlags): AgentResult {
   const { notes } = context(flags);
   const now = flags.now();
-  if (skip) {
-    notes.mark(skip, "skipped");
-    out(flags, { ok: true, skipped: skip }, "souieba: この時間帯は投稿しないことにしました。");
-    return;
-  }
   notes.prune(now);
   const pending = notes.pending(now);
-  if (flags.json) return out(flags, { pending }, "");
-  if (pending.length === 0) return console.log("souieba: 投稿待ちの時間帯はありません。");
+  if (pending.length === 0) return { ok: true, json: { pending }, text: "souieba: 投稿待ちの時間帯はありません。" };
 
+  const next = nextSteps(flags);
   const lines = [
     `souieba: 投稿待ちの時間帯が ${pending.length} 件あります。`,
     "各時間帯について、メモをもとに主人がしていたことを1〜2文（120字以内、「主人は」で始まる三人称、推測は「〜らしい」）にまとめて投稿してください。",
@@ -131,14 +167,18 @@ export function compose(flags: AgentFlags, skip?: string): void {
   for (const p of pending) {
     lines.push("", `## ${fmt.format(new Date(p.periodStart))}〜${hm.format(new Date(p.periodEnd))}`);
     for (const n of p.notes) lines.push(`- ${hm.format(new Date(n.ts))} ${n.text}`);
-    lines.push(`投稿: souieba publish --period ${p.periodStart} "主人は……"`);
-    lines.push(`スキップ: souieba compose --skip ${p.periodStart}`);
+    lines.push(next.publish(p.periodStart));
+    lines.push(next.skip(p.periodStart));
   }
-  console.log(lines.join("\n"));
+  return { ok: true, json: { pending }, text: lines.join("\n") };
 }
 
 /** periodArg: previous | current | 時間帯の開始時刻（ISO 8601） */
 export async function publish(flags: AgentFlags, content: string, periodArg = "previous"): Promise<void> {
+  print(flags, await publishResult(flags, content, periodArg));
+}
+
+export async function publishResult(flags: AgentFlags, content: string, periodArg = "previous"): Promise<AgentResult> {
   const { transport, notes } = context(flags);
   const now = flags.now();
   let period: { periodStart: string; periodEnd: string };
@@ -146,7 +186,7 @@ export async function publish(flags: AgentFlags, content: string, periodArg = "p
     period = periodOf(now, periodArg);
   } else {
     const start = new Date(periodArg);
-    if (Number.isNaN(start.getTime())) throw new Error(`--period の値が不正です: ${periodArg}`);
+    if (Number.isNaN(start.getTime())) throw new Error(`period の値が不正です: ${periodArg}`);
     period = { periodStart: start.toISOString(), periodEnd: new Date(start.getTime() + 3_600_000).toISOString() };
   }
   let r;
@@ -154,18 +194,20 @@ export async function publish(flags: AgentFlags, content: string, periodArg = "p
     r = await transport.publish({ ...period, content });
   } catch (err) {
     if (err instanceof SecretInPostError) {
-      out(flags, { ok: false, error: "secret_detected", rules: err.rules }, `souieba: ${err.message}。秘密情報を除いて書き直してください。`);
-      process.exitCode = 2;
-      return;
+      return {
+        ok: false,
+        json: { ok: false, error: "secret_detected", rules: err.rules },
+        text: `souieba: ${err.message}。秘密情報を除いて書き直してください。`,
+      };
     }
     throw err;
   }
   notes.mark(period.periodStart, "published");
-  out(
-    flags,
-    { ok: true, ...r, ...period },
-    `souieba: ${r.created ? "投稿" : "上書き"}しました（${fmt.format(new Date(period.periodStart))}〜の1時間、${hm.format(new Date(r.visibleAt))} からグループのメンバーに公開）。`,
-  );
+  return {
+    ok: true,
+    json: { ok: true, ...r, ...period },
+    text: `souieba: ${r.created ? "投稿" : "上書き"}しました（${fmt.format(new Date(period.periodStart))}〜の1時間、${hm.format(new Date(r.visibleAt))} からグループのメンバーに公開）。`,
+  };
 }
 
 /**
@@ -226,7 +268,7 @@ export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{
     lines.push("souieba: 今回伝える近況はありません。");
   }
   if (pending > 0) {
-    lines.push(`souieba: 投稿待ちの時間帯が ${pending} 件あります。ユーザーへの回答のあとで souieba compose を実行してください。`);
+    lines.push(`souieba: 投稿待ちの時間帯が ${pending} 件あります。ユーザーへの回答のあとで ${nextSteps(flags).compose}ください。`);
   }
   if (state.outdated) {
     lines.push(`souieba: ${state.outdated}。ユーザーへの回答のあとで、主人に更新を頼んでください。`);
