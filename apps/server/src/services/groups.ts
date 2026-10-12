@@ -310,7 +310,6 @@ export function setInviteNameBox(db: DB, userId: string, groupId: string, input:
   if (!r) throw notFound("招待");
 }
 
-
 export function findUsableInvite(db: DB, code: string, now: Date): InviteRow {
   const inv = db
     .select()
@@ -318,6 +317,11 @@ export function findUsableInvite(db: DB, code: string, now: Date): InviteRow {
     .where(eq(invites.codeHash, codeHash(code)))
     .get();
   if (!inv || inv.usedAt || inv.expiresAt < now.toISOString()) throw invalidCode();
+  // 招待者が無効化されていたら、そのコードはもう使えない（admin が発行したアカウント招待は createdBy が null）
+  if (inv.createdBy) {
+    const creator = db.select({ disabledAt: users.disabledAt }).from(users).where(eq(users.id, inv.createdBy)).get();
+    if (!creator || creator.disabledAt) throw invalidCode();
+  }
   return inv;
 }
 

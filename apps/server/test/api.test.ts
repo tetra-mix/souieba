@@ -218,6 +218,22 @@ describe("グループ", () => {
     expect((await h.invite(alice, groupId)).status).toBe(201);
   });
 
+  it("無効化された人が発行した招待コードは使えず、未使用のものは消える（admin のアカウント招待は残る）", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const { code } = await h.invite(bob, groupId);
+    const account = accounts.createAccountInvite(h.db, h.clock.now);
+    accounts.disableUser(h.db, bob.id, h.clock.now);
+    expect(h.db.select().from(schema.invites).where(eq(schema.invites.createdBy, bob.id)).all().filter((i) => !i.usedAt)).toEqual([]);
+    const redeem = (c: string, handle: string) => h.call("POST", "/v1/auth/redeem", undefined, { code: c, handle, displayName: handle });
+    expect((await redeem(code, "carol")).body.error.code).toBe("invalid_code");
+    expect((await redeem(account.code, "dave")).status).toBe(201);
+
+    // 行が残っていても（無効化の前に作られた招待など）、招待者が無効化されていれば断る
+    const second = await h.invite(alice, groupId);
+    h.db.update(schema.users).set({ disabledAt: h.clock.now.toISOString() }).where(eq(schema.users.id, alice.id)).run();
+    expect((await redeem(second.code, "erin")).body.error.code).toBe("invalid_code");
+  });
+
   it("既存のユーザーは groups/join で別のグループに参加でき、応答に招待者が入る", async () => {
     const { h, alice, groupId } = await twoMembers();
     const carol = await h.user("carol", "キャロル");

@@ -328,6 +328,8 @@ export function disableUser(db: DB, userId: string, now: Date): void {
       .returning({ id: users.id })
       .all();
     if (disabled.length === 0) throw notFound("ユーザー");
+    // 発行していた未使用の招待コードは消す（無効化された人の招待で、グループに入れないように）
+    db.delete(invites).where(and(eq(invites.createdBy, userId), isNull(invites.usedAt))).run();
     for (const groupId of activeGroupIds(db, userId)) ensureOwner(db, groupId);
   });
 }
