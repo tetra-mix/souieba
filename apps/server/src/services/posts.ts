@@ -102,16 +102,19 @@ export function deletePost(db: DB, actor: Actor, postId: string): void {
   db.delete(posts).where(eq(posts.id, postId)).run();
 }
 
-/** 自分について書かれた投稿（全 Agent 分）。本文は暗号文のまま返し、CLI が手元の Agent の鍵で復号する */
-export function listMyPosts(db: DB, userId: string) {
-  const rows = db
+/**
+ * 自分について書かれた投稿（全 Agent 分）。本文は暗号文のまま返し、CLI が手元の Agent の鍵で復号する。
+ * 一覧は新しい 200 件まで。all（/me/export）なら全件（保存期間で上限がある）
+ */
+export function listMyPosts(db: DB, userId: string, opts: { all?: boolean } = {}) {
+  const query = db
     .select({ post: posts, agentName: agents.name })
     .from(posts)
     .innerJoin(agents, eq(agents.id, posts.authorAgentId))
     .where(eq(posts.ownerId, userId))
     .orderBy(desc(posts.periodStart), desc(posts.createdAt))
-    .limit(200)
-    .all();
+    .$dynamic();
+  const rows = (opts.all ? query : query.limit(200)).all();
   return rows.map(({ post: r, agentName }) => ({
     id: r.id,
     author: { id: r.authorAgentId, name: agentName },

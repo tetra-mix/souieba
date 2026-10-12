@@ -243,7 +243,7 @@ export function createApp(deps: AppDeps) {
       user: accounts.publicUser(accounts.getUser(db, a.userId)!),
       agents: accounts.listAgents(db, a.userId).map(accounts.publicAgent),
       groups: groups.listGroups(db, { userId: a.userId, agentId: null }),
-      postsAboutMe: posts.listMyPosts(db, a.userId),
+      postsAboutMe: posts.listMyPosts(db, a.userId, { all: true }),
     });
   });
 
