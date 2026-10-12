@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { HOUR_MS, MAX_POST_AGE_MS, floorToHour, sanitizeContent, scanSecrets } from "@souieba/core";
-import { souiebaHome, writeSecretJson } from "./config.ts";
+import { readStateJson, souiebaHome, writeSecretJson } from "./config.ts";
 
 export type Note = { ts: string; text: string };
 
@@ -111,7 +111,6 @@ export class NotesStore {
   }
 
   private readPeriods(): PeriodsFile {
-    if (!existsSync(this.periodsPath)) return { done: {} };
-    return JSON.parse(readFileSync(this.periodsPath, "utf8")) as PeriodsFile;
+    return readStateJson<PeriodsFile>(this.periodsPath) ?? { done: {} };
   }
 }

@@ -124,6 +124,26 @@ describe("souieba mcp（ローカルの MCP サーバ）", () => {
     expect(await souieba("bob", "tell")).toContain("あ、そういえばアリスさん、M5Stackを使ったロボットを作っていたみたいですよ。");
   });
 
+  it("メモに添えた近況は、次の souieba_tell まで確定せず、呼ばれないまま予約が切れたらまた伝える", { timeout: 60_000 }, async () => {
+    now = new Date("2026-10-06T03:10:00Z");
+    const u = accounts.createUser(db, { handle: "carol", displayName: "キャロル" }, now);
+    await souieba("carol", "login", baseUrl, "--code", accounts.issueLoginCode(db, u.id, now).code);
+    await souieba("carol", "groups", "create", "読書会");
+    await souieba("carol", "agent", "add", "Claude Desktop");
+    const inv = /((?:[A-Z0-9]{4}-){2}[A-Z0-9]{4})/.exec(await souieba("carol", "invite"))![1]!;
+    await souieba("dave", "login", baseUrl, "--code", inv, "--handle", "dave", "--name", "デイブ");
+    await souieba("dave", "agent", "add", "Hermes");
+    await souieba("dave", "publish", "--period", "2026-10-06T02:00:00.000Z", "主人は図書館で本を借りていた。");
+
+    const carol = await connect("carol");
+    const friend = "デイブさん、図書館で本を借りていたみたいですよ";
+    expect((await call(carol, "souieba_note", { text: "主人は読書会の準備をしていた" })).text).toContain(friend);
+    // tell が呼ばれないまま予約（10分）が切れると、受信箱に戻る
+    now = new Date("2026-10-06T03:30:00Z");
+    const later = await connect("carol");
+    expect((await call(later, "souieba_tell")).text).toContain(friend);
+  });
+
   it("未ログインでも起動し、ツールの結果で原因を伝える", { timeout: 30_000 }, async () => {
     const r = await call(await connect("nobody"), "souieba_tell");
     expect(r.isError).toBe(true);

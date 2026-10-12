@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { displayNameKey, isValidDisplayName } from "@souieba/core";
 import { VERSION } from "./app.ts";
+import { loadLimits } from "./config.ts";
 import { migrateWithBackup, openDb } from "./db/node.ts";
 import { ApiError } from "./errors.ts";
 import * as accounts from "./services/accounts.ts";
@@ -68,7 +69,8 @@ async function localBackend(): Promise<Backend> {
   return {
     async createUser(handle, displayName, admin) {
       return db.transaction(() => {
-        const u = accounts.createUser(db, { handle, displayName, role: admin ? "admin" : "member" }, now);
+        // HTTP の admin API と同じく、インスタンスのユーザー数の上限を確かめる
+        const u = accounts.createUser(db, { handle, displayName, role: admin ? "admin" : "member" }, now, loadLimits());
         const { code, expiresAt } = accounts.issueLoginCode(db, u.id, now);
         return { user: view(u), loginCode: code, expiresAt };
       });

@@ -12,7 +12,8 @@ export const NOTE_GUIDE = [
   "Souieba の手引きでは主人（ユーザー）を「主人」と書きますが、主人と話すときは、友人の近況を伝えるときも含めて、いつもの呼び方・口調・語尾のままで構いません。「主人は〜」の形で書くのは、メモと投稿だけです。",
 ].join("\n");
 
-const NOTHING_TO_TELL = "souieba: 今回伝える近況はありません。";
+/** 伝える近況がないときの tell の文面（フックの出力では省く） */
+export const NOTHING_TO_TELL = "souieba: 今回伝える近況はありません。";
 
 /** tell の出力から、エージェントに渡す文脈を作る。伝えることがなければ null */
 export function tellContext(stdout: string): string | null {
