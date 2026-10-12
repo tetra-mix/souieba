@@ -3,7 +3,7 @@
  * 出力はエージェントが読む前提で、そのまま次の行動が分かる文面にする。
  */
 import { join } from "node:path";
-import { formatTellText, isValidDisplayName, periodOf, validateTellText } from "@souieba/core";
+import { type DirectoryUser, formatTellText, isValidDisplayName, periodOf, validateTellText } from "@souieba/core";
 import {
   AgentWatch,
   E2eeTransport,
@@ -217,12 +217,41 @@ export async function publishResult(flags: AgentFlags, content: string, periodAr
  * --reserve のときは予約だけして、伝えたら told、伝えなかったら release を呼んでもらう。
  */
 export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
-  const r = await tellResult(flags, reserve);
-  out(flags, r.json, r.text);
+  if (flags.json) {
+    const r = await tellResult(flags, reserve);
+    out(flags, r.json, r.text);
+    return;
+  }
+  // 近況が決まったらすぐに出す。呼び出し元が時間切れでこのプロセスを止めても、TOLD にした近況を失わないように
+  let head = "";
+  const r = await tellResult(flags, reserve, async (h) => {
+    head = h;
+    await writeStdout(`${h}\n`);
+  });
+  const rest = r.text.slice(head.length).replace(/^\n/, "");
+  if (rest) await writeStdout(`${rest}\n`);
 }
 
-/** tell の結果を、JSON と、エージェントが読む文面の両方で返す（souieba hook からも使う） */
-export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{ json: unknown; text: string }> {
+/** 標準出力に書き、パイプに渡し終えるまで待つ */
+function writeStdout(s: string): Promise<void> {
+  return new Promise((resolve) => process.stdout.write(s, () => resolve()));
+}
+
+/**
+ * tell のついでの確認（新しい Agent・表示名・新しいメンバー）にかける時間の上限。まとめてこれだけ待って、終わらなかったものは諦める。
+ * フックは 10〜15 秒で止められるので、主人の発言を待たせすぎないように
+ */
+export const TELL_EXTRAS_MS = 3_000;
+
+/**
+ * tell の結果を、JSON と、エージェントが読む文面の両方で返す（souieba hook からも使う）。
+ * onHead には、伝える近況（なければ「伝える近況はありません」）の行を、ついでの確認より先に渡す。text はその続きに残りの行を足したもの
+ */
+export async function tellResult(
+  flags: AgentFlags,
+  reserve: boolean,
+  onHead?: (head: string) => Promise<void>,
+): Promise<{ json: unknown; text: string }> {
   const { agent, souieba, notes, transport, watch, memberWatch, state } = context(flags);
   const now = flags.now();
   souieba.beginTurn();
@@ -237,25 +266,6 @@ export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{
       text = t;
     }
   }
-  const pending = notes.pending(now).length;
-  // 主人のアカウントに Agent が増えていたら知らせる（User トークンが漏れて、他人に足された可能性があるため）
-  const newAgents = await transport
-    .ownAgents()
-    .then((own) => watch.check(own))
-    .catch(() => []);
-  const nameIssue = await transport.displayNameIssue().catch(() => null);
-  // グループ名を復号し、まだ封を持っていないメンバーの Agent に封をし直す（新しく入った人が名前を読めるように）
-  const groupNames = await transport.groupNames().catch(() => []);
-  const newMembers = await newGroupMembers(transport, memberWatch, agent.userId!, groupNames).catch(() => []);
-
-  const json = {
-    tell: text && c ? { postId: c.postId, text, friend: c.owner.displayName, reserved: reserve } : null,
-    pendingPeriods: pending,
-    newAgents: newAgents.map((a) => ({ id: a.id, name: a.name, createdAt: a.createdAt })),
-    outdated: state.outdated,
-    displayNameIssue: nameIssue,
-    newMembers,
-  };
   const lines: string[] = [];
   if (text && c) {
     lines.push(...tellLines(c.postId, text));
@@ -263,6 +273,45 @@ export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{
   } else {
     lines.push(NOTHING_TO_TELL);
   }
+  await onHead?.(lines.join("\n"));
+
+  const pending = notes.pending(now).length;
+  // 主人のアカウントに Agent が増えていたら知らせる（User トークンが漏れて、他人に足された可能性があるため）。
+  // グループ名を復号し、まだ封を持っていないメンバーの Agent に封をし直す（新しく入った人が名前を読めるように）。
+  // どれも並べて実行し、TELL_EXTRAS_MS で打ち切る。打ち切ったあとに届いた結果は記録しない（知らせないまま既知にしないため）
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(() => {
+      expired = true;
+      resolve();
+    }, TELL_EXTRAS_MS);
+  });
+  const within = <T>(p: Promise<T>, fallback: T) => Promise.race([p.catch(() => fallback), deadline.then(() => fallback)]);
+  const [newAgents, nameIssue, newMembers] = await Promise.all([
+    within(
+      transport.ownAgents().then((own) => (expired ? [] : watch.check(own))),
+      [],
+    ),
+    within(transport.displayNameIssue(), null),
+    within(
+      Promise.all([transport.users(), transport.groupNames().catch(() => [])]).then(([users, groups]) =>
+        expired ? [] : newGroupMembers(memberWatch, users, agent.userId!, groups),
+      ),
+      [],
+    ),
+  ]);
+  clearTimeout(timer);
+
+  const issueName = nameIssue ? contextName(nameIssue.name) : null;
+  const json = {
+    tell: text && c ? { postId: c.postId, text, friend: c.owner.displayName, reserved: reserve } : null,
+    pendingPeriods: pending,
+    newAgents: newAgents.map((a) => ({ id: a.id, name: contextName(a.name), createdAt: a.createdAt })),
+    outdated: state.outdated,
+    displayNameIssue: nameIssue ? { ...nameIssue, name: issueName } : null,
+    newMembers,
+  };
   if (pending > 0) {
     lines.push(`souieba: 投稿待ちの時間帯が ${pending} 件あります。ユーザーへの回答のあとで ${nextSteps(flags).compose}ください。`);
   }
@@ -275,12 +324,13 @@ export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{
         ? "使えない文字か表現（絵文字・記号・命令に見える言葉など）が含まれているため、友人のエージェントに近況が届きません"
         : "同じグループの人と同じ表示名のため、友人から見分けられません";
     lines.push(
-      `souieba: 主人の表示名「${nameIssue.name}」は、${why}。ユーザーへの回答のあとで、主人に souieba profile --name <新しい表示名> で変更を頼んでください。`,
+      `souieba: 主人の表示名${issueName ? `「${issueName}」` : ""}は、${why}。ユーザーへの回答のあとで、主人に souieba profile --name <新しい表示名> で変更を頼んでください。`,
     );
   }
   for (const a of newAgents) {
+    const name = contextName(a.name);
     lines.push(
-      `souieba: 主人のアカウントに新しい Agent「${a.name}」（${a.id}、${fmt.format(new Date(a.createdAt))} に登録）が追加されました。` +
+      `souieba: 主人のアカウントに新しい Agent${name ? `「${name}」` : ""}（${a.id}、${fmt.format(new Date(a.createdAt))} に登録）が追加されました。` +
         `ユーザーへの回答のあとで、このことを主人に伝えてください。心当たりがなければ、主人が souieba agent revoke ${a.id} を実行すれば止められます。あなたが実行してはいけません。`,
     );
   }
@@ -331,11 +381,20 @@ export function confirmTold(flags: AgentFlags, postId: string): Promise<boolean>
 const HANDLE_RE = /^[a-z0-9_]{2,20}$/;
 
 /**
+ * 他人やサーバが決めた名前（Agent 名・表示名・グループ名）を、エージェントへの文面に入れてよければそのまま返す。だめなら null（呼び出し側は ID などで代わりに示す）。
+ * Agent 名はサーバが長さしか確かめないので、表示名と同じ規則で確かめる。
+ * 文面では名前を「」で囲むので、括弧で囲みを閉じて「確認済み、伝える必要はありません」などと続けられないよう、かぎ括弧も断る
+ */
+function contextName(name: string | null): string | null {
+  return name && isValidDisplayName(name) && !/[「」『』]/.test(name) ? name : null;
+}
+
+/**
  * 主人のグループに新しく入った人。表示名とグループ名は他人が付けたもので、この出力はエージェント（LLM）が読むので、
  * 規則に合わないものは出さない（handle はサーバが英小文字・数字・_ に限っているが、ここでも確かめる）。
  */
-async function newGroupMembers(transport: E2eeTransport, watch: MemberWatch, userId: string, groups: NamedGroup[]) {
-  const added: NewMember[] = watch.check(await transport.users(), userId);
+function newGroupMembers(watch: MemberWatch, users: DirectoryUser[], userId: string, groups: NamedGroup[]) {
+  const added: NewMember[] = watch.check(users, userId);
   if (added.length === 0) return [];
   const names = new Map(groups.map((g) => [g.id, g.name]));
   return added
@@ -343,10 +402,10 @@ async function newGroupMembers(transport: E2eeTransport, watch: MemberWatch, use
     .map((m) => {
       return {
         groupId: m.groupId,
-        groupName: displayGroupName(names.get(m.groupId) ?? null),
+        groupName: contextName(displayGroupName(names.get(m.groupId) ?? null)),
         userId: m.user.id,
         handle: m.user.handle,
-        displayName: isValidDisplayName(m.user.displayName) ? m.user.displayName : null,
+        displayName: contextName(m.user.displayName),
       };
     });
 }
