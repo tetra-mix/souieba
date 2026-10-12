@@ -9,7 +9,11 @@ import { allowedRecipientAgents } from "./groups.ts";
 
 export type Actor = { userId: string; agentId: string | null };
 
-export const MAX_RECIPIENTS = 200;
+/**
+ * 1つの投稿の宛先（Agent）の上限。200人 × 5 Agent（SOUIEBA_MAX_AGENTS_PER_USER の既定）が収まるようにする。
+ * 宛先1件は 150 バイトほどなので、POST_BODY_LIMIT（app.ts）にも収まる
+ */
+export const MAX_RECIPIENTS = 1000;
 
 /**
  * 暗号化された投稿を保存する。サーバは本文を読めないので、確かめるのは

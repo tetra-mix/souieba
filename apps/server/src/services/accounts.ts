@@ -5,7 +5,7 @@ import { codeHash, newCode, newId, newToken, sha256 } from "../crypto.ts";
 import type { DB } from "../db/index.ts";
 import { type AgentRow, type UserRow, agents, credentials, invites, users } from "../db/schema.ts";
 import { badRequest, conflict, invalidCode, notFound } from "../errors.ts";
-import { deleteEmptyGroups, findUsableInvite, joinWithInvite } from "./groups.ts";
+import { activeGroupIds, deleteEmptyGroups, ensureOwner, findUsableInvite, joinWithInvite } from "./groups.ts";
 
 export type { AgentRow, UserRow };
 
@@ -265,6 +265,7 @@ export function createAgent(
   ownerId: string,
   input: { name: string; provider?: string; encKey: string; signKey: string },
   now: Date,
+  limits?: Pick<Limits, "maxAgentsPerUser">,
 ): { agent: AgentRow; token: string } {
   const name = input.name.trim();
   if (name.length < 1 || name.length > 40) throw badRequest("invalid_name", "Agent 名は1〜40文字にしてください");
@@ -272,6 +273,10 @@ export function createAgent(
     throw badRequest("invalid_agent_keys", "Agent の鍵の形式が不正です");
   }
   return db.transaction(() => {
+    // 1人が Agent を増やしすぎると、同じグループの人の投稿の宛先が上限を超えて、誰も投稿できなくなる
+    if (limits && db.select({ n: count() }).from(agents).where(and(eq(agents.ownerId, ownerId), isNull(agents.revokedAt))).get()!.n >= limits.maxAgentsPerUser) {
+      throw conflict("limit_agents_per_user", `1人が登録できる Agent は ${limits.maxAgentsPerUser} 個までです。使っていない Agent を souieba agent revoke で止めてください`);
+    }
     const agent = db
       .insert(agents)
       .values({
@@ -313,21 +318,27 @@ export function revokeAgent(db: DB, ownerId: string, agentId: string, now: Date)
   });
 }
 
+/** ユーザーを無効化する。owner だったグループは、ほかの有効なメンバーに owner を引き継ぐ */
 export function disableUser(db: DB, userId: string, now: Date): void {
-  const disabled = db
-    .update(users)
-    .set({ disabledAt: now.toISOString() })
-    .where(and(eq(users.id, userId), isNull(users.disabledAt)))
-    .returning({ id: users.id })
-    .all();
-  if (disabled.length === 0) throw notFound("ユーザー");
+  db.transaction(() => {
+    const disabled = db
+      .update(users)
+      .set({ disabledAt: now.toISOString() })
+      .where(and(eq(users.id, userId), isNull(users.disabledAt)))
+      .returning({ id: users.id })
+      .all();
+    if (disabled.length === 0) throw notFound("ユーザー");
+    for (const groupId of activeGroupIds(db, userId)) ensureOwner(db, groupId);
+  });
 }
 
-/** アカウント削除。外部キーの ON DELETE CASCADE で投稿・配送状態・所属も物理削除される */
+/** アカウント削除。外部キーの ON DELETE CASCADE で投稿・配送状態・所属も物理削除される。owner だったグループは引き継ぐ */
 export function deleteUser(db: DB, userId: string): void {
   db.transaction(() => {
+    const groupIds = activeGroupIds(db, userId);
     db.delete(users).where(eq(users.id, userId)).run();
     deleteEmptyGroups(db);
+    for (const groupId of groupIds) ensureOwner(db, groupId);
   });
 }
 

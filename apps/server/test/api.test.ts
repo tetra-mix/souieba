@@ -235,6 +235,18 @@ describe("グループ", () => {
     expect(h.db.select().from(schema.groups).all()).toEqual([]);
   });
 
+  it("owner がアカウントを消したり無効化されたりしても、最も古い有効なメンバーが owner を引き継ぐ", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const carol = await h.joinNew(alice, groupId, "carol", "キャロル");
+    const role = async (u: TestUser) => (await h.call("GET", "/v1/groups", u.token)).body.groups[0]?.role;
+    expect((await h.call("DELETE", "/v1/me", alice.token)).status).toBe(204);
+    expect(await role(bob)).toBe("owner");
+    // 無効化された owner は member に戻り、次に古いメンバーが owner になる
+    accounts.disableUser(h.db, bob.id, h.clock.now);
+    expect(await role(carol)).toBe("owner");
+    expect(h.db.select().from(schema.groupMembers).where(eq(schema.groupMembers.userId, bob.id)).get()?.role).toBe("member");
+  });
+
   it("owner でなければ他人を外せない", async () => {
     const { h, alice, bob, groupId } = await twoMembers();
     expect((await h.call("DELETE", `/v1/groups/${groupId}/members/${alice.id}`, bob.token)).status).toBe(403);
@@ -291,6 +303,14 @@ describe("鍵", () => {
     const r = await h.call("POST", "/v1/agents", alice.token, { name: "x", encKey: "not-a-key", signKey: sign });
     expect(r.body.error.code).toBe("invalid_agent_keys");
     expect((await h.call("POST", "/v1/agents", alice.token, { name: "x", encKey: enc, signKey: sign })).status).toBe(201);
+  });
+
+  it("1人が登録できる有効な Agent の数には上限がある（失効させれば登録し直せる）", async () => {
+    const { h, alice } = await twoMembers({ config: { limits: { maxUsers: 500, maxGroupMembers: 50, maxGroupsPerUser: 20, maxAgentsPerUser: 2 } } });
+    const extra = await h.addAgent(alice, "予備");
+    await expect(h.addAgent(alice, "3つ目")).rejects.toThrow(/limit_agents_per_user/);
+    expect((await h.call("DELETE", `/v1/agents/${extra.id}`, alice.token)).status).toBe(204);
+    await h.addAgent(alice, "3つ目");
   });
 });
 
@@ -581,14 +601,14 @@ describe("本文の大きさ", () => {
 
 describe("上限", () => {
   it("グループの人数の上限を超えて参加できない", async () => {
-    const { h, alice, groupId } = await twoMembers({ config: { limits: { maxUsers: 100, maxGroupMembers: 2, maxGroupsPerUser: 10 } } });
+    const { h, alice, groupId } = await twoMembers({ config: { limits: { maxUsers: 100, maxGroupMembers: 2, maxGroupsPerUser: 10, maxAgentsPerUser: 5 } } });
     await expect(h.joinNew(alice, groupId, "carol", "キャロル")).rejects.toThrow(/limit_group_members/);
     // 失敗した参加でユーザーだけが作られることはない
     expect(h.db.select().from(schema.users).where(eq(schema.users.handle, "carol")).all()).toEqual([]);
   });
 
   it("1人が入れるグループの数を超えて、作成も参加もできない", async () => {
-    const { h, alice, bob } = await twoMembers({ config: { limits: { maxUsers: 100, maxGroupMembers: 50, maxGroupsPerUser: 1 } } });
+    const { h, alice, bob } = await twoMembers({ config: { limits: { maxUsers: 100, maxGroupMembers: 50, maxGroupsPerUser: 1, maxAgentsPerUser: 5 } } });
     await expect(h.createGroup(alice, "2つ目")).rejects.toThrow(/limit_groups_per_user/);
     const carol = await h.user("carol", "キャロル");
     const other = await h.createGroup(carol, "別のグループ");
@@ -596,7 +616,7 @@ describe("上限", () => {
   });
 
   it("宛先が多い投稿・受信箱にたまった投稿・大きなディレクトリでも、1つの文のバインド変数が100個を超えない", async () => {
-    const { h, alice, bob, groupId } = await twoMembers();
+    const { h, alice, bob, groupId } = await twoMembers({ config: { limits: { maxUsers: 500, maxGroupMembers: 50, maxGroupsPerUser: 20, maxAgentsPerUser: 100 } } });
     // 宛先が51件（2変数 × 51 > 100）の投稿
     for (let i = 0; i < 49; i++) {
       if (i === 25) h.clock.advance(MIN);
@@ -622,12 +642,12 @@ describe("上限", () => {
   });
 
   it("インスタンスのユーザー数の上限を超えて登録できない", async () => {
-    const { h, alice, groupId } = await twoMembers({ config: { limits: { maxUsers: 2, maxGroupMembers: 50, maxGroupsPerUser: 10 } } });
+    const { h, alice, groupId } = await twoMembers({ config: { limits: { maxUsers: 2, maxGroupMembers: 50, maxGroupsPerUser: 10, maxAgentsPerUser: 5 } } });
     await expect(h.joinNew(alice, groupId, "carol", "キャロル")).rejects.toThrow(/limit_users/);
   });
 
   it("無効化したユーザーはユーザー数に数えない", async () => {
-    const { h, alice, bob, groupId } = await twoMembers({ config: { limits: { maxUsers: 2, maxGroupMembers: 50, maxGroupsPerUser: 10 } } });
+    const { h, alice, bob, groupId } = await twoMembers({ config: { limits: { maxUsers: 2, maxGroupMembers: 50, maxGroupsPerUser: 10, maxAgentsPerUser: 5 } } });
     accounts.disableUser(h.db, bob.id, h.clock.now);
     await h.joinNew(alice, groupId, "carol", "キャロル");
   });
@@ -671,6 +691,26 @@ describe("グループ名の暗号化（#16）", () => {
     );
     expect((await put(alice.agentToken, { version: 2, boxes: [box("x", groupId, 2, alice, bob)] })).body.error.code).toBe("stale_name_version");
     expect((await put(eve.agentToken, { version: 1, boxes: [box("x", groupId, 1, eve, bob)] })).status).toBe(404);
+  });
+
+  it("メンバーは、読める封がすでにある Agent の名前を書き換えられず、他人の Agent を送り主にもできない", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const put = (u: TestUser, boxes: unknown[]) => h.call("PUT", `/v1/groups/${groupId}/name-boxes`, u.agentToken, { version: 1, boxes });
+    expect((await put(alice, [box("研究室", groupId, 1, alice, alice), box("研究室", groupId, 1, alice, bob)])).status).toBe(204);
+    const before = h.db.select().from(schema.groupNameBoxes).all();
+    // owner でないボブが、自分の Agent で署名した別の名前を全員宛てに置いても、既存の封は変わらない
+    expect((await put(bob, [box("家族", groupId, 1, bob, alice), box("家族", groupId, 1, bob, bob)])).status).toBe(204);
+    expect(h.db.select().from(schema.groupNameBoxes).all()).toEqual(before);
+    // 送り主をアリスの Agent と名乗った封は断る
+    const forged = box("家族", groupId, 1, bob, alice);
+    expect((await put(bob, [{ ...forged, box: { ...forged.box, senderAgentId: alice.agentId } }])).body.error.code).toBe("invalid_name_box");
+    // 送り主の Agent が失効したら、その封は読めないので、置き直せる
+    const fresh = await h.addAgent(alice, "新しい PC");
+    expect((await h.call("DELETE", `/v1/agents/${alice.agentId}`, alice.token)).status).toBe(204);
+    expect((await list(h, bob)).missingAgentIds).toContain(bob.agentId);
+    expect((await put(bob, [box("研究室", groupId, 1, bob, bob)])).status).toBe(204);
+    expect((await list(h, bob)).missingAgentIds).not.toContain(bob.agentId);
+    expect((await list(h, bob)).missingAgentIds).toContain(fresh.id);
   });
 
   it("名前の変更は owner だけで、版を1つ上げて封を置き換える", async () => {

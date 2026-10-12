@@ -75,16 +75,24 @@ export function createGroup(
   });
 }
 
-/** グループのメンバーの、有効で鍵のある Agent */
-function memberAgentIds(db: DB, groupId: string): string[] {
-  return db
-    .select({ id: agents.id })
-    .from(agents)
-    .innerJoin(groupMembers, eq(groupMembers.userId, agents.ownerId))
-    .innerJoin(users, eq(users.id, agents.ownerId))
-    .where(and(eq(groupMembers.groupId, groupId), isActive, isNull(agents.revokedAt), isNotNull(agents.encKey), isNull(users.disabledAt)))
-    .all()
-    .map((r) => r.id);
+/** グループごとの、メンバーの有効で鍵のある Agent */
+function memberAgentIdsByGroup(db: DB, groupIds: string[]): Map<string, Set<string>> {
+  const rows = chunks(groupIds, MAX_BOUND_PARAMS).flatMap((batch) =>
+    db
+      .select({ groupId: groupMembers.groupId, id: agents.id })
+      .from(agents)
+      .innerJoin(groupMembers, eq(groupMembers.userId, agents.ownerId))
+      .innerJoin(users, eq(users.id, agents.ownerId))
+      .where(and(inArray(groupMembers.groupId, batch), isActive, isNull(agents.revokedAt), isNotNull(agents.encKey), isNull(users.disabledAt)))
+      .all(),
+  );
+  const byGroup = new Map<string, Set<string>>(groupIds.map((id) => [id, new Set()]));
+  for (const r of rows) byGroup.get(r.groupId)!.add(r.id);
+  return byGroup;
+}
+
+function memberAgentIds(db: DB, groupId: string): Set<string> {
+  return memberAgentIdsByGroup(db, [groupId]).get(groupId)!;
 }
 
 function parseBox(text: string): GroupNameBox | null {
@@ -93,6 +101,16 @@ function parseBox(text: string): GroupNameBox | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 今の版の、読める封がすでに置かれているか。送り主の Agent がもうメンバーのものでなければ（失効・脱退）、
+ * 受け取った側は署名を確かめられず読めないので、置かれていないものとして扱う
+ */
+function hasReadableBox(box: { version: number; box: string } | undefined, version: number, members: Set<string>): boolean {
+  if (!box || box.version !== version) return false;
+  const sender = parseBox(box.box)?.senderAgentId;
+  return !!sender && members.has(sender);
 }
 
 /** グループごとの今の人数 */
@@ -130,12 +148,17 @@ export function listGroups(db: DB, me: { userId: string; agentId: string | null 
     : db
         .select({ id: agents.id })
         .from(agents)
-        .where(eq(agents.ownerId, me.userId))
+        .where(and(eq(agents.ownerId, me.userId), isNull(agents.revokedAt)))
         .all()
         .map((a) => a.id);
+  // グループごとに引くと、グループの数だけクエリが増える（Durable Object の SQLite は読んだ行数で課金される）ので、まとめて引く
+  const ids = rows.map((r) => r.id);
+  const allBoxes = chunks(ids, MAX_BOUND_PARAMS).flatMap((batch) => db.select().from(groupNameBoxes).where(inArray(groupNameBoxes.groupId, batch)).all());
+  const membersByGroup = memberAgentIdsByGroup(db, ids);
   return rows.map((r) => {
-    const boxes = db.select().from(groupNameBoxes).where(and(eq(groupNameBoxes.groupId, r.id), eq(groupNameBoxes.version, r.nameVersion))).all();
-    const have = new Set(boxes.map((b) => b.agentId));
+    const boxes = allBoxes.filter((b) => b.groupId === r.id && b.version === r.nameVersion);
+    const members = membersByGroup.get(r.id)!;
+    const have = new Set(boxes.filter((b) => hasReadableBox(b, r.nameVersion, members)).map((b) => b.agentId));
     return {
       id: r.id,
       role: r.role,
@@ -147,7 +170,7 @@ export function listGroups(db: DB, me: { userId: string; agentId: string | null 
         .filter((b) => myAgents.includes(b.agentId))
         .map((b) => parseBox(b.box))
         .filter((b): b is GroupNameBox => !!b),
-      missingAgentIds: memberAgentIds(db, r.id).filter((id) => !have.has(id)),
+      missingAgentIds: [...members].filter((id) => !have.has(id)),
     };
   });
 }
@@ -164,11 +187,21 @@ export function listAllGroups(db: DB) {
 
 type BoxInput = { agentId: string; box: GroupNameBox };
 
-/** 封の宛先と中身のヘッダが、このグループの今のメンバーの Agent・今の版と合っているか */
-function checkedBoxes(db: DB, groupId: string, version: number, boxes: BoxInput[]) {
-  const allowed = new Set(memberAgentIds(db, groupId));
+/** 封の宛先と中身のヘッダが、このグループの今のメンバーの Agent・今の版と合っていて、送り主が書き込んだ本人の Agent か */
+function checkedBoxes(db: DB, actorId: string, groupId: string, version: number, boxes: BoxInput[]) {
+  const allowed = memberAgentIds(db, groupId);
+  const own = new Set(
+    db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.ownerId, actorId), isNull(agents.revokedAt)))
+      .all()
+      .map((a) => a.id),
+  );
   return boxes.map(({ agentId, box }) => {
     if (!allowed.has(agentId)) throw badRequest("invalid_recipient", `${agentId} はこのグループのメンバーの Agent ではありません`);
+    // 他人の Agent を送り主に名乗らせない（署名はクライアントが送り主の鍵で確かめるが、サーバでも断る）
+    if (!own.has(box.senderAgentId)) throw badRequest("invalid_name_box", "封の送り主が、あなたの Agent ではありません");
     if (box.groupId !== groupId || box.version !== version || box.recipientAgentId !== agentId) {
       throw badRequest("invalid_name_box", "封のヘッダが宛先・グループ・版と一致しません");
     }
@@ -194,6 +227,7 @@ function insertBoxes(db: DB, groupId: string, version: number, rows: { agentId: 
 
 /**
  * まだ封を持っていないメンバーの Agent に、封をしたグループ名を置く（メンバーなら誰でも。新しく入った人や Agent のため）。
+ * 読める封がすでにある Agent の分は、黙って飛ばす（メンバーが名前を書き換えられないように。変更は owner の renameGroup だけ）。
  * clearPlain: 暗号化する前の平文の名前を消す（封をし直したクライアントが送る）。
  */
 export function putNameBoxes(
@@ -207,7 +241,18 @@ export function putNameBoxes(
     requireMember(db, groupId, actorId);
     const g = db.select({ nameVersion: groups.nameVersion }).from(groups).where(eq(groups.id, groupId)).get()!;
     if (input.version !== g.nameVersion) throw conflict("stale_name_version", "グループ名が変更されています。最新の名前を取り直してください");
-    insertBoxes(db, groupId, input.version, checkedBoxes(db, groupId, input.version, input.boxes), now);
+    const rows = checkedBoxes(db, actorId, groupId, input.version, input.boxes);
+    const members = memberAgentIds(db, groupId);
+    const existing = new Map(
+      chunks(
+        rows.map((r) => r.agentId),
+        MAX_BOUND_PARAMS - 1,
+      )
+        .flatMap((batch) => db.select().from(groupNameBoxes).where(and(eq(groupNameBoxes.groupId, groupId), inArray(groupNameBoxes.agentId, batch))).all())
+        .map((b) => [b.agentId, b] as const),
+    );
+    const writable = rows.filter((r) => !hasReadableBox(existing.get(r.agentId), input.version, members));
+    insertBoxes(db, groupId, input.version, writable, now);
     if (input.clearPlain) db.update(groups).set({ name: "" }).where(eq(groups.id, groupId)).run();
   });
 }
@@ -218,7 +263,7 @@ export function renameGroup(db: DB, actorId: string, groupId: string, input: { v
     if (requireMember(db, groupId, actorId).role !== "owner") throw forbidden("owner だけがグループ名を変更できます");
     const g = db.select({ nameVersion: groups.nameVersion }).from(groups).where(eq(groups.id, groupId)).get()!;
     if (input.version !== g.nameVersion + 1) throw conflict("stale_name_version", "グループ名が変更されています。最新の名前を取り直してください");
-    const rows = checkedBoxes(db, groupId, input.version, input.boxes);
+    const rows = checkedBoxes(db, actorId, groupId, input.version, input.boxes);
     db.delete(groupNameBoxes).where(eq(groupNameBoxes.groupId, groupId)).run();
     db.update(groups).set({ name: "", nameVersion: input.version }).where(eq(groups.id, groupId)).run();
     insertBoxes(db, groupId, input.version, rows, now);
@@ -335,21 +380,40 @@ export function removeMember(db: DB, actorId: string, groupId: string, targetId:
       .set({ leftAt: now.toISOString(), role: "member" })
       .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, targetId)))
       .run();
-    const rest = db
-      .select({ userId: groupMembers.userId, role: groupMembers.role })
-      .from(groupMembers)
-      .where(and(eq(groupMembers.groupId, groupId), isActive))
-      .orderBy(groupMembers.joinedAt)
-      .all();
-    if (rest.length === 0) {
-      db.delete(groups).where(eq(groups.id, groupId)).run();
-    } else if (!rest.some((r) => r.role === "owner")) {
-      db.update(groupMembers)
-        .set({ role: "owner" })
-        .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, rest[0]!.userId)))
-        .run();
-    }
+    if (activeMemberCount(db, groupId) === 0) db.delete(groups).where(eq(groups.id, groupId)).run();
+    else ensureOwner(db, groupId);
   });
+}
+
+/** 今いるグループの ID（抜けたものは除く） */
+export function activeGroupIds(db: DB, userId: string): string[] {
+  return db
+    .select({ id: groupMembers.groupId })
+    .from(groupMembers)
+    .where(and(eq(groupMembers.userId, userId), isActive))
+    .all()
+    .map((r) => r.id);
+}
+
+/**
+ * owner がいなくなったグループ（抜けた・アカウントを消した・無効化された）で、最も古くからいる有効なメンバーを owner にする。
+ * 無効化されたメンバーは owner と数えず、繰り上げの候補にもしない。トランザクションの中で呼ぶ。
+ */
+export function ensureOwner(db: DB, groupId: string): void {
+  const rest = db
+    .select({ userId: groupMembers.userId, role: groupMembers.role })
+    .from(groupMembers)
+    .innerJoin(users, eq(users.id, groupMembers.userId))
+    .where(and(eq(groupMembers.groupId, groupId), isActive, isNull(users.disabledAt)))
+    .orderBy(groupMembers.joinedAt)
+    .all();
+  if (rest.length === 0 || rest.some((r) => r.role === "owner")) return;
+  // 無効化された owner は member に戻す（有効に戻されたときに owner が2人にならないように）
+  db.update(groupMembers).set({ role: "member" }).where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.role, "owner"))).run();
+  db.update(groupMembers)
+    .set({ role: "owner" })
+    .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, rest[0]!.userId)))
+    .run();
 }
 
 /** メンバーがいなくなったグループを消す（アカウント削除の後など） */
