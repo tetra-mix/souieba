@@ -7,6 +7,7 @@ import {
   selectTellCandidate,
 } from "@souieba/core";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import { type DB, MAX_BOUND_PARAMS, chunks } from "../db/index.ts";
 import { agents, deliveries, postRecipients, posts, users } from "../db/schema.ts";
 import { conflict, notFound } from "../errors.ts";
@@ -16,10 +17,13 @@ export type AgentActor = { userId: string; agentId: string };
 
 export const DEFAULT_LEASE_MS = 10 * 60_000;
 
+/** 投稿の持ち主（inboxRows が結合する users と分けるための別名） */
+const owner = alias(users, "owner");
+
 /**
  * 「今この瞬間にこの Agent が見てよい投稿」の条件。
  * 所属は毎回その時点で判定し（抜けたら受信済みでも候補から消える）、
- * この Agent が復号できる（宛先に含まれる）投稿だけに絞る。
+ * この Agent が復号できる（宛先に含まれる）投稿だけに絞る。無効化された人の投稿は届けない。
  */
 function visibleToMe(db: DB, actor: AgentActor, now: Date) {
   return and(
@@ -28,6 +32,12 @@ function visibleToMe(db: DB, actor: AgentActor, now: Date) {
     lte(posts.visibleAt, now.toISOString()),
     gte(posts.createdAt, new Date(now.getTime() - TELL_WINDOW_MS).toISOString()),
     sharesGroup(db, posts.ownerId, actor.userId),
+    notExists(
+      db
+        .select({ id: owner.id })
+        .from(owner)
+        .where(and(eq(owner.id, posts.ownerId), isNotNull(owner.disabledAt))),
+    ),
     // EXISTS（相関サブクエリ）にすると posts を全件読むので、宛先の索引（post_recipients_agent）から投稿を引く。
     // Durable Object の SQLite は読んだ行数で課金される
     inArray(

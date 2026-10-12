@@ -155,6 +155,18 @@ describe("可視性（グループ）", () => {
     expect((await h.call("DELETE", `/v1/groups/${groupId}/members/${bob.id}`, bob.token)).status).toBe(204);
     expect((await h.call("POST", "/v1/tell/claim", bob.agentToken, {})).body.candidate).toBeNull();
   });
+
+  it("無効化された人の投稿は、受信済みでも候補から消え、新しく取り込みもしない", async () => {
+    const { h, alice, bob } = await twoMembers();
+    const carol = await h.joinNew(alice, (await h.call("GET", "/v1/groups", alice.token)).body.groups[0].id, "carol", "キャロル");
+    await h.publish(alice, "主人は京都へ遊びに行っていた。");
+    h.clock.advance(11 * MIN);
+    expect((await h.call("POST", "/v1/sync", bob.agentToken)).body.received).toBe(1);
+    accounts.disableUser(h.db, alice.id, h.clock.now);
+    expect((await h.call("GET", "/v1/inbox", bob.agentToken)).body.items).toEqual([]);
+    expect((await h.call("POST", "/v1/tell/claim", bob.agentToken, {})).body.candidate).toBeNull();
+    expect((await h.call("POST", "/v1/sync", carol.agentToken)).body).toEqual({ received: 0, inboxSize: 0 });
+  });
 });
 
 describe("グループ", () => {
