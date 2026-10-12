@@ -312,9 +312,7 @@ export async function tellResult(
     displayNameIssue: nameIssue ? { ...nameIssue, name: issueName } : null,
     newMembers,
   };
-  if (pending > 0) {
-    lines.push(`souieba: 投稿待ちの時間帯が ${pending} 件あります。ユーザーへの回答のあとで ${nextSteps(flags).compose}ください。`);
-  }
+  if (pending > 0) lines.push(pendingLine(flags, pending));
   if (state.outdated) {
     lines.push(`souieba: ${state.outdated}。ユーザーへの回答のあとで、主人に更新を頼んでください。`);
   }
@@ -343,6 +341,16 @@ export async function tellResult(
     );
   }
   return { json, text: lines.join("\n") };
+}
+
+function pendingLine(flags: AgentFlags, pending: number): string {
+  return `souieba: 投稿待ちの時間帯が ${pending} 件あります。ユーザーへの回答のあとで ${nextSteps(flags).compose}ください。`;
+}
+
+/** 投稿待ちの時間帯があれば、その知らせ（souieba mcp のメモの結果に添える）。手元のファイルを読むだけで、通信はしない */
+export function pendingNotice(flags: AgentFlags): string | null {
+  const pending = context(flags).notes.pending(flags.now()).length;
+  return pending > 0 ? pendingLine(flags, pending) : null;
 }
 
 /** 友人の近況を渡すときの文面（tell と、souieba mcp のメモのついで） */
