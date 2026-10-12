@@ -293,4 +293,43 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     now = new Date("2026-10-05T21:00:00Z");
     expect((await souieba("bob", "tell")).out).not.toContain("カレー");
   });
+
+  it("同じ名前で agent add し直すと前の Agent を失効させ、groups leave はグループの指定を求める", { timeout: 30_000 }, async () => {
+    const u = accounts.createUser(db, { handle: "dave", displayName: "デイブ" }, now);
+    await souieba("dave", "login", baseUrl, "--code", accounts.issueLoginCode(db, u.id, now).code);
+    await souieba("dave", "groups", "create", "将棋部");
+    await souieba("dave", "agent", "add", "Claude Code");
+    const again = await souieba("dave", "agent", "add", "Claude Code");
+    expect(again.out).toContain("前の Agent");
+    const rows = db.select().from(schema.agents).all().filter((a) => a.ownerId === u.id);
+    expect(rows.map((a) => a.revokedAt === null)).toEqual([false, true]);
+    expect((await souieba("dave", "doctor")).out).not.toContain("この PC にない Agent");
+
+    // グループが1つでも、黙ってそこから抜けない
+    const leave = await souieba("dave", "groups", "leave");
+    expect(leave.code).toBe(1);
+    expect(leave.out).toContain("souieba groups leave <グループ>");
+    expect((await souieba("dave", "groups")).out).toContain("将棋部");
+  });
+
+  it("login で前段が HTML のエラーを返しても、状態コードで伝える", { timeout: 30_000 }, async () => {
+    const bad = createServer((req, res) => {
+      if (req.url === "/v1/instance") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ name: "Souieba" }));
+        return;
+      }
+      res.writeHead(502, { "content-type": "text/html" });
+      res.end("<html>Bad Gateway</html>");
+    });
+    await new Promise<void>((r) => bad.listen(0, "127.0.0.1", r));
+    try {
+      const r = await souieba("erin", "login", `http://127.0.0.1:${(bad.address() as AddressInfo).port}`, "--code", "ABCD-EFGH-JKLM");
+      expect(r.code).toBe(1);
+      expect(r.out).toContain("HTTP 502");
+      expect(r.out).not.toContain("Unexpected token");
+    } finally {
+      bad.close();
+    }
+  });
 });
