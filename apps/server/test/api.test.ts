@@ -745,13 +745,45 @@ describe("グループ名の暗号化（#16）", () => {
     // 送り主をアリスの Agent と名乗った封は断る
     const forged = box("家族", groupId, 1, bob, alice);
     expect((await put(bob, [{ ...forged, box: { ...forged.box, senderAgentId: alice.agentId } }])).body.error.code).toBe("invalid_name_box");
-    // 送り主の Agent が失効したら、その封は読めないので、置き直せる
+  });
+
+  it("送り主の Agent が失効して読めなくなった封は、owner だけが置き直せる（メンバーは、まだ封のない Agent の分だけ）", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const put = (token: string, boxes: unknown[]) => h.call("PUT", `/v1/groups/${groupId}/name-boxes`, token, { version: 1, boxes });
+    expect((await put(alice.agentToken, [box("研究室", groupId, 1, alice, alice), box("研究室", groupId, 1, alice, bob)])).status).toBe(204);
     const fresh = await h.addAgent(alice, "新しい PC");
+    const alice2 = { ...alice, agentId: fresh.id, agentToken: fresh.token, agent: fresh };
     expect((await h.call("DELETE", `/v1/agents/${alice.agentId}`, alice.token)).status).toBe(204);
-    expect((await list(h, bob)).missingAgentIds).toContain(bob.agentId);
-    expect((await put(bob, [box("研究室", groupId, 1, bob, bob)])).status).toBe(204);
-    expect((await list(h, bob)).missingAgentIds).not.toContain(bob.agentId);
-    expect((await list(h, bob)).missingAgentIds).toContain(fresh.id);
+    const boxOf = (agentId: string) => h.db.select().from(schema.groupNameBoxes).where(eq(schema.groupNameBoxes.agentId, agentId)).get();
+    const bobsBox = boxOf(bob.agentId);
+
+    // owner でないボブには、読めない封の Agent は知らされず、別の名前で上書きもできない。まだ封のない Agent の分は置ける
+    expect((await list(h, bob)).missingAgentIds).toEqual([fresh.id]);
+    expect((await put(bob.agentToken, [box("家族", groupId, 1, bob, bob), box("家族", groupId, 1, bob, alice2)])).status).toBe(204);
+    expect(boxOf(bob.agentId)).toEqual(bobsBox);
+    expect(boxOf(fresh.id)).toBeTruthy();
+
+    // owner のアリスには、読めない封の Agent も知らされ、置き直せる
+    expect((await list(h, alice2)).missingAgentIds).toEqual([bob.agentId]);
+    expect((await put(fresh.token, [box("研究室", groupId, 1, alice2, bob)])).status).toBe(204);
+    expect(JSON.parse(boxOf(bob.agentId)!.box).senderAgentId).toBe(fresh.id);
+    expect((await list(h, alice2)).missingAgentIds).toEqual([]);
+  });
+
+  it("Agent を失効したり、メンバーが抜けたりすると、その Agent 宛ての封を消す", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const bob2 = await h.addAgent(bob, "2台目");
+    const bob2User = { ...bob, agentId: bob2.id, agentToken: bob2.token, agent: bob2 };
+    await h.call("PUT", `/v1/groups/${groupId}/name-boxes`, alice.agentToken, {
+      version: 1,
+      boxes: [box("研究室", groupId, 1, alice, alice), box("研究室", groupId, 1, alice, bob), box("研究室", groupId, 1, alice, bob2User)],
+    });
+    const recipients = () => h.db.select().from(schema.groupNameBoxes).all().map((b) => b.agentId).sort();
+    expect(recipients()).toEqual([alice.agentId, bob.agentId, bob2.id].sort());
+    expect((await h.call("DELETE", `/v1/agents/${bob2.id}`, bob.token)).status).toBe(204);
+    expect(recipients()).toEqual([alice.agentId, bob.agentId].sort());
+    expect((await h.call("DELETE", `/v1/groups/${groupId}/members/${bob.id}`, alice.token)).status).toBe(204);
+    expect(recipients()).toEqual([alice.agentId]);
   });
 
   it("名前の変更は owner だけで、版を1つ上げて封を置き換える", async () => {

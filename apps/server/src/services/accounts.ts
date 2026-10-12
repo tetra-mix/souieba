@@ -3,7 +3,7 @@ import { and, count, eq, isNull, ne, or, sql } from "drizzle-orm";
 import type { Limits } from "../config.ts";
 import { codeHash, newCode, newId, newToken, sha256 } from "../crypto.ts";
 import type { DB } from "../db/index.ts";
-import { type AgentRow, type UserRow, agents, credentials, invites, users } from "../db/schema.ts";
+import { type AgentRow, type UserRow, agents, credentials, groupNameBoxes, invites, users } from "../db/schema.ts";
 import { badRequest, conflict, invalidCode, notFound } from "../errors.ts";
 import { activeGroupIds, deleteEmptyGroups, ensureOwner, findUsableInvite, joinWithInvite } from "./groups.ts";
 
@@ -315,6 +315,8 @@ export function revokeAgent(db: DB, ownerId: string, agentId: string, now: Date)
       .set({ revokedAt: now.toISOString() })
       .where(and(eq(credentials.agentId, agentId), isNull(credentials.revokedAt)))
       .run();
+    // この Agent 宛ての封はもう開けないので消す
+    db.delete(groupNameBoxes).where(eq(groupNameBoxes.agentId, agentId)).run();
   });
 }
 

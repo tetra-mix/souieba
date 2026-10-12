@@ -97,7 +97,7 @@ export type WireGroup = {
   legacyName: string | null;
   /** 自分の Agent 宛ての封（Agent トークンならその Agent の分だけ） */
   nameBoxes: GroupNameBox[];
-  /** 今の版の封をまだ持っていない、メンバーの有効な Agent */
+  /** 今の版の封をまだ持っていない、メンバーの有効な Agent（owner には、読めなくなった封の Agent も含む） */
   missingAgentIds: string[];
 };
 

@@ -105,7 +105,7 @@ function parseBox(text: string): GroupNameBox | null {
 
 /**
  * 今の版の、読める封がすでに置かれているか。送り主の Agent がもうメンバーのものでなければ（失効・脱退）、
- * 受け取った側は署名を確かめられず読めないので、置かれていないものとして扱う
+ * 受け取った側は署名を確かめられず読めない（置き直せるのは owner だけ。putNameBoxes）
  */
 function hasReadableBox(box: { version: number; box: string } | undefined, version: number, members: Set<string>): boolean {
   if (!box || box.version !== version) return false;
@@ -130,6 +130,7 @@ function memberCounts(db: DB, groupIds: string[]): Map<string, number> {
  * 自分のグループ。名前は封をしたもの（nameBoxes）だけを返す。
  * Agent トークンならその Agent 宛ての封、User トークンなら自分の Agent すべて宛ての封を返す。
  * missingAgentIds は、今の版の封をまだ持っていないメンバーの Agent。名前を読めるクライアントが封をして置く。
+ * owner には読めない封（送り主が失効・脱退）の Agent も含める。owner でなければ、置き直せない（putNameBoxes）ので含めない。
  */
 export function listGroups(db: DB, me: { userId: string; agentId: string | null }): WireGroup[] {
   const rows = db
@@ -158,7 +159,9 @@ export function listGroups(db: DB, me: { userId: string; agentId: string | null 
   return rows.map((r) => {
     const boxes = allBoxes.filter((b) => b.groupId === r.id && b.version === r.nameVersion);
     const members = membersByGroup.get(r.id)!;
-    const have = new Set(boxes.filter((b) => hasReadableBox(b, r.nameVersion, members)).map((b) => b.agentId));
+    const have = new Set(
+      (r.role === "owner" ? boxes.filter((b) => hasReadableBox(b, r.nameVersion, members)) : allBoxes.filter((b) => b.groupId === r.id)).map((b) => b.agentId),
+    );
     return {
       id: r.id,
       role: r.role,
@@ -227,7 +230,8 @@ function insertBoxes(db: DB, groupId: string, version: number, rows: { agentId: 
 
 /**
  * まだ封を持っていないメンバーの Agent に、封をしたグループ名を置く（メンバーなら誰でも。新しく入った人や Agent のため）。
- * 読める封がすでにある Agent の分は、黙って飛ばす（メンバーが名前を書き換えられないように。変更は owner の renameGroup だけ）。
+ * 封がすでにある Agent の分は、黙って飛ばす（メンバーが名前を書き換えられないように。変更は owner の renameGroup だけ）。
+ * 送り主が失効・脱退して読めなくなった封を置き直せるのは owner だけ（メンバーが送り主の失効に乗じて、全員の名前を書き換えられないように）。
  * clearPlain: 暗号化する前の平文の名前を消す（封をし直したクライアントが送る）。
  */
 export function putNameBoxes(
@@ -238,7 +242,7 @@ export function putNameBoxes(
   now: Date,
 ): void {
   db.transaction(() => {
-    requireMember(db, groupId, actorId);
+    const actor = requireMember(db, groupId, actorId);
     const g = db.select({ nameVersion: groups.nameVersion }).from(groups).where(eq(groups.id, groupId)).get()!;
     if (input.version !== g.nameVersion) throw conflict("stale_name_version", "グループ名が変更されています。最新の名前を取り直してください");
     const rows = checkedBoxes(db, actorId, groupId, input.version, input.boxes);
@@ -251,7 +255,10 @@ export function putNameBoxes(
         .flatMap((batch) => db.select().from(groupNameBoxes).where(and(eq(groupNameBoxes.groupId, groupId), inArray(groupNameBoxes.agentId, batch))).all())
         .map((b) => [b.agentId, b] as const),
     );
-    const writable = rows.filter((r) => !hasReadableBox(existing.get(r.agentId), input.version, members));
+    const writable = rows.filter((r) => {
+      const cur = existing.get(r.agentId);
+      return !cur || (actor.role === "owner" && !hasReadableBox(cur, input.version, members));
+    });
     insertBoxes(db, groupId, input.version, writable, now);
     if (input.clearPlain) db.update(groups).set({ name: "" }).where(eq(groups.id, groupId)).run();
   });
@@ -383,6 +390,15 @@ export function removeMember(db: DB, actorId: string, groupId: string, targetId:
       .run();
     // 抜けた人が発行した未使用の招待は消す（入り直したときに古いコードが使えるようにならないように）
     db.delete(invites).where(and(eq(invites.groupId, groupId), eq(invites.createdBy, targetId), isNull(invites.usedAt))).run();
+    // 抜けた人の Agent 宛ての封も消す（入り直したら、まだ封のない Agent として封をし直してもらう）
+    db.delete(groupNameBoxes)
+      .where(
+        and(
+          eq(groupNameBoxes.groupId, groupId),
+          inArray(groupNameBoxes.agentId, db.select({ id: agents.id }).from(agents).where(eq(agents.ownerId, targetId))),
+        ),
+      )
+      .run();
     if (activeMemberCount(db, groupId) === 0) db.delete(groups).where(eq(groups.id, groupId)).run();
     else ensureOwner(db, groupId);
   });
