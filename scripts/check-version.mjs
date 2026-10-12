@@ -1,5 +1,5 @@
 // CLI（apps/cli/package.json）・サーバ（apps/server/src/app.ts の VERSION）・スキル（skills/souieba/SKILL.md）の
-// バージョンが揃っているかを確かめる。リリースのワークフローでは、タグ（v0.4.0 など）とも比べる。
+// バージョンが揃っているか、x.y.z の形かを確かめる。リリースのワークフローでは、タグ（v0.4.0 など）とも比べる。
 //   node scripts/check-version.mjs [タグ]
 import { readFileSync } from "node:fs";
 
@@ -19,6 +19,10 @@ const wrong = Object.entries(versions).filter(([, v]) => v !== expected);
 if (wrong.length > 0) {
   console.error(`バージョンが揃っていません（apps/cli/package.json は ${expected}）:`);
   for (const [where, v] of wrong) console.error(`  ${where}: ${v ?? "（見つかりません）"}`);
+  process.exit(1);
+}
+if (!/^\d+\.\d+\.\d+$/.test(expected)) {
+  console.error(`バージョン「${expected}」が x.y.z の形ではありません`);
   process.exit(1);
 }
 console.log(`バージョン ${expected}（${Object.keys(versions).join("、")}）`);
