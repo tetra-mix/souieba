@@ -1,7 +1,8 @@
 # Let's Encrypt の証明書を自動で取得・更新する（80・443 番を開けておく）
 {$SOUIEBA_DOMAIN} {
+	# apps/server/src/app.ts の POST_BODY_LIMIT（256KB）と揃える。ほかの経路はアプリ側で 16KB に絞っている
 	request_body {
-		max_size 64KB
+		max_size 256KB
 	}
 	header {
 		-Server
