@@ -9,7 +9,7 @@ import type { Limits } from "../config.ts";
 import { codeHash, newCode, newId } from "../crypto.ts";
 import { type DB, MAX_BOUND_PARAMS, chunks } from "../db/index.ts";
 import { type InviteRow, type MemberRow, type UserRow, agents, groupMembers, groupNameBoxes, groups, invites, users } from "../db/schema.ts";
-import { ApiError, badRequest, conflict, forbidden, notFound } from "../errors.ts";
+import { badRequest, conflict, forbidden, invalidCode, notFound } from "../errors.ts";
 
 export type { InviteRow };
 
@@ -265,7 +265,6 @@ export function setInviteNameBox(db: DB, userId: string, groupId: string, input:
   if (!r) throw notFound("招待");
 }
 
-const invalidCode = () => new ApiError(400, "invalid_code", "コードが無効か、期限が切れています");
 
 export function findUsableInvite(db: DB, code: string, now: Date): InviteRow {
   const inv = db
@@ -372,22 +371,15 @@ export function deleteEmptyGroups(db: DB): void {
  * クライアントはこれをそのまま投稿の宛先・受信した投稿の検証に使う。
  */
 export function directory(db: DB, me: { userId: string; agentId: string | null }): KeyDirectory {
-  const coMembers = db
-    .select({ id: users.id })
+  const userRows = db
+    .select({ id: users.id, handle: users.handle, displayName: users.displayName })
     .from(users)
     .where(and(isNull(users.disabledAt), or(eq(users.id, me.userId), sharesGroup(db, me.userId, users.id))))
     .all();
   // 同じ人の Agent は同じ塊に入るので、塊ごとの createdAt の順がそのまま使える
   const batches = chunks(
-    coMembers.map((u) => u.id),
+    userRows.map((u) => u.id),
     MAX_BOUND_PARAMS,
-  );
-  const userRows = batches.flatMap((ids) =>
-    db
-      .select({ id: users.id, handle: users.handle, displayName: users.displayName })
-      .from(users)
-      .where(inArray(users.id, ids))
-      .all(),
   );
   const agentRows = batches.flatMap((ids) =>
     db

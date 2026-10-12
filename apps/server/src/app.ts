@@ -6,7 +6,7 @@ import { type Env, authenticate, requireAgent, requireUser } from "./auth.ts";
 import type { Config } from "./config.ts";
 import type { DB } from "./db/index.ts";
 import { safeEqual } from "./crypto.ts";
-import { ApiError, badRequest, forbidden, notFound } from "./errors.ts";
+import { ApiError, badRequest, forbidden, notFound, tooManyRequests } from "./errors.ts";
 import { isLoopback, isPrivateOrLoopback, normalizeIp } from "./net.ts";
 import { RateLimiter } from "./ratelimit.ts";
 import * as accounts from "./services/accounts.ts";
@@ -166,7 +166,7 @@ export function createApp(deps: AppDeps) {
 
   app.post("/v1/auth/redeem", async (c) => {
     if (!redeemLimiter.take(`redeem:${c.get("clientIp")}`, now().getTime())) {
-      throw new ApiError(429, "rate_limited", "試行回数が多すぎます。時間をおいてください");
+      throw tooManyRequests("試行回数が多すぎます。時間をおいてください");
     }
     const input = await body(
       c,
@@ -191,7 +191,7 @@ export function createApp(deps: AppDeps) {
   app.post("/v1/admin/bootstrap", async (c) => {
     if (!config.bootstrapToken) throw notFound("ページ");
     if (!redeemLimiter.take(`bootstrap:${c.get("clientIp")}`, now().getTime())) {
-      throw new ApiError(429, "rate_limited", "試行回数が多すぎます。時間をおいてください");
+      throw tooManyRequests("試行回数が多すぎます。時間をおいてください");
     }
     const input = await body(c, z.object({ token: z.string().max(200), handle: z.string(), displayName: z.string() }));
     if (!safeEqual(input.token, config.bootstrapToken)) throw new ApiError(401, "unauthorized", "認証に失敗しました");
@@ -218,7 +218,7 @@ export function createApp(deps: AppDeps) {
     const key = a.agentId ?? a.userId;
     const isPost = c.req.method === "POST" && c.req.path === "/v1/posts";
     if (!(isPost ? postLimiter : readLimiter).take(`${isPost ? "post" : "req"}:${key}`, now().getTime())) {
-      throw new ApiError(429, "rate_limited", "リクエストが多すぎます");
+      throw tooManyRequests();
     }
     await next();
   });

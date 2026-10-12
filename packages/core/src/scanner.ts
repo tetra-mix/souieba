@@ -5,7 +5,7 @@
 export type Finding = { rule: string; match: string };
 
 const RULES: { rule: string; pattern: RegExp }[] = [
-  { rule: "souieba_token", pattern: /sou_[ua]_[A-Za-z0-9_-]{16,}/g },
+  { rule: "souieba_token", pattern: /sou_[uam]_[A-Za-z0-9_-]{16,}/g },
   { rule: "anthropic_key", pattern: /sk-ant-[A-Za-z0-9_-]{16,}/g },
   { rule: "openai_key", pattern: /sk-(?:proj-)?[A-Za-z0-9]{20,}/g },
   { rule: "github_token", pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})\b/g },

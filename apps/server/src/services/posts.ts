@@ -25,6 +25,12 @@ export function upsertPost(
 ): PublishResult {
   const periodError = validatePeriod(envelope.periodStart, envelope.periodEnd, now);
   if (periodError) throw badRequest(`period_${periodError}`, `期間が不正です（${periodError}）`);
+  const periodStart = new Date(envelope.periodStart).toISOString();
+  const periodEnd = new Date(envelope.periodEnd).toISOString();
+  if (periodStart !== envelope.periodStart || periodEnd !== envelope.periodEnd) {
+    // 署名は送られてきた文字列に対して行われているので、正規化した値に置き換えられない
+    throw badRequest("period_not_canonical", "期間は ISO 8601（toISOString の形式）で指定してください");
+  }
   if (envelope.recipients.length > MAX_RECIPIENTS) throw badRequest("too_many_recipients", `宛先は ${MAX_RECIPIENTS} 件までです`);
 
   const agent = getAgent(db, actor.agentId);
@@ -37,12 +43,6 @@ export function upsertPost(
   const allowed = allowedRecipientAgents(db, actor.userId, envelope.visibility);
   const recipients = [...new Set(envelope.recipients.map((r) => r.agentId))].filter((id) => allowed.has(id));
 
-  const periodStart = new Date(envelope.periodStart).toISOString();
-  const periodEnd = new Date(envelope.periodEnd).toISOString();
-  if (periodStart !== envelope.periodStart || periodEnd !== envelope.periodEnd) {
-    // 署名は送られてきた文字列に対して行われているので、正規化した値に置き換えられない
-    throw badRequest("period_not_canonical", "期間は ISO 8601（toISOString の形式）で指定してください");
-  }
   const visibleAt = new Date(now.getTime() + graceMs).toISOString();
   const ts = now.toISOString();
   const body = JSON.stringify(envelope);
