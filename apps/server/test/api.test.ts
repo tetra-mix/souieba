@@ -446,6 +446,15 @@ describe("認証", () => {
     expect((await h.call("GET", "/v1/me", alice.agentToken)).status).toBe(200);
   });
 
+  it("ログインコードを発行し直すと、前の未使用のコードは使えない", async () => {
+    const h = harness();
+    const alice = await h.user("alice", "アリス");
+    const first = accounts.issueLoginCode(h.db, alice.id, h.clock.now);
+    const second = accounts.issueLoginCode(h.db, alice.id, h.clock.now);
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: first.code })).body.error.code).toBe("invalid_code");
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: second.code })).status).toBe(201);
+  });
+
   it("redeem は IP ごとに 10回/時 まで", async () => {
     const h = harness();
     const codes = Array.from({ length: 11 }, () => h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA-BBBB-CCCC" }));

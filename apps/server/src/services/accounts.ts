@@ -154,10 +154,11 @@ export function bootstrapAdmin(db: DB, input: { handle: string; displayName: str
   });
 }
 
-/** ログインコードを発行する。トークンを失くした場合の再発行にも使う */
+/** ログインコードを発行する。トークンを失くした場合の再発行にも使う。前に発行した未使用のコードは使えなくする */
 export function issueLoginCode(db: DB, userId: string, now: Date): { code: string; expiresAt: string } {
   const code = newCode();
   const expiresAt = new Date(now.getTime() + LOGIN_CODE_TTL_MS).toISOString();
+  db.delete(invites).where(and(eq(invites.kind, "login"), eq(invites.targetUserId, userId), isNull(invites.usedAt))).run();
   db.insert(invites)
     .values({
       id: newId("inv"),
