@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
 import type { DirectoryUser } from "@souieba/core";
-import { writeSecretJson } from "./config.ts";
+import { readStateJson, writeSecretJson } from "./config.ts";
 
 export type NewMember = { groupId: string; user: Pick<DirectoryUser, "id" | "handle" | "displayName"> };
 
@@ -20,8 +19,9 @@ export class MemberWatch {
    * 抜けた人は記録から消すので、入り直したらまた知らせる。
    */
   check(users: DirectoryUser[], myUserId: string): NewMember[] {
-    const first = !existsSync(this.path);
-    const known: Known = first ? { groups: [], members: [] } : { groups: [], members: [], ...JSON.parse(readFileSync(this.path, "utf8")) };
+    const saved = readStateJson<Partial<Known>>(this.path);
+    const first = saved === null;
+    const known: Known = { groups: [], members: [], ...saved };
     const knownGroups = new Set(known.groups);
     const knownMembers = new Set(known.members);
     const myGroups = users.find((u) => u.id === myUserId)?.groupIds ?? [];

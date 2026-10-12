@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { KeyPair } from "@souieba/core";
@@ -30,22 +31,59 @@ export function configPath(): string {
 export function loadClientConfig(): ClientConfig {
   const p = configPath();
   if (!existsSync(p)) return { agents: {} };
+  // 前のバージョンや手で作ったファイルが他人に読める権限なら、600 に直す
+  restrictMode(p, 0o600);
   const cfg = JSON.parse(readFileSync(p, "utf8")) as ClientConfig;
   cfg.agents ??= {};
   return cfg;
 }
 
+/**
+ * 手元の状態ファイル（Session・既知の Agent やメンバー・グループ名など）を読む。ないか壊れていれば null。
+ * 壊れたファイルで tell などが毎回落ちないよう、作り直せるものだけに使う（トークンを持つ config.json には使わない）
+ */
+export function readStateJson<T>(path: string): T | null {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** トークンを含むので所有者だけが読める権限（600）で書く */
 export function writeSecretJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  // 同時に動く別の souieba と一時ファイルがぶつからないよう、名前を毎回変える
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+    // 置き換えたあとに落ちても中身が空にならないよう、ディスクに書いてから rename する
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   chmodSync(tmp, 0o600);
   renameSync(tmp, path);
 }
 
+/**
+ * 他人が読める権限なら mode に絞る。mkdirSync の mode は作るときにしか効かないので、既にある ~/.souieba にも使う。
+ * Windows では権限の意味が違うので何もしない。失敗しても止めない（doctor が知らせる）
+ */
+function restrictMode(path: string, mode: number): void {
+  if (process.platform === "win32") return;
+  try {
+    if (statSync(path).mode & 0o077) chmodSync(path, mode);
+  } catch {
+    // 所有者が違うなど。そのまま使う
+  }
+}
+
 export function saveClientConfig(cfg: ClientConfig): void {
   writeSecretJson(configPath(), cfg);
+  restrictMode(souiebaHome(), 0o700);
 }
 
 export type ResolvedAgent = {

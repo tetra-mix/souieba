@@ -1,7 +1,19 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { HOUR_MS, MAX_POST_AGE_MS, floorToHour, sanitizeContent, scanSecrets } from "@souieba/core";
-import { souiebaHome, writeSecretJson } from "./config.ts";
+import { readStateJson, souiebaHome, writeSecretJson } from "./config.ts";
 
 export type Note = { ts: string; text: string };
 
@@ -19,6 +31,47 @@ export class SecretInNoteError extends Error {
   }
 }
 
+/** ロックを待つ間隔と、持ち主が落ちたとみなして奪うまでの時間 */
+const LOCK_RETRY_MS = 20;
+const LOCK_STALE_MS = 5_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * ロックファイルを作れた1つのプロセスだけが fn を実行する（note と compose が同時に動いても行を失わないように）。
+ * 持ち主が落ちて残ったロックは、LOCK_STALE_MS たったら奪う。
+ */
+function withFileLock<T>(lockPath: string, fn: () => T): T {
+  mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
+  for (;;) {
+    let fd: number;
+    try {
+      fd = openSync(lockPath, "wx", 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
+      } catch {
+        // 待っている間に消えた。すぐに取り直す
+      }
+      sleepSync(LOCK_RETRY_MS);
+      continue;
+    }
+    try {
+      return fn();
+    } finally {
+      closeSync(fd);
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // 古いとみなされて奪われていた
+      }
+    }
+  }
+}
+
 /** 1件のメモの上限。要約の材料なので短くてよい */
 export const MAX_NOTE_LENGTH = 200;
 
@@ -30,10 +83,12 @@ export const MAX_NOTE_LENGTH = 200;
 export class NotesStore {
   private readonly notesPath: string;
   private readonly periodsPath: string;
+  private readonly lockPath: string;
 
   constructor(agentKey: string, dir = join(souiebaHome(), "agents", agentKey)) {
     this.notesPath = join(dir, "notes.jsonl");
     this.periodsPath = join(dir, "periods.json");
+    this.lockPath = join(dir, "notes.lock");
   }
 
   add(text: string, now: Date): Note {
@@ -42,23 +97,23 @@ export class NotesStore {
     const findings = [...scanSecrets(text), ...scanSecrets(clean)];
     if (findings.length > 0) throw new SecretInNoteError([...new Set(findings.map((f) => f.rule))]);
     const note = { ts: now.toISOString(), text: clean };
-    mkdirSync(dirname(this.notesPath), { recursive: true, mode: 0o700 });
-    appendFileSync(this.notesPath, `${JSON.stringify(note)}\n`, { mode: 0o600 });
+    withFileLock(this.lockPath, () => appendFileSync(this.notesPath, `${JSON.stringify(note)}\n`, { mode: 0o600 }));
     return note;
   }
 
   all(): Note[] {
-    if (!existsSync(this.notesPath)) return [];
-    return readFileSync(this.notesPath, "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .flatMap((line) => {
+    return this.lines().flatMap((line) => {
         try {
-          return [JSON.parse(line) as Note];
-        } catch {
-          return [];
-        }
-      });
+        return [JSON.parse(line) as Note];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  private lines(): string[] {
+    if (!existsSync(this.notesPath)) return [];
+    return readFileSync(this.notesPath, "utf8").split("\n").filter(Boolean);
   }
 
   notesIn(periodStart: string): Note[] {
@@ -93,25 +148,33 @@ export class NotesStore {
   }
 
   mark(periodStart: string, state: "published" | "skipped"): void {
-    const p = this.readPeriods();
-    p.done[new Date(periodStart).toISOString()] = state;
-    writeSecretJson(this.periodsPath, p);
+    withFileLock(this.lockPath, () => {
+      const p = this.readPeriods();
+      p.done[new Date(periodStart).toISOString()] = state;
+      writeSecretJson(this.periodsPath, p);
+    });
   }
 
-  /** 48時間より古いメモと記録を消す */
+  /** 48時間より古いメモと記録を消す。消すものがなければ書き直さない */
   prune(now: Date): void {
     const cutoff = now.getTime() - MAX_POST_AGE_MS - HOUR_MS;
-    if (existsSync(this.notesPath)) {
+    withFileLock(this.lockPath, () => {
+      const lines = this.lines();
       const keep = this.all().filter((n) => Date.parse(n.ts) >= cutoff);
-      writeFileSync(this.notesPath, keep.map((n) => `${JSON.stringify(n)}\n`).join(""), { mode: 0o600 });
-    }
-    const p = this.readPeriods();
-    for (const k of Object.keys(p.done)) if (Date.parse(k) < cutoff) delete p.done[k];
-    if (existsSync(this.periodsPath)) writeSecretJson(this.periodsPath, p);
+      if (keep.length !== lines.length) {
+        // 途中で落ちても元のファイルが残るよう、一時ファイルに書いてから置き換える
+        const tmp = `${this.notesPath}.${process.pid}.${randomUUID()}.tmp`;
+        writeFileSync(tmp, keep.map((n) => `${JSON.stringify(n)}\n`).join(""), { mode: 0o600 });
+        renameSync(tmp, this.notesPath);
+      }
+      const p = this.readPeriods();
+      const old = Object.keys(p.done).filter((k) => Date.parse(k) < cutoff);
+      for (const k of old) delete p.done[k];
+      if (old.length > 0) writeSecretJson(this.periodsPath, p);
+    });
   }
 
   private readPeriods(): PeriodsFile {
-    if (!existsSync(this.periodsPath)) return { done: {} };
-    return JSON.parse(readFileSync(this.periodsPath, "utf8")) as PeriodsFile;
+    return readStateJson<PeriodsFile>(this.periodsPath) ?? { done: {} };
   }
 }

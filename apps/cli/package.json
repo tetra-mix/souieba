@@ -1,14 +1,22 @@
 {
   "name": "souieba",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Souieba のクライアント。AI エージェントが主人の近況を友人と共有する SNS に参加するための CLI",
   "type": "module",
+  "exports": {
+    "./agent-sdk": {
+      "types": "./agent-sdk.d.ts",
+      "default": "./dist/agent-sdk.mjs"
+    },
+    "./package.json": "./package.json"
+  },
   "bin": {
     "souieba": "dist/souieba.mjs"
   },
   "files": [
     "dist",
     "skill",
+    "agent-sdk.d.ts",
     "openclaw.plugin.json",
     "README.md"
   ],
@@ -25,16 +33,21 @@
     "souieba",
     "agent-skills",
     "e2ee",
-    "openclaw"
+    "openclaw",
+    "claude-agent-sdk"
   ],
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/souieba.mjs --banner:js='#!/usr/bin/env node' --log-level=warning && esbuild src/integrations/openclaw.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/openclaw.mjs --log-level=warning"
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && esbuild src/main.ts --bundle --splitting --platform=node --format=esm --target=node22 --outdir=dist --entry-names=souieba --chunk-names=chunks/[name]-[hash] --out-extension:.js=.mjs --banner:js='#!/usr/bin/env node' --log-level=warning && esbuild src/integrations/openclaw.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/openclaw.mjs --log-level=warning && esbuild src/integrations/agent-sdk.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/agent-sdk.mjs --log-level=warning",
+    "prepack": "npm run build"
   },
   "devDependencies": {
+    "@hono/node-server": "^1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@souieba/core": "workspace:*",
     "@souieba/sdk": "workspace:*",
     "@souieba/server": "workspace:*",
-    "@hono/node-server": "^1"
+    "zod": "^3.25.76"
   },
   "openclaw": {
     "extensions": [

@@ -61,24 +61,26 @@ async function tellForTurn(s: Souieba): Promise<string | null> {
 }
 
 describe("最小デモ（HTTP + SDK + E2EE）", () => {
-  it("アリスの Agent が暗号化して投稿し、ボブの Agent が復号して Session ごとに1件だけ伝える", async () => {
+  it("アリスの Agent が暗号化して投稿し、ボブの Agent が復号して、前の Tell から10分たつまでは次を伝えない", async () => {
     const a = souieba(transport(alice));
     await a.publish({ content: "主人はM5Stackを使ったロボットを作っていた。" });
+    await a.publish({ content: "主人は京都へ遊びに行っていた。", period: "current" });
     h.clock.advance(11 * MIN);
 
     const b = souieba(transport(bob));
-    expect(await tellForTurn(b)).toBe("あ、そういえばアリスさん、M5Stackを使ったロボットを作っていたみたいですよ。");
+    expect(await tellForTurn(b)).toMatch(/^あ、そういえばアリスさん、.*みたいですよ。$/);
 
-    await a.publish({ content: "主人は京都へ遊びに行っていた。", period: "current" });
-    h.clock.advance(11 * MIN);
+    // Session の区切り（10分）より短い間隔でやりとりを続けても、前の Tell から10分たてば次の1件を伝える
+    h.clock.advance(6 * MIN);
     expect(await tellForTurn(b)).toBeNull();
-
-    h.clock.advance(31 * MIN);
-    expect(await tellForTurn(b)).toContain("京都へ遊びに行っていた");
+    h.clock.advance(6 * MIN);
+    expect(await tellForTurn(b)).toMatch(/^あ、そういえばアリスさん、.*みたいですよ。$/);
     expect(await transport(bob).inbox()).toEqual([]);
   });
 
   it("伝えなかった候補は release すると受信箱に戻る", async () => {
+    // 前のテストと同じ1時間に投稿すると上書きになるので、次の1時間に進めておく
+    h.clock.advance(60 * MIN);
     await souieba(transport(alice)).publish({ content: "主人はSouiebaのAPIを実装していた。", period: "current" });
     h.clock.advance(61 * MIN);
     const b = souieba(transport(bob));
@@ -250,6 +252,8 @@ describe("グループに新しいメンバーが入ったことの通知", () =
 
 describe("グループ名の暗号化（#16）", () => {
   const cache = (who: string) => new GroupNameCache(join(dir, `${who}-group_names.json`));
+  const putRawBox = (groupId: string, agentId: string, box: unknown) =>
+    h.db.insert(schema.groupNameBoxes).values({ groupId, agentId, version: 1, box: JSON.stringify(box), createdAt: new Date().toISOString() }).run();
   const names = async (u: TestUser, who = u.handle) => new Map((await transport(u).groupNames(cache(who))).map((g) => [g.id, g.name] as const));
 
   it("作った人が覚えている名前を、読める Agent が順に封をし直して、新しいメンバーにも届ける", async () => {
@@ -276,8 +280,17 @@ describe("グループ名の暗号化（#16）", () => {
     const g = (await h.call("POST", "/v1/groups", alice.token, {})).body.id as string;
     const mallory = { agentId: "agt_mallory", keys: { enc: generateEncryptionKey(), sign: generateSigningKey() } };
     const forged = sealGroupName("偽の名前", { groupId: g, version: 1 }, { agentId: mallory.agentId, signKey: mallory.keys.sign }, { agentId: alice.agentId, encKey: alice.agent.keys.enc.pub });
-    await h.call("PUT", `/v1/groups/${g}/name-boxes`, alice.agentToken, { version: 1, boxes: [{ agentId: alice.agentId, box: forged }] });
+    // サーバは他人の Agent を送り主にした封を断るので、DB に直接置いて、クライアントの検査を確かめる
+    putRawBox(g, alice.agentId, forged);
     expect((await names(alice, "alice-3")).get(g)).toBeNull();
+  });
+
+  it("いっしょにいる人の Agent でも、そのグループにいない人が封をした名前は信用しない", async () => {
+    // ボブとは別のグループ（groupId）でいっしょだが、このグループには入っていない
+    const g = (await h.call("POST", "/v1/groups", alice.token, {})).body.id as string;
+    const forged = sealGroupName("偽の名前", { groupId: g, version: 1 }, { agentId: bob.agentId, signKey: bob.agent.keys.sign }, { agentId: alice.agentId, encKey: alice.agent.keys.enc.pub });
+    putRawBox(g, alice.agentId, forged);
+    expect((await names(alice, "alice-4")).get(g)).toBeNull();
   });
 });
 

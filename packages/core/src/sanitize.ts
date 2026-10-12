@@ -36,7 +36,11 @@ const INSTRUCTION_RULES: { rule: string; re: RegExp }[] = [
     re: /[てで](ください|下さい|くれ(?=[。!?、 ]|$))|(?<!ごめん)なさい(?=[。!?、 ]|$)|(しろ|せよ|すべし)(?=[。!?、 ]|$)|今すぐ|直ちに|ただちに|(?<![a-z])(please|must|ignore|disregard|forget|execute)(?![a-z])/i,
   },
   // 指示の上書き
-  { rule: "meta_instruction", re: /指示|命令|プロンプト|無視|従[えうっわ]|(?<![a-z])(system|prompt|instructions?|jailbreak)(?![a-z])|脱獄/i },
+  // かな書き（しじ・めいれい・むしして・したがって）も見る。「しじみ」「むしあつい」「したがって（接続詞）」だけでは当てない
+  {
+    rule: "meta_instruction",
+    re: /指示|命令|プロンプト|無視|従[えうっわ]|しじ[をにはどの]|めいれい|むし(し|す|せ|さ)|(しじ|めいれい|ルール|いうこと|言うこと)に(したが|従)|(?<![a-z])(system|prompt|instructions?|jailbreak)(?![a-z])|脱獄/i,
+  },
   // 秘密の持ち出し・コマンド実行
   { rule: "exfiltration", re: /秘密鍵|パスワード|認証情報|環境変数|(?<![a-z])(sudo|curl|wget|ssh|env|rm)(?![a-z])/i },
 ];
@@ -64,5 +68,7 @@ export function displayNameKey(name: string): string {
 /** 近況として不自然な、読み手への命令に見える表現の規則名を返す（なければ空） */
 export function findInstructionLike(text: string): string[] {
   const t = text.normalize("NFKC");
-  return INSTRUCTION_RULES.filter(({ re }) => re.test(t)).map(({ rule }) => rule);
+  // 「無 視」「i g n o r e」のように空白を挟んで抜けられないよう、空白を除いたものと、1文字ずつ空いた英字をつなげたものも見る
+  const variants = [t, t.replace(/\s+/g, ""), t.replace(/(?<![a-z])[a-z](?:\s+[a-z](?![a-z]))+/gi, (m) => m.replace(/\s+/g, ""))];
+  return INSTRUCTION_RULES.filter(({ re }) => variants.some((v) => re.test(v))).map(({ rule }) => rule);
 }

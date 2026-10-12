@@ -1,6 +1,7 @@
 /**
  * Workers 版を workerd（wrangler の unstable_dev）で動かし、HTTP 越しに一通りの流れを確かめる。
  * Durable Object の SQLite・Drizzle の durable-sqlite ドライバ・入口の検査・admin API を、本物の実行環境で通す。
+ * 入口は test/fixtures/worker-entry.ts（本番の Worker に、Durable Object の行を数える口などを足したもの）。
  */
 import { fileURLToPath } from "node:url";
 import { CLIENT_VERSION_HEADER, type KeyPair, generateEncryptionKey, generateSigningKey, openPost, periodOf, sealPost } from "@souieba/core";
@@ -14,7 +15,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 let worker: Unstable_DevWorker;
 
 beforeAll(async () => {
-  worker = await unstable_dev(`${root}src/worker.ts`, {
+  worker = await unstable_dev(`${root}test/fixtures/worker-entry.ts`, {
     config: `${root}wrangler.toml`,
     vars: { SOUIEBA_BOOTSTRAP_TOKEN: BOOTSTRAP, SOUIEBA_POST_GRACE_MINUTES: "0" },
     persist: false,
@@ -40,6 +41,15 @@ async function call<T = any>(method: string, path: string, token?: string, body?
   const text = await res.text();
   return { status: res.status, body: (text ? JSON.parse(text) : null) as T };
 }
+
+/** Durable Object の投稿・宛先・配送状態の行数（削除が行として消えたかを確かめる） */
+type RowCounts = { posts: number; post_recipients: number; deliveries: number };
+
+async function rows(): Promise<RowCounts> {
+  return (await worker.fetch("/__test/rows")).json() as Promise<RowCounts>;
+}
+
+const DAY_MS = 86_400_000;
 
 type Member = { id: string; token: string; agent: { id: string; token: string; enc: KeyPair; sign: KeyPair } };
 
@@ -102,6 +112,7 @@ describe("Workers 版（workerd + Durable Object）", () => {
 
     // ボブの Agent が受け取り、予約して、手元で復号する
     expect((await call("POST", "/v1/sync", bob.agent.token)).body.received).toBe(1);
+    expect(await rows()).toEqual({ posts: 1, post_recipients: 1, deliveries: 1 });
     const claim = await call("POST", "/v1/tell/claim", bob.agent.token, {});
     const candidate = claim.body.candidate;
     expect(candidate.owner.handle).toBe("alice");
@@ -116,8 +127,33 @@ describe("Workers 版（workerd + Durable Object）", () => {
     // admin からはグループの名前と人数だけが見える
     expect((await call("GET", "/v1/admin/groups", adminToken)).body.groups).toMatchObject([{ id: groupId, memberCount: 2 }]);
 
+    // 投稿を消すと、宛先と配送状態の行も消える（ON DELETE CASCADE）
+    const publish = async (hoursAgo: number) => {
+      const env = sealPost(
+        { ...periodOf(new Date(Date.now() - hoursAgo * 3_600_000), "previous"), visibility: "groups", content: "主人は散歩していた。" },
+        { userId: alice.id, agentId: alice.agent.id, signKey: alice.agent.sign },
+        [{ agentId: bob.agent.id, encKey: bob.agent.enc.pub }],
+      );
+      const r = await call("POST", "/v1/posts", alice.agent.token, { envelope: env });
+      expect(r.status).toBe(201);
+      expect((await call("POST", "/v1/sync", bob.agent.token)).body.received).toBe(1);
+      return r.body.postId as string;
+    };
+    const second = await publish(1);
+    expect(await rows()).toEqual({ posts: 2, post_recipients: 2, deliveries: 2 });
+    expect((await call("DELETE", `/v1/posts/${second}`, alice.agent.token)).status).toBe(204);
+    expect(await rows()).toEqual({ posts: 1, post_recipients: 1, deliveries: 1 });
+
+    // 保存期間を過ぎた投稿の削除でも、行が消える
+    const retention = await worker.fetch(`/__test/retention?now=${new Date(Date.now() + 31 * DAY_MS).toISOString()}&retentionMs=${30 * DAY_MS}`);
+    expect(await retention.json()).toMatchObject({ posts: 1 });
+    expect(await rows()).toEqual({ posts: 0, post_recipients: 0, deliveries: 0 });
+
     // アリスがアカウントを消すと、投稿も消え（ON DELETE CASCADE）、ボブだけのグループが残る
+    await publish(2);
+    expect(await rows()).toEqual({ posts: 1, post_recipients: 1, deliveries: 1 });
     expect((await call("DELETE", "/v1/me", alice.token)).status).toBe(204);
+    expect(await rows()).toEqual({ posts: 0, post_recipients: 0, deliveries: 0 });
     expect((await call("GET", "/v1/inbox", bob.agent.token)).body.items).toEqual([]);
     expect((await call("GET", "/v1/admin/groups", adminToken)).body.groups).toMatchObject([{ id: groupId, memberCount: 1 }]);
   }, 60_000);

@@ -8,6 +8,7 @@ import { createApp } from "./app.ts";
 import { type Config, loadConfig } from "./config.ts";
 import { type DB, createDb, migrate } from "./db/index.ts";
 import { clientIp, edgeGuard, isPublicPost } from "./edge.ts";
+import { rateLimitKey } from "./net.ts";
 import { runRetention } from "./retention.ts";
 
 type RateLimit = { limit(options: { key: string }): Promise<{ success: boolean }> };
@@ -76,7 +77,8 @@ export default {
       if (!warnedNoLimiter) console.warn(JSON.stringify({ level: "warn", msg: "wrangler.toml の [[ratelimits]] がないため、入口のレート制限をしていません" }));
       warnedNoLimiter = true;
     }
-    const key = clientIp(req);
+    // IPv6 は /64 でまとめて数える
+    const key = rateLimitKey(clientIp(req));
     if (env.RATE_LIMITER && !(await env.RATE_LIMITER.limit({ key })).success) return tooMany();
     if (env.AUTH_RATE_LIMITER && isPublicPost(req) && !(await env.AUTH_RATE_LIMITER.limit({ key })).success) return tooMany();
     return instance(env).fetch(req);

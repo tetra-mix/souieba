@@ -1,11 +1,11 @@
 import { AGENT_SCOPES, MAX_DISPLAY_NAME_LENGTH, displayNameKey, isPublicKey, isValidDisplayName } from "@souieba/core";
-import { and, count, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, count, eq, isNull, ne, or, sql } from "drizzle-orm";
 import type { Limits } from "../config.ts";
-import { newCode, newId, newToken, sha256 } from "../crypto.ts";
+import { codeHash, newCode, newId, newToken, sha256 } from "../crypto.ts";
 import type { DB } from "../db/index.ts";
-import { type AgentRow, type UserRow, agents, credentials, invites, users } from "../db/schema.ts";
-import { badRequest, conflict, notFound } from "../errors.ts";
-import { deleteEmptyGroups, findUsableInvite, joinWithInvite } from "./groups.ts";
+import { type AgentRow, type UserRow, agents, credentials, groupNameBoxes, invites, users } from "../db/schema.ts";
+import { badRequest, conflict, invalidCode, notFound } from "../errors.ts";
+import { activeGroupIds, deleteEmptyGroups, ensureOwner, findUsableInvite, joinWithInvite } from "./groups.ts";
 
 export type { AgentRow, UserRow };
 
@@ -154,14 +154,15 @@ export function bootstrapAdmin(db: DB, input: { handle: string; displayName: str
   });
 }
 
-/** ログインコードを発行する。トークンを失くした場合の再発行にも使う */
+/** ログインコードを発行する。トークンを失くした場合の再発行にも使う。前に発行した未使用のコードは使えなくする */
 export function issueLoginCode(db: DB, userId: string, now: Date): { code: string; expiresAt: string } {
   const code = newCode();
   const expiresAt = new Date(now.getTime() + LOGIN_CODE_TTL_MS).toISOString();
+  db.delete(invites).where(and(eq(invites.kind, "login"), eq(invites.targetUserId, userId), isNull(invites.usedAt))).run();
   db.insert(invites)
     .values({
       id: newId("inv"),
-      codeHash: sha256(code),
+      codeHash: codeHash(code),
       kind: "login",
       targetUserId: userId,
       autoFriend: 0,
@@ -177,7 +178,7 @@ export function createAccountInvite(db: DB, now: Date): { code: string; expiresA
   const code = newCode();
   const expiresAt = new Date(now.getTime() + ACCOUNT_INVITE_TTL_MS).toISOString();
   db.insert(invites)
-    .values({ id: newId("inv"), codeHash: sha256(code), kind: "invite", autoFriend: 0, expiresAt, createdAt: now.toISOString() })
+    .values({ id: newId("inv"), codeHash: codeHash(code), kind: "invite", autoFriend: 0, expiresAt, createdAt: now.toISOString() })
     .run();
   return { code, expiresAt };
 }
@@ -206,7 +207,7 @@ export function redeemCode(db: DB, input: RedeemInput, now: Date, limits: Limits
 
     if (inv.kind === "login") {
       const user = getUser(db, inv.targetUserId!);
-      if (!user || user.disabledAt) throw badRequest("invalid_code", "コードが無効か、期限が切れています");
+      if (!user || user.disabledAt) throw invalidCode();
       // 古い User トークンは失効させる（なくした・漏れたトークンの無効化を兼ねる）。admin 専用トークンは別に管理する
       db.update(credentials)
         .set({ revokedAt: now.toISOString() })
@@ -239,7 +240,7 @@ export function redeemCode(db: DB, input: RedeemInput, now: Date, limits: Limits
 export function joinGroup(db: DB, userId: string, input: { code: string }, now: Date, limits: Limits) {
   return db.transaction(() => {
     const inv = findUsableInvite(db, input.code, now);
-    if (inv.kind !== "invite" || !inv.groupId) throw badRequest("invalid_code", "コードが無効か、期限が切れています");
+    if (inv.kind !== "invite" || !inv.groupId) throw invalidCode();
     return joinWithInvite(db, inv, getUser(db, userId)!, now, limits);
   });
 }
@@ -265,6 +266,7 @@ export function createAgent(
   ownerId: string,
   input: { name: string; provider?: string; encKey: string; signKey: string },
   now: Date,
+  limits?: Pick<Limits, "maxAgentsPerUser">,
 ): { agent: AgentRow; token: string } {
   const name = input.name.trim();
   if (name.length < 1 || name.length > 40) throw badRequest("invalid_name", "Agent 名は1〜40文字にしてください");
@@ -272,6 +274,10 @@ export function createAgent(
     throw badRequest("invalid_agent_keys", "Agent の鍵の形式が不正です");
   }
   return db.transaction(() => {
+    // 1人が Agent を増やしすぎると、同じグループの人の投稿の宛先が上限を超えて、誰も投稿できなくなる
+    if (limits && db.select({ n: count() }).from(agents).where(and(eq(agents.ownerId, ownerId), isNull(agents.revokedAt))).get()!.n >= limits.maxAgentsPerUser) {
+      throw conflict("limit_agents_per_user", `1人が登録できる Agent は ${limits.maxAgentsPerUser} 個までです。使っていない Agent を souieba agent revoke で止めてください`);
+    }
     const agent = db
       .insert(agents)
       .values({
@@ -310,24 +316,35 @@ export function revokeAgent(db: DB, ownerId: string, agentId: string, now: Date)
       .set({ revokedAt: now.toISOString() })
       .where(and(eq(credentials.agentId, agentId), isNull(credentials.revokedAt)))
       .run();
+    // この Agent 宛ての封はもう開けないので消す
+    db.delete(groupNameBoxes).where(eq(groupNameBoxes.agentId, agentId)).run();
   });
 }
 
+/** ユーザーを無効化する。owner だったグループは、ほかの有効なメンバーに owner を引き継ぐ。発行した未使用の招待とログインコードは消す */
 export function disableUser(db: DB, userId: string, now: Date): void {
-  const disabled = db
-    .update(users)
-    .set({ disabledAt: now.toISOString() })
-    .where(and(eq(users.id, userId), isNull(users.disabledAt)))
-    .returning({ id: users.id })
-    .all();
-  if (disabled.length === 0) throw notFound("ユーザー");
+  db.transaction(() => {
+    const disabled = db
+      .update(users)
+      .set({ disabledAt: now.toISOString() })
+      .where(and(eq(users.id, userId), isNull(users.disabledAt)))
+      .returning({ id: users.id })
+      .all();
+    if (disabled.length === 0) throw notFound("ユーザー");
+    db.delete(invites)
+      .where(and(or(eq(invites.createdBy, userId), eq(invites.targetUserId, userId)), isNull(invites.usedAt)))
+      .run();
+    for (const groupId of activeGroupIds(db, userId)) ensureOwner(db, groupId);
+  });
 }
 
-/** アカウント削除。外部キーの ON DELETE CASCADE で投稿・配送状態・所属も物理削除される */
+/** アカウント削除。外部キーの ON DELETE CASCADE で投稿・配送状態・所属も物理削除される。owner だったグループは引き継ぐ */
 export function deleteUser(db: DB, userId: string): void {
   db.transaction(() => {
+    const groupIds = activeGroupIds(db, userId);
     db.delete(users).where(eq(users.id, userId)).run();
     deleteEmptyGroups(db);
+    for (const groupId of groupIds) ensureOwner(db, groupId);
   });
 }
 

@@ -1,20 +1,20 @@
 import { CLIENT_VERSION_HEADER, compareVersions } from "@souieba/core";
 import { type Context, Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
+import { bodyLimit } from "./body-limit.ts";
 import { z } from "zod";
 import { type Env, authenticate, requireAgent, requireUser } from "./auth.ts";
 import type { Config } from "./config.ts";
 import type { DB } from "./db/index.ts";
 import { safeEqual } from "./crypto.ts";
-import { ApiError, badRequest, forbidden, notFound } from "./errors.ts";
-import { isLoopback, isPrivateOrLoopback, normalizeIp } from "./net.ts";
+import { ApiError, badRequest, forbidden, notFound, tooManyRequests } from "./errors.ts";
+import { isLoopback, isPrivateOrLoopback, normalizeIp, rateLimitKey } from "./net.ts";
 import { RateLimiter } from "./ratelimit.ts";
 import * as accounts from "./services/accounts.ts";
 import * as groups from "./services/groups.ts";
 import * as inboxSvc from "./services/inbox.ts";
 import * as posts from "./services/posts.ts";
 
-export const VERSION = "0.6.1";
+export const VERSION = "0.7.0";
 
 /**
  * これより古いクライアントと、バージョンを送らないクライアントは 426 で断る（黙って壊れないように、更新を促す）。
@@ -77,9 +77,9 @@ const NameBoxSchema = z.object({
 });
 const NameBoxesSchema = z.array(z.object({ agentId: z.string().min(1).max(64), box: NameBoxSchema })).max(posts.MAX_RECIPIENTS);
 
-/** /v1/posts は宛先の数だけ大きくなるので、他より上限を大きくする */
+/** 投稿とグループ名の封は宛先の Agent の数だけ大きくなるので、他より上限を大きくする（宛先 MAX_RECIPIENTS 件が収まる大きさ） */
 const BODY_LIMIT = 16 * 1024;
-export const POST_BODY_LIMIT = 64 * 1024;
+export const POST_BODY_LIMIT = 256 * 1024;
 
 /** 認証なしで呼べるエンドポイント（Workers の入口で、それ以外の Authorization のない要求を先に弾くため） */
 export const PUBLIC_ROUTES = ["GET /healthz", "GET /v1/instance", "POST /v1/auth/redeem", "POST /v1/admin/bootstrap"];
@@ -132,12 +132,12 @@ export function createApp(deps: AppDeps) {
   });
 
   // Content-Length がない（chunked の）要求も、読みながら数えて上限を超えたところで打ち切る
-  const tooLarge = () => {
-    throw new ApiError(413, "payload_too_large", "リクエストが大きすぎます");
-  };
-  const limitBody = bodyLimit({ maxSize: BODY_LIMIT, onError: tooLarge });
-  const limitPostBody = bodyLimit({ maxSize: POST_BODY_LIMIT, onError: tooLarge });
-  app.use("/v1/*", (c, next) => (c.req.method === "POST" && c.req.path === "/v1/posts" ? limitPostBody : limitBody)(c, next));
+  const limitBody = bodyLimit(BODY_LIMIT);
+  const limitPostBody = bodyLimit(POST_BODY_LIMIT);
+  const isLargeBody = (method: string, path: string) =>
+    (method === "POST" && path === "/v1/posts") || (method === "PATCH" && /^\/v1\/groups\/[^/]+$/.test(path)) ||
+    (method === "PUT" && /^\/v1\/groups\/[^/]+\/name-boxes$/.test(path));
+  app.use("/v1/*", (c, next) => (isLargeBody(c.req.method, c.req.path) ? limitPostBody : limitBody)(c, next));
 
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/v1/instance", (c) =>
@@ -165,8 +165,8 @@ export function createApp(deps: AppDeps) {
   });
 
   app.post("/v1/auth/redeem", async (c) => {
-    if (!redeemLimiter.take(`redeem:${c.get("clientIp")}`, now().getTime())) {
-      throw new ApiError(429, "rate_limited", "試行回数が多すぎます。時間をおいてください");
+    if (!redeemLimiter.take(`redeem:${rateLimitKey(c.get("clientIp"))}`, now().getTime())) {
+      throw tooManyRequests("試行回数が多すぎます。時間をおいてください");
     }
     const input = await body(
       c,
@@ -190,8 +190,8 @@ export function createApp(deps: AppDeps) {
   // 最初の admin を作る。SOUIEBA_BOOTSTRAP_TOKEN を知っていて、admin が1人もいないときだけ使える
   app.post("/v1/admin/bootstrap", async (c) => {
     if (!config.bootstrapToken) throw notFound("ページ");
-    if (!redeemLimiter.take(`bootstrap:${c.get("clientIp")}`, now().getTime())) {
-      throw new ApiError(429, "rate_limited", "試行回数が多すぎます。時間をおいてください");
+    if (!redeemLimiter.take(`bootstrap:${rateLimitKey(c.get("clientIp"))}`, now().getTime())) {
+      throw tooManyRequests("試行回数が多すぎます。時間をおいてください");
     }
     const input = await body(c, z.object({ token: z.string().max(200), handle: z.string(), displayName: z.string() }));
     if (!safeEqual(input.token, config.bootstrapToken)) throw new ApiError(401, "unauthorized", "認証に失敗しました");
@@ -205,8 +205,8 @@ export function createApp(deps: AppDeps) {
   v1.use(
     "*",
     authenticate(db, {
-      blocked: (c) => authFailLimiter.blocked(`authfail:${c.get("clientIp")}`, now().getTime()),
-      failed: (c) => void authFailLimiter.take(`authfail:${c.get("clientIp")}`, now().getTime()),
+      blocked: (c) => authFailLimiter.blocked(`authfail:${rateLimitKey(c.get("clientIp"))}`, now().getTime()),
+      failed: (c) => void authFailLimiter.take(`authfail:${rateLimitKey(c.get("clientIp"))}`, now().getTime()),
     }),
   );
   v1.use("*", async (c, next) => {
@@ -218,7 +218,7 @@ export function createApp(deps: AppDeps) {
     const key = a.agentId ?? a.userId;
     const isPost = c.req.method === "POST" && c.req.path === "/v1/posts";
     if (!(isPost ? postLimiter : readLimiter).take(`${isPost ? "post" : "req"}:${key}`, now().getTime())) {
-      throw new ApiError(429, "rate_limited", "リクエストが多すぎます");
+      throw tooManyRequests();
     }
     await next();
   });
@@ -243,7 +243,7 @@ export function createApp(deps: AppDeps) {
       user: accounts.publicUser(accounts.getUser(db, a.userId)!),
       agents: accounts.listAgents(db, a.userId).map(accounts.publicAgent),
       groups: groups.listGroups(db, { userId: a.userId, agentId: null }),
-      postsAboutMe: posts.listMyPosts(db, a.userId),
+      postsAboutMe: posts.listMyPosts(db, a.userId, { all: true }),
     });
   });
 
@@ -261,7 +261,7 @@ export function createApp(deps: AppDeps) {
       c,
       z.object({ name: z.string(), provider: z.string().max(40).optional(), encKey: z.string().max(64), signKey: z.string().max(64) }),
     );
-    const { agent, token } = accounts.createAgent(db, a.userId, input, now());
+    const { agent, token } = accounts.createAgent(db, a.userId, input, now(), config.limits);
     return c.json({ agent: accounts.publicAgent(agent), token }, 201);
   });
   v1.delete("/agents/:id", (c) => {

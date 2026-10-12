@@ -9,7 +9,11 @@ import { allowedRecipientAgents } from "./groups.ts";
 
 export type Actor = { userId: string; agentId: string | null };
 
-export const MAX_RECIPIENTS = 200;
+/**
+ * 1つの投稿の宛先（Agent）の上限。200人 × 5 Agent（SOUIEBA_MAX_AGENTS_PER_USER の既定）が収まるようにする。
+ * 宛先1件は 150 バイトほどなので、POST_BODY_LIMIT（app.ts）にも収まる
+ */
+export const MAX_RECIPIENTS = 1000;
 
 /**
  * 暗号化された投稿を保存する。サーバは本文を読めないので、確かめるのは
@@ -25,6 +29,12 @@ export function upsertPost(
 ): PublishResult {
   const periodError = validatePeriod(envelope.periodStart, envelope.periodEnd, now);
   if (periodError) throw badRequest(`period_${periodError}`, `期間が不正です（${periodError}）`);
+  const periodStart = new Date(envelope.periodStart).toISOString();
+  const periodEnd = new Date(envelope.periodEnd).toISOString();
+  if (periodStart !== envelope.periodStart || periodEnd !== envelope.periodEnd) {
+    // 署名は送られてきた文字列に対して行われているので、正規化した値に置き換えられない
+    throw badRequest("period_not_canonical", "期間は ISO 8601（toISOString の形式）で指定してください");
+  }
   if (envelope.recipients.length > MAX_RECIPIENTS) throw badRequest("too_many_recipients", `宛先は ${MAX_RECIPIENTS} 件までです`);
 
   const agent = getAgent(db, actor.agentId);
@@ -37,12 +47,6 @@ export function upsertPost(
   const allowed = allowedRecipientAgents(db, actor.userId, envelope.visibility);
   const recipients = [...new Set(envelope.recipients.map((r) => r.agentId))].filter((id) => allowed.has(id));
 
-  const periodStart = new Date(envelope.periodStart).toISOString();
-  const periodEnd = new Date(envelope.periodEnd).toISOString();
-  if (periodStart !== envelope.periodStart || periodEnd !== envelope.periodEnd) {
-    // 署名は送られてきた文字列に対して行われているので、正規化した値に置き換えられない
-    throw badRequest("period_not_canonical", "期間は ISO 8601（toISOString の形式）で指定してください");
-  }
   const visibleAt = new Date(now.getTime() + graceMs).toISOString();
   const ts = now.toISOString();
   const body = JSON.stringify(envelope);
@@ -98,16 +102,19 @@ export function deletePost(db: DB, actor: Actor, postId: string): void {
   db.delete(posts).where(eq(posts.id, postId)).run();
 }
 
-/** 自分について書かれた投稿（全 Agent 分）。本文は暗号文のまま返し、CLI が手元の Agent の鍵で復号する */
-export function listMyPosts(db: DB, userId: string) {
-  const rows = db
+/**
+ * 自分について書かれた投稿（全 Agent 分）。本文は暗号文のまま返し、CLI が手元の Agent の鍵で復号する。
+ * 一覧は新しい 200 件まで。all（/me/export）なら全件（保存期間で上限がある）
+ */
+export function listMyPosts(db: DB, userId: string, opts: { all?: boolean } = {}) {
+  const query = db
     .select({ post: posts, agentName: agents.name })
     .from(posts)
     .innerJoin(agents, eq(agents.id, posts.authorAgentId))
     .where(eq(posts.ownerId, userId))
     .orderBy(desc(posts.periodStart), desc(posts.createdAt))
-    .limit(200)
-    .all();
+    .$dynamic();
+  const rows = (opts.all ? query : query.limit(200)).all();
   return rows.map(({ post: r, agentName }) => ({
     id: r.id,
     author: { id: r.authorAgentId, name: agentName },
