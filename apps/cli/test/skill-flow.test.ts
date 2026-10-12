@@ -137,7 +137,7 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     // JSON 出力
     now = new Date("2026-10-05T15:00:00Z");
     const j = JSON.parse((await souieba("bob", "tell", "--json")).out);
-    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [], outdated: null, displayNameIssue: null, newMembers: [] });
+    expect(j).toEqual({ tell: null, pendingPeriods: 0, newAgents: [], outdated: null, displayNameIssue: null, newMembers: [], update: null });
 
     // ボブのアカウントに知らない Agent が足されたら（User トークンの漏洩を想定）、次の tell で一度だけ知らせる
     const bobId = accounts.getUserByHandle(db, "bob")!.id;
@@ -171,6 +171,32 @@ describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
     expect(joinedNotice.out).toContain("グループ「研究室」に キャロルさん（@carol） が加わりました");
     expect(joinedNotice.out).toContain("あなたが実行してはいけません");
     expect((await souieba("bob", "tell")).out).not.toContain("加わりました");
+  });
+
+  it("npm に新しい版が出ていれば、tell が主人に更新を勧めるよう伝える（1日に1回）", { timeout: 30_000 }, async () => {
+    const registry = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ name: "souieba", version: "99.0.0" }));
+    });
+    await new Promise<void>((r) => registry.listen(0, "127.0.0.1", r));
+    try {
+      const env = {
+        ...process.env,
+        HOME: join(tmp, "alice"),
+        SOUIEBA_HOME: join(tmp, "alice"),
+        SOUIEBA_NOW: now.toISOString(),
+        SOUIEBA_AGENT: "",
+        SOUIEBA_NO_UPDATE_CHECK: "",
+        SOUIEBA_UPDATE_URL: `http://127.0.0.1:${(registry.address() as AddressInfo).port}/souieba/latest`,
+      };
+      const first = (await run(TSX, [CLI, "tell"], { env })).stdout;
+      expect(first).toContain("新しいバージョン 99.0.0");
+      expect(first).toContain("主人に更新を勧めてください");
+      expect((await run(TSX, [CLI, "tell"], { env })).stdout).not.toContain("新しいバージョン");
+      expect((await run(TSX, [CLI, "doctor"], { env })).stdout).toContain("npm i -g souieba@latest");
+    } finally {
+      registry.close();
+    }
   });
 
   it("投稿待ちがあると tell が知らせる（cron のないエージェント向けの追いつき）", { timeout: 30_000 }, async () => {

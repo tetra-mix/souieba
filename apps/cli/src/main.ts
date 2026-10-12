@@ -32,6 +32,7 @@ import {
 } from "@souieba/sdk";
 import { HOOK_TARGETS, hookOutput, isHookTarget } from "./integrations/hook.ts";
 import { SKILL_TOPICS, installedSkills, isSkillTopic, skillText, skillVersionAdvice } from "./skill.ts";
+import { latestVersion, newerThanCurrent, updateAdvice } from "./update-check.ts";
 import { CLI_VERSION } from "./version.ts";
 
 const USAGE = `使い方: souieba <command>
@@ -493,6 +494,10 @@ async function doctor() {
     console.log(`  ✗ ${m}`);
     process.exitCode = 1;
   };
+  // npm に新しい版が出ていないか（doctor では覚えている値を使わず、必ず問い合わせる）
+  const latest = await latestVersion(new Date(), { force: true });
+  if (newerThanCurrent(latest)) warn(updateAdvice(latest!));
+  else if (latest) ok(`CLI は最新です（${CLI_VERSION}）`);
   // スキル（SKILL.md）と CLI は別々に更新されるので、ずれていないかを見る
   const skills = installedSkills();
   if (skills.length === 0) warn("スキルが見つかりません（npx skills add tetra-mix/souieba で入れられます）");
