@@ -1,6 +1,6 @@
 name: CI
 
-# dev・main への PR と push で、バージョンの揃い・型チェック・テスト・CLI のビルドを確かめる。
+# dev・main への PR と push で、バージョンの揃い・型チェック・テスト・CLI とサイトのビルドを確かめる。
 # Release ワークフローも同じ確認をするが、main に入る前に落ちるほうが直しやすいので、PR の段階でも走らせる。
 
 on:
@@ -22,9 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
           cache: pnpm
@@ -33,3 +35,5 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build:cli
+      # サイトのビルドは数秒で済むので、apps/site を変えていない PR でも毎回確かめる
+      - run: pnpm --filter @souieba/site build
