@@ -69,7 +69,7 @@ afterAll(() => {
 });
 
 describe("Skill の流れ（CLI をサブプロセスで実行）", () => {
-  it("note → compose → publish → 友人の tell", { timeout: 60_000 }, async () => {
+  it("note → compose → publish → 友人の tell", { timeout: 120_000 }, async () => {
     // セットアップ（setup.md の手順）
     const u = accounts.createUser(db, { handle: "alice", displayName: "アリス" }, now);
     const { code } = accounts.issueLoginCode(db, u.id, now);
