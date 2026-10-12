@@ -227,7 +227,9 @@ function insertBoxes(db: DB, groupId: string, version: number, rows: { agentId: 
 
 /**
  * まだ封を持っていないメンバーの Agent に、封をしたグループ名を置く（メンバーなら誰でも。新しく入った人や Agent のため）。
- * 読める封がすでにある Agent の分は、黙って飛ばす（メンバーが名前を書き換えられないように。変更は owner の renameGroup だけ）。
+ * 今の版の封がすでにある Agent の分は、黙って飛ばす（メンバーが名前を書き換えられないように。変更は owner の renameGroup だけ）。
+ * ただし送り主の Agent が失効・脱退して読めなくなった封は、owner だけが置き直せる
+ * （誰でも置き直せると、封をした Agent が失効したときに、メンバーが別の名前に差し替えられる）。
  * clearPlain: 暗号化する前の平文の名前を消す（封をし直したクライアントが送る）。
  */
 export function putNameBoxes(
@@ -238,7 +240,7 @@ export function putNameBoxes(
   now: Date,
 ): void {
   db.transaction(() => {
-    requireMember(db, groupId, actorId);
+    const isOwner = requireMember(db, groupId, actorId).role === "owner";
     const g = db.select({ nameVersion: groups.nameVersion }).from(groups).where(eq(groups.id, groupId)).get()!;
     if (input.version !== g.nameVersion) throw conflict("stale_name_version", "グループ名が変更されています。最新の名前を取り直してください");
     const rows = checkedBoxes(db, actorId, groupId, input.version, input.boxes);
@@ -251,7 +253,11 @@ export function putNameBoxes(
         .flatMap((batch) => db.select().from(groupNameBoxes).where(and(eq(groupNameBoxes.groupId, groupId), inArray(groupNameBoxes.agentId, batch))).all())
         .map((b) => [b.agentId, b] as const),
     );
-    const writable = rows.filter((r) => !hasReadableBox(existing.get(r.agentId), input.version, members));
+    const writable = rows.filter((r) => {
+      const box = existing.get(r.agentId);
+      if (!box || box.version !== input.version) return true;
+      return isOwner && !hasReadableBox(box, input.version, members);
+    });
     insertBoxes(db, groupId, input.version, writable, now);
     if (input.clearPlain) db.update(groups).set({ name: "" }).where(eq(groups.id, groupId)).run();
   });
