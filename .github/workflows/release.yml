@@ -6,33 +6,40 @@ name: Release
 # すでに publish 済み・Release 作成済みの手順は飛ばすので、途中で失敗したら同じバージョンでもう一度押せばよい。
 # サーバのデプロイと MIN_CLIENT_VERSION の引き上げは、ここでは行わない。
 # npm への publish は Trusted Publishing（OIDC）で行い、長期のトークンは使わない。provenance は自動で付く。
+# 依存のインストールとビルド・テストは権限を絞った build ジョブで行い、公開用の tarball を artifact に置く。
+# publish ジョブだけが書き込みと OIDC の権限を持ち、pnpm install もライフサイクルスクリプトも走らせずに tarball を publish する。
+# Action はタグの付け替えで中身が変わらないよう、コミットの SHA で固定する。
 # 手順: docs/client-distribution-plan.md §5
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write # GitHub Release（とタグ）を作る
-  id-token: write # npm の Trusted Publishing（OIDC）
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      published: ${{ steps.version.outputs.published }}
+      released: ${{ steps.version.outputs.released }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: pnpm
-          registry-url: https://registry.npmjs.org
-      # Trusted Publishing には npm 11.5.1 以上が要る
-      - run: npm install -g npm@^11.5.1
       - run: pnpm install --frozen-lockfile
       - id: version
         env:
@@ -46,15 +53,44 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build:cli
-      # 公開するのはバンドル済みの1ファイルなので、開発用の依存（workspace:*）は package.json から外す
-      - if: steps.version.outputs.published != 'true'
-        working-directory: apps/cli
-        run: npm pkg delete devDependencies scripts
-      - if: steps.version.outputs.published != 'true'
-        working-directory: apps/cli
-        run: npm publish --access public
-      - if: steps.version.outputs.released != 'true'
+      # 公開するのはバンドル済みの1ファイルなので、開発用の依存（workspace:*）は package.json から外してから固める
+      - working-directory: apps/cli
+        run: |
+          npm pkg delete devDependencies scripts
+          mkdir -p "$RUNNER_TEMP/package"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/package"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli-package
+          path: ${{ runner.temp }}/package/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # GitHub Release（とタグ）を作る
+      id-token: write # npm の Trusted Publishing（OIDC）
+    steps:
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted Publishing には npm 11.5.1 以上が要る。publish に使う npm は版を固定する
+      - run: npm install -g --ignore-scripts npm@11.21.0
+      - if: needs.build.outputs.published != 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cli-package
+          path: package
+      - if: needs.build.outputs.published != 'true'
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: npm publish "package/souieba-$VERSION.tgz" --access public --ignore-scripts
+      - if: needs.build.outputs.released != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v${{ steps.version.outputs.version }}
-        run: gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --title "$TAG"
+          TAG: v${{ needs.build.outputs.version }}
+        run: gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes --title "$TAG"
