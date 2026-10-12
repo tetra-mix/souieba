@@ -1,15 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type CreatePostInput,
   DEFAULT_SESSION_GAP_MS,
+  DEFAULT_TELL_INTERVAL_MS,
   type SessionState,
   type TellCandidate,
   advanceSession,
   canTell,
   periodOf,
 } from "@souieba/core";
-import { souiebaHome, writeSecretJson } from "./config.ts";
+import { readStateJson, souiebaHome, writeSecretJson } from "./config.ts";
 import type { SouiebaTransport } from "./transport.ts";
 
 export type SouiebaOptions = {
@@ -19,6 +19,8 @@ export type SouiebaOptions = {
   stateKey?: string;
   sessionGapMs?: number;
   maxTellsPerSession?: number;
+  /** 同じ Session の途中でも、前の Tell からこれだけたてば次の1件を伝える */
+  tellIntervalMs?: number;
   now?: () => Date;
   onError?: (op: string, err: unknown) => void;
 };
@@ -32,6 +34,7 @@ export class Souieba {
   private readonly statePath: string;
   private readonly gapMs: number;
   private readonly maxTells: number;
+  private readonly tellIntervalMs: number;
   private readonly now: () => Date;
   private readonly onError: (op: string, err: unknown) => void;
   private state: SessionState | null;
@@ -41,9 +44,10 @@ export class Souieba {
     this.statePath = opts.statePath ?? join(souiebaHome(), "state", `${opts.stateKey ?? "default"}.json`);
     this.gapMs = opts.sessionGapMs ?? DEFAULT_SESSION_GAP_MS;
     this.maxTells = opts.maxTellsPerSession ?? 1;
+    this.tellIntervalMs = opts.tellIntervalMs ?? DEFAULT_TELL_INTERVAL_MS;
     this.now = opts.now ?? (() => new Date());
     this.onError = opts.onError ?? (() => {});
-    this.state = existsSync(this.statePath) ? (JSON.parse(readFileSync(this.statePath, "utf8")) as SessionState) : null;
+    this.state = readStateJson<SessionState>(this.statePath);
   }
 
   get session(): SessionState | null {
@@ -72,7 +76,7 @@ export class Souieba {
    * 何も伝えるものがない・通信できない場合は null。
    */
   async pickTellCandidate(): Promise<TellCandidate | null> {
-    if (!this.state || !canTell(this.state, this.maxTells)) return null;
+    if (!this.state || !canTell(this.state, this.maxTells, this.now(), this.tellIntervalMs)) return null;
     try {
       await this.transport.sync();
       return await this.transport.claimTell();
@@ -86,7 +90,7 @@ export class Souieba {
     try {
       await this.transport.markAsTold(postId);
       if (this.state) {
-        this.state = { ...this.state, tellsInSession: this.state.tellsInSession + 1 };
+        this.state = { ...this.state, tellsInSession: this.state.tellsInSession + 1, lastToldAt: this.now().toISOString() };
         this.persist();
       }
       return true;

@@ -18,6 +18,7 @@ const EnvSchema = z.object({
   SOUIEBA_MAX_USERS: z.coerce.number().int().min(1).default(500),
   SOUIEBA_MAX_GROUP_MEMBERS: z.coerce.number().int().min(2).default(50),
   SOUIEBA_MAX_GROUPS_PER_USER: z.coerce.number().int().min(1).default(20),
+  SOUIEBA_MAX_AGENTS_PER_USER: z.coerce.number().int().min(1).default(5),
 });
 
 /** 1つのインスタンスに複数の集まりを載せるので、1つのグループや1人が資源を使い切らないようにする */
@@ -25,6 +26,8 @@ export type Limits = {
   maxUsers: number;
   maxGroupMembers: number;
   maxGroupsPerUser: number;
+  /** 1人が持てる有効な Agent の数。投稿の宛先の数（MAX_RECIPIENTS）に収まるようにする */
+  maxAgentsPerUser: number;
 };
 
 export type Config = {
@@ -49,6 +52,29 @@ export type Config = {
 };
 
 export class ConfigError extends Error {}
+
+const LimitsEnvSchema = EnvSchema.pick({
+  SOUIEBA_MAX_USERS: true,
+  SOUIEBA_MAX_GROUP_MEMBERS: true,
+  SOUIEBA_MAX_GROUPS_PER_USER: true,
+  SOUIEBA_MAX_AGENTS_PER_USER: true,
+});
+
+/** 上限だけを読む（SOUIEBA_PUBLIC_URL を持たない souieba-admin のローカル実行でも、サーバと同じ上限で検査するため） */
+export function loadLimits(env: Record<string, string | undefined> = process.env): Limits {
+  const parsed = LimitsEnvSchema.safeParse(env);
+  if (!parsed.success) throw new ConfigError(`設定が不正です:\n  ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("\n  ")}`);
+  return limitsFrom(parsed.data);
+}
+
+function limitsFrom(e: z.infer<typeof LimitsEnvSchema>): Limits {
+  return {
+    maxUsers: e.SOUIEBA_MAX_USERS,
+    maxGroupMembers: e.SOUIEBA_MAX_GROUP_MEMBERS,
+    maxGroupsPerUser: e.SOUIEBA_MAX_GROUPS_PER_USER,
+    maxAgentsPerUser: e.SOUIEBA_MAX_AGENTS_PER_USER,
+  };
+}
 
 /**
  * 環境変数を検証する。サーバはインターネットに公開する前提で、通信路は https にする。
@@ -82,10 +108,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     logLevel: e.SOUIEBA_LOG_LEVEL,
     adminApi: e.SOUIEBA_ADMIN_API === "on",
     bootstrapToken: e.SOUIEBA_BOOTSTRAP_TOKEN ?? null,
-    limits: {
-      maxUsers: e.SOUIEBA_MAX_USERS,
-      maxGroupMembers: e.SOUIEBA_MAX_GROUP_MEMBERS,
-      maxGroupsPerUser: e.SOUIEBA_MAX_GROUPS_PER_USER,
-    },
+    limits: limitsFrom(e),
   };
 }

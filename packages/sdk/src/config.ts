@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -35,10 +36,24 @@ export function loadClientConfig(): ClientConfig {
   return cfg;
 }
 
+/**
+ * 手元の状態ファイル（Session・既知の Agent やメンバー・グループ名など）を読む。ないか壊れていれば null。
+ * 壊れたファイルで tell などが毎回落ちないよう、作り直せるものだけに使う（トークンを持つ config.json には使わない）
+ */
+export function readStateJson<T>(path: string): T | null {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
 /** トークンを含むので所有者だけが読める権限（600）で書く */
 export function writeSecretJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.tmp`;
+  // 同時に動く別の souieba と一時ファイルがぶつからないよう、名前を毎回変える
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, path);

@@ -76,6 +76,15 @@ describe("session", () => {
     expect(c.isNewSession).toBe(true);
     expect(canTell(c.state)).toBe(true);
   });
+
+  it("同じ Session の途中でも、前の Tell から10分たてば次を伝える", () => {
+    const { state } = advanceSession(null, NOW);
+    const told = { ...state, tellsInSession: 1, lastToldAt: NOW.toISOString() };
+    expect(canTell(told, 1, new Date(NOW.getTime() + 9 * 60_000))).toBe(false);
+    expect(canTell(told, 1, new Date(NOW.getTime() + 10 * 60_000))).toBe(true);
+    // lastToldAt のない古い状態ファイルでは、今までどおり Session ごとに1件
+    expect(canTell({ ...state, tellsInSession: 1 }, 1, new Date(NOW.getTime() + 60 * 60_000))).toBe(false);
+  });
 });
 
 describe("period", () => {
@@ -103,6 +112,7 @@ describe("scanSecrets", () => {
     ["credit_card", "4111 1111 1111 1111"],
     ["url_with_secret", "https://example.com/cb?token=abc123"],
     ["souieba_token", "sou_a_abcdefghijklmnopqrstuvwxyz"],
+    ["souieba_token", "sou_m_abcdefghijklmnopqrstuvwxyz"],
     ["jwt", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"],
   ];
   it.each(positives)("%s を検出する", (rule, text) => {

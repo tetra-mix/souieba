@@ -3,7 +3,6 @@
  * サーバは名前を読めない。名前はメンバーの Agent ごとに封をして置き、読めるクライアントが、
  * まだ封を持っていないメンバーの Agent（新しく入った人・あとから足した Agent）に封をし直す。
  */
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type DirectoryAgent,
@@ -15,7 +14,7 @@ import {
   sealGroupName,
   verifyGroupNameBox,
 } from "@souieba/core";
-import { type AgentKeys, souiebaHome, writeSecretJson } from "./config.ts";
+import { type AgentKeys, readStateJson, souiebaHome, writeSecretJson } from "./config.ts";
 
 /** User トークンでも Agent トークンでも使える、グループ名に要る API */
 export type GroupNameApi = {
@@ -41,12 +40,7 @@ export class GroupNameCache {
   constructor(readonly path = join(souiebaHome(), "group_names.json")) {}
 
   private read(): Record<string, CacheEntry> {
-    if (!existsSync(this.path)) return {};
-    try {
-      return JSON.parse(readFileSync(this.path, "utf8")) as Record<string, CacheEntry>;
-    } catch {
-      return {};
-    }
+    return readStateJson<Record<string, CacheEntry>>(this.path) ?? {};
   }
 
   get(groupId: string, version: number): string | null {
@@ -73,8 +67,10 @@ export function displayGroupName(name: string | null): string | null {
 export async function loadGroupNames(api: GroupNameApi, local: LocalAgentKeys[], cache = new GroupNameCache()): Promise<NamedGroup[]> {
   const [groups, dir] = await Promise.all([api.groups(), api.keys()]);
   const agents = new Map<string, DirectoryAgent>(dir.users.flatMap((u) => u.agents.map((a) => [a.id, a] as const)));
+  // 封の送り主の Agent が、そのグループのメンバーのものか確かめるため
+  const groupsOfAgent = new Map<string, string[]>(dir.users.flatMap((u) => u.agents.map((a) => [a.id, u.groupIds] as const)));
   const named = groups.map((g) => {
-    const fromBox = openOwnBox(g, local, agents);
+    const fromBox = openOwnBox(g, local, agents, groupsOfAgent);
     const name = fromBox ?? cache.get(g.id, g.nameVersion) ?? g.legacyName;
     if (name) cache.set(g.id, g.nameVersion, name);
     return { group: { ...g, name }, fromBox: fromBox !== null };
@@ -86,12 +82,13 @@ export async function loadGroupNames(api: GroupNameApi, local: LocalAgentKeys[],
   return named.map((n) => n.group);
 }
 
-/** 自分の Agent 宛ての封を、署名を確かめてから開く。送り主は、今いっしょにグループにいる人の Agent でなければならない */
-function openOwnBox(g: WireGroup, local: LocalAgentKeys[], agents: Map<string, DirectoryAgent>): string | null {
+/** 自分の Agent 宛ての封を、署名を確かめてから開く。送り主は、今そのグループにいる人の Agent でなければならない */
+function openOwnBox(g: WireGroup, local: LocalAgentKeys[], agents: Map<string, DirectoryAgent>, groupsOfAgent: Map<string, string[]>): string | null {
   for (const box of g.nameBoxes) {
     const me = local.find((l) => l.agentId === box.recipientAgentId);
     const sender = agents.get(box.senderAgentId);
     if (!me || !sender || box.groupId !== g.id || box.version !== g.nameVersion) continue;
+    if (!groupsOfAgent.get(sender.id)?.includes(g.id)) continue;
     if (!verifyGroupNameBox(box, sender.signKey)) continue;
     try {
       return openGroupName(box, { agentId: me.agentId, encKey: me.keys.enc });

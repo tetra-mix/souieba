@@ -58,6 +58,7 @@ const USAGE = `使い方: souieba <command>
   skill get <topic>                詳しい手順（${Object.keys(SKILL_TOPICS).join(" / ")}）。skill list で一覧
   tell [--reserve]                 主人の発言ごとに呼ぶ。伝える近況が1件あれば表示する
   hook <${HOOK_TARGETS.join("|")}>   エージェントのフックから呼ぶ。tell の結果とメモの手引きを、そのエージェントの形式で出力する
+  mcp                              MCP サーバ（stdio）として動く。シェルを使えない MCP クライアント（Claude Desktop など）用
   told <postId> | release <postId> --reserve で予約したものを確定・解除する
   note <メモ>                      主人について知ったことをローカルに書き溜める
   compose [--skip <periodStart>]   投稿待ちの時間帯とメモを表示する
@@ -304,6 +305,11 @@ async function main(argv: string[]) {
       if (output) console.log(output);
       break;
     }
+    case "mcp":
+      // 未ログインなどは起動時に止めず、ツールの結果として返す（エージェントが主人に原因を伝えられるように）
+      // MCP の SDK は大きいので、ほかのコマンド（発言ごとに呼ばれるフックなど）の起動を遅くしないよう、ここでだけ読み込む
+      await (await import("./integrations/mcp.ts")).runMcpServer(flags);
+      break;
     case "told":
     case "release": {
       if (!sub) throw new Error(`souieba ${cmd} <postId>`);
