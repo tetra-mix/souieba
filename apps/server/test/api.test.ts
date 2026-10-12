@@ -6,6 +6,8 @@ import { runRetention } from "../src/retention.ts";
 import * as accounts from "../src/services/accounts.ts";
 import * as groups from "../src/services/groups.ts";
 import { MIN_CLIENT_VERSION } from "../src/app.ts";
+import { rateLimitKey } from "../src/net.ts";
+import { RateLimiter } from "../src/ratelimit.ts";
 import { type TestUser, harness, testConfig, twoMembers } from "./harness.ts";
 
 const MIN = 60_000;
@@ -518,6 +520,34 @@ describe("ネットワーク", () => {
     for (let i = 0; i < 10; i++)
       await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" }, { "x-forwarded-for": "198.51.100.7" });
     expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" }, { "x-forwarded-for": "198.51.100.8" })).status).toBe(400);
+  });
+
+  it("レート制限は IPv6 を /64 でまとめて数える", async () => {
+    expect(rateLimitKey("2001:db8:1:2:aaaa::1")).toBe("2001:db8:1:2::/64");
+    expect(rateLimitKey("2001:DB8:1:2:ffff:ffff:ffff:ffff")).toBe("2001:db8:1:2::/64");
+    expect(rateLimitKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(rateLimitKey("::ffff:198.51.100.7")).toBe("198.51.100.7");
+    const h = harness({ remoteAddr: "2001:db8:1:2::1" });
+    for (let i = 0; i < 10; i++) {
+      h.setIp(`2001:db8:1:2::${i + 1}`);
+      await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" });
+    }
+    h.setIp("2001:db8:1:2:ffff::9");
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" })).status).toBe(429);
+    h.setIp("2001:db8:1:3::1");
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" })).status).toBe(400);
+  });
+
+  it("レート制限が覚えるキーには上限があり、古いものから忘れる", () => {
+    const limiter = new RateLimiter(1, 60_000, 100);
+    expect(limiter.take("first", 0)).toBe(true);
+    expect(limiter.take("first", 0)).toBe(false);
+    for (let i = 0; i < 200; i++) limiter.take(`k${i}`, 1);
+    expect(limiter.size).toBe(100);
+    expect(limiter.blocked("first", 1)).toBe(false);
+    // 期限の切れたものは先頭から消える
+    limiter.take("late", 120_000);
+    expect(limiter.size).toBe(1);
   });
 });
 

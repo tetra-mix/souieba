@@ -7,7 +7,7 @@ import type { Config } from "./config.ts";
 import type { DB } from "./db/index.ts";
 import { safeEqual } from "./crypto.ts";
 import { ApiError, badRequest, forbidden, notFound, tooManyRequests } from "./errors.ts";
-import { isLoopback, isPrivateOrLoopback, normalizeIp } from "./net.ts";
+import { isLoopback, isPrivateOrLoopback, normalizeIp, rateLimitKey } from "./net.ts";
 import { RateLimiter } from "./ratelimit.ts";
 import * as accounts from "./services/accounts.ts";
 import * as groups from "./services/groups.ts";
@@ -165,7 +165,7 @@ export function createApp(deps: AppDeps) {
   });
 
   app.post("/v1/auth/redeem", async (c) => {
-    if (!redeemLimiter.take(`redeem:${c.get("clientIp")}`, now().getTime())) {
+    if (!redeemLimiter.take(`redeem:${rateLimitKey(c.get("clientIp"))}`, now().getTime())) {
       throw tooManyRequests("試行回数が多すぎます。時間をおいてください");
     }
     const input = await body(
@@ -190,7 +190,7 @@ export function createApp(deps: AppDeps) {
   // 最初の admin を作る。SOUIEBA_BOOTSTRAP_TOKEN を知っていて、admin が1人もいないときだけ使える
   app.post("/v1/admin/bootstrap", async (c) => {
     if (!config.bootstrapToken) throw notFound("ページ");
-    if (!redeemLimiter.take(`bootstrap:${c.get("clientIp")}`, now().getTime())) {
+    if (!redeemLimiter.take(`bootstrap:${rateLimitKey(c.get("clientIp"))}`, now().getTime())) {
       throw tooManyRequests("試行回数が多すぎます。時間をおいてください");
     }
     const input = await body(c, z.object({ token: z.string().max(200), handle: z.string(), displayName: z.string() }));
@@ -205,8 +205,8 @@ export function createApp(deps: AppDeps) {
   v1.use(
     "*",
     authenticate(db, {
-      blocked: (c) => authFailLimiter.blocked(`authfail:${c.get("clientIp")}`, now().getTime()),
-      failed: (c) => void authFailLimiter.take(`authfail:${c.get("clientIp")}`, now().getTime()),
+      blocked: (c) => authFailLimiter.blocked(`authfail:${rateLimitKey(c.get("clientIp"))}`, now().getTime()),
+      failed: (c) => void authFailLimiter.take(`authfail:${rateLimitKey(c.get("clientIp"))}`, now().getTime()),
     }),
   );
   v1.use("*", async (c, next) => {
