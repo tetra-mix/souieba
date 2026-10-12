@@ -114,14 +114,18 @@ GitHub Actions の画面からボタンで行う（`.github/workflows/release.ym
 dev への PR で node scripts/set-version.mjs 0.5.1（CLI・サーバ・SKILL.md のバージョンを上げる）
 dev を main にマージ
 Actions → Release → main を選んで Run workflow
-  → バージョン（CLI・サーバ・SKILL.md）が揃っているかを検査
+  build ジョブ（contents: read だけ）
+  → バージョン（CLI・サーバ・SKILL.md）が揃っていて x.y.z の形かを検査
   → typecheck・test
-  → build（apps/cli/dist/souieba.mjs）
+  → build（apps/cli/dist）を artifact に上げる
+  publish ジョブ（Environment「npm」。id-token と contents の書き込み。依存は入れない）
   → npm publish --provenance（Trusted Publishing）
   → タグ（v0.5.1）と GitHub Release を作る
 ```
 
 すでに publish 済み・Release 作成済みの手順は飛ばすので、途中で失敗したら同じ main でもう一度押せばよい。
+ただし、publish 済みで Release がなく、publish したコミット（npm の gitHead）が今の main と違うときは、違うコミットにタグを付けないよう止める。そのときは provenance でコミットを確かめ、`gh release create` で手で作る。
+npm の Trusted Publisher には、リポジトリ・ワークフロー（`release.yml`）に加えて Environment `npm` を登録する。
 サーバのデプロイは別に行う。API に互換性のない変更をしたときは、`MIN_CLIENT_VERSION`（`apps/server/src/app.ts`）も手で上げる。
 
 ### 5.1 サプライチェーンの安全性
@@ -131,6 +135,7 @@ Actions → Release → main を選んで Run workflow
 - publish は GitHub Actions の Trusted Publishing だけで行う。長期の npm トークンを作らない
 - provenance を付け、どのコミットからビルドしたかを検証できるようにする
 - npm のアカウントは 2FA を必須にする
+- 依存を入れてテストするジョブには OIDC と書き込みの権限を渡さない。Actions はコミット SHA で固定し、Dependabot で更新する
 - 実行時の依存はゼロを保つ。ビルド時の依存（esbuild など）は lockfile で固定する
 
 ## 6. Homebrew（必要になったら）
