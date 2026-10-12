@@ -1,0 +1,8 @@
+# GitHub Actions のバージョン（コミット SHA で固定している）を毎週確かめ、新しいものがあれば PR を作る
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    target-branch: dev

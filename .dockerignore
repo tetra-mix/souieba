@@ -5,3 +5,8 @@ node_modules
 *.db
 deploy
 docs
+# 秘密を含みうるファイルはイメージに入れない（deploy/.env.example は deploy ごと除いており、ビルドには要らない）
+**/.env
+**/.env.*
+**/.dev.vars*
+**/.wrangler

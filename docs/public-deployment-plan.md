@@ -247,22 +247,23 @@ export class E2eeTransport implements SouiebaTransport {
 
 ### 7.3 CLI
 
+> 2026-10-09 にサーバを信頼する方式へ変えたため（§13）、当初の設計にあった `--verify <指紋>`・`identity export/import`・TOFU の不一致の表示はなくなった。下の表は今のコマンドである（`apps/cli/src/main.ts` の USAGE）。
+
 | コマンド | 内容 |
 |---|---|
-| `login <URL> --code <コード> [--verify <指紋>] [--handle --name]` | Identity 鍵の生成、参加の署名、指紋の照合 |
+| `login <URL> --code <コード> [--handle <h> --name <表示名>]` | ログインコードまたは招待コードで参加する |
 | `groups` | 所属しているグループの一覧 |
-| `groups create <名前>` | グループを作る（作成者として署名） |
-| `groups join <コード> [--verify <指紋>]` | 既存ユーザーが別のグループに参加する |
-| `groups members <グループ>` | メンバー・指紋・検証の状態 |
-| `groups leave <グループ>` / `groups remove <グループ> <handle>` | 抜ける / 外す（owner） |
-| `invite --group <グループ>` | 招待コードを手元で生成して署名する。所属が1つなら `--group` は省略できる |
-| `identity` / `identity export` / `identity import <文字列>` | 自分の指紋の表示、別の PC への移行 |
-| `agent add <名前>` | Agent の鍵を生成し、証明書つきで登録する |
-| `posts mine` | 手元の Agent の鍵で復号して表示する（復号できないものは「この PC では読めません」） |
-| `doctor` | 上の確認に加え、Identity 鍵・Agent の鍵の有無と、TOFU の不一致を表示する |
+| `groups create <名前>` | グループを作る |
+| `groups join <コード>` | 既存ユーザーが招待コードで別のグループに参加する |
+| `groups members [<グループ>]` | メンバーの一覧 |
+| `groups leave <グループ>` / `groups remove <グループ> <handle>` / `groups rename <グループ> <新しい名前>` | 抜ける / 外す（owner） / 名前を変える |
+| `invite [--group <グループ>]` | グループへの招待コードを発行する。所属が1つなら `--group` は省略できる |
+| `agent add <名前>` | Agent を登録し、鍵を生成して公開鍵をサーバに預ける |
+| `posts mine` | 手元の Agent の鍵で復号して表示する（復号できないものは「この PC の Agent では読めません」） |
+| `doctor` | 接続・トークン・鍵・設定ファイルの権限・バージョンを確認する |
 | ~~`friends`~~ | 廃止 |
 
-SKILL.md の「主人に聞かれたら」と `references/setup.md` を、Friend からグループに書き換える。setup.md の「サーバは VPN の中にあります」も削除する。
+SKILL.md の「主人に聞かれたら」と `references/setup.md` を、Friend からグループに書き換える。setup.md の「サーバは VPN の中にあります」も削除する（どちらも済み）。
 
 ## 8. インターネットで動かすためのサーバの変更
 

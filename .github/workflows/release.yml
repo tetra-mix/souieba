@@ -3,58 +3,115 @@ name: Release
 # Actions の画面で main を選んで「Run workflow」を押すと、今の main のバージョンで CLI（npm の souieba）を publish し、
 # タグ（v0.5.0 など）と GitHub Release を作る。
 # バージョンは、dev への PR で `node scripts/set-version.mjs <x.y.z>` を実行して上げておき、dev を main にマージしてから押す。
-# すでに publish 済み・Release 作成済みの手順は飛ばすので、途中で失敗したら同じバージョンでもう一度押せばよい。
+# すでに publish 済み・Release 作成済みの手順は飛ばすので、途中で失敗したら同じ main でもう一度押せばよい。
+# ただし、publish 済みで Release がなく、publish したコミットが今の main と違うときは止める（違うコミットにタグを付けないため）。
 # サーバのデプロイと MIN_CLIENT_VERSION の引き上げは、ここでは行わない。
 # npm への publish は Trusted Publishing（OIDC）で行い、長期のトークンは使わない。provenance は自動で付く。
+# 依存を入れてテストする build ジョブには書き込みと OIDC の権限を渡さず、publish ジョブは依存を入れずにビルド済みの dist だけを使う。
+# publish ジョブは Environment「npm」で動くので、npm の Trusted Publisher にもこの Environment を登録しておく。
 # 手順: docs/client-distribution-plan.md §5
 
 on:
   workflow_dispatch:
 
-permissions:
-  contents: write # GitHub Release（とタグ）を作る
-  id-token: write # npm の Trusted Publishing（OIDC）
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      published: ${{ steps.version.outputs.published }}
+      released: ${{ steps.version.outputs.released }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 24
           cache: pnpm
-          registry-url: https://registry.npmjs.org
-      # Trusted Publishing には npm 11.5.1 以上が要る
-      - run: npm install -g npm@^11.5.1
-      - run: pnpm install --frozen-lockfile
       - id: version
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version=$(node -p 'require("./apps/cli/package.json").version')
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::apps/cli/package.json のバージョン「$version」が x.y.z の形ではありません"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [ -n "$(npm view "souieba@$version" version 2>/dev/null)" ]; then echo "published=true" >> "$GITHUB_OUTPUT"; fi
-          if gh release view "v$version" > /dev/null 2>&1; then echo "released=true" >> "$GITHUB_OUTPUT"; fi
-      - run: node scripts/check-version.mjs "v${{ steps.version.outputs.version }}"
+          published=false
+          released=false
+          if [ -n "$(npm view "souieba@$version" version 2>/dev/null)" ]; then published=true; fi
+          if gh release view "v$version" > /dev/null 2>&1; then released=true; fi
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "released=$released" >> "$GITHUB_OUTPUT"
+          # publish 済みで Release がないときは、publish したコミットにだけタグを付けてよい
+          if [ "$published" = true ] && [ "$released" = false ]; then
+            head=$(npm view "souieba@$version" gitHead 2>/dev/null || true)
+            if [ "$head" != "$GITHUB_SHA" ]; then
+              echo "::error::souieba@$version は npm に publish 済みですが、GitHub Release v$version がありません。publish したコミット（${head:-不明}）が今の main（$GITHUB_SHA）と違うので、タグは付けずに止めます。npm のページの provenance でコミットを確かめ、gh release create v$version --target <そのコミット> --generate-notes --title v$version で手で作ってください"
+              exit 1
+            fi
+          fi
+      - env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: node scripts/check-version.mjs "v$VERSION"
+      - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build:cli
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cli-dist
+          path: apps/cli/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    if: needs.build.outputs.published != 'true' || needs.build.outputs.released != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      contents: write # GitHub Release（とタグ）を作る
+      id-token: write # npm の Trusted Publishing（OIDC）
+    steps:
+      # package.json・README・skill などはリポジトリから、ビルド済みの dist は build ジョブから取る。依存は入れない
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: cli-dist
+          path: apps/cli/dist
+      # Trusted Publishing には npm 11.5.1 以上が要る
+      - if: needs.build.outputs.published != 'true'
+        run: npm install -g --ignore-scripts npm@11.21.0
       # 公開するのはバンドル済みの1ファイルなので、開発用の依存（workspace:*）は package.json から外す
-      - if: steps.version.outputs.published != 'true'
+      - if: needs.build.outputs.published != 'true'
         working-directory: apps/cli
         run: npm pkg delete devDependencies scripts
-      - if: steps.version.outputs.published != 'true'
+      - if: needs.build.outputs.published != 'true'
         working-directory: apps/cli
         run: npm publish --access public
-      - if: steps.version.outputs.released != 'true'
+      - if: needs.build.outputs.released != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v${{ steps.version.outputs.version }}
+          TAG: v${{ needs.build.outputs.version }}
         run: gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes --title "$TAG"
