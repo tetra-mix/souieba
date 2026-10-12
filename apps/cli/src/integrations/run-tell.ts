@@ -13,5 +13,16 @@ export const TELL_TIMEOUT_MS = 10_000;
 export const runBundledTell: RunTell = (env) =>
   new Promise((resolve) => {
     const cli = fileURLToPath(new URL("./souieba.mjs", import.meta.url));
-    execFile(process.execPath, [cli, "tell"], { env, timeout: TELL_TIMEOUT_MS }, (err, stdout) => resolve(err ? null : stdout));
+    execFile(process.execPath, [cli, "tell"], { env, timeout: TELL_TIMEOUT_MS }, (err, stdout) => resolve(tellStdout(err, stdout)));
   });
+
+/**
+ * tell の標準出力のうち、エージェントに渡してよい部分。失敗したら null。
+ * 時間切れで止めたときも、それまでに出し終えた行は使う（tell は伝える近況を TOLD にしてから先に出すので、捨てると二度と伝えられない）
+ */
+export function tellStdout(err: (Error & { killed?: boolean }) | null, stdout: string): string | null {
+  if (!err) return stdout;
+  if (!err.killed) return null;
+  const done = stdout.slice(0, stdout.lastIndexOf("\n") + 1);
+  return done || null;
+}

@@ -66,12 +66,20 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
       guarded(async () => {
         const r = agentCmd.noteResult(f, memo);
         if (!r.ok) return text(r.text, true);
+        // 投稿待ちの時間帯も知らせる（手引きのとおり。手元のファイルを読むだけなので、メモは遅くならない）
+        let pending: string | null = null;
+        try {
+          pending = agentCmd.pendingNotice(f);
+        } catch {
+          // 知らせられなくてもメモは済んでいる
+        }
+        const done = [r.text, pending].filter((x): x is string => !!x).join("\n");
         // tell が呼ばれていなくても、メモのついでに友人の近況を渡す（すでに渡して確定待ちのものがあれば、重ねて渡さない）
-        if (reserved) return text(r.text);
+        if (reserved) return text(done);
         const tell = await agentCmd.reserveTell(f).catch(() => null);
-        if (!tell) return text(r.text);
+        if (!tell) return text(done);
         reserved = tell.postId;
-        return text(`${r.text}\n${tell.text}`);
+        return text(`${done}\n${tell.text}`);
       }),
   );
 

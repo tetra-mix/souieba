@@ -52,10 +52,18 @@ export class HttpClient {
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (res.status === 204) return undefined as T;
-    const data = (await res.json().catch(() => ({}))) as { error?: { code: string; message: string } };
-    if (!res.ok) {
-      throw new SouiebaApiError(res.status, data.error?.code ?? "http_error", data.error?.message ?? `HTTP ${res.status}`);
+    const raw = await res.text();
+    let data: { error?: { code: string; message: string } } | undefined;
+    try {
+      data = raw ? JSON.parse(raw) : undefined;
+    } catch {
+      // 前段のプロキシが返す HTML など
     }
+    if (!res.ok) {
+      throw new SouiebaApiError(res.status, data?.error?.code ?? "http_error", data?.error?.message ?? `HTTP ${res.status}`);
+    }
+    // 成功なのに JSON でない応答を {} として返すと、呼び出し元で原因の分からない TypeError になるので、ここで断る
+    if (data === undefined) throw new SouiebaApiError(res.status, "bad_response", `サーバの応答を読めませんでした（HTTP ${res.status}）`);
     return data as T;
   }
 }

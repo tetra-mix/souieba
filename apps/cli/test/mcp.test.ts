@@ -107,6 +107,8 @@ describe("souieba mcp（ローカルの MCP サーバ）", () => {
     now = new Date("2026-10-05T14:05:00Z");
     const later = await connect("alice");
     expect((await call(later, "souieba_tell")).text).toContain("souieba_compose ツールを呼んで");
+    // メモの結果でも、投稿待ちを知らせる（手引きのとおり）
+    expect((await call(later, "souieba_note", { text: "主人は部品を注文していた" })).text).toContain("投稿待ちの時間帯が 1 件あります");
     const composed = await call(later, "souieba_compose");
     expect(composed.text).toContain("主人はM5Stackでロボットを作っていた");
     expect(composed.text).toContain('souieba_publish ツール（period: "2026-10-05T13:00:00.000Z"');

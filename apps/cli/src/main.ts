@@ -188,8 +188,10 @@ async function main(argv: string[]) {
         body: JSON.stringify({ code: values.code, handle: values.handle, displayName: values.name }),
         signal: AbortSignal.timeout(10_000),
       });
-      const data = (await res.json()) as { error?: { message: string }; token: string; user: Me } & JoinResult;
-      if (!res.ok) throw new Error(data.error?.message ?? `HTTP ${res.status}`);
+      // 前段のプロキシが HTML を返すこともあるので、JSON として読めなくても状態コードで伝える
+      const data = (await res.json().catch(() => null)) as ({ error?: { message: string }; token: string; user: Me } & JoinResult) | null;
+      if (!res.ok) throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
+      if (!data?.token || !data.user) throw new Error(`サーバの応答を読めませんでした（HTTP ${res.status}）`);
 
       // 別のサーバ・別のユーザーに切り替えたときは、古い Agent を持ち越さない
       const agents = cfg.serverUrl === baseUrl && cfg.user?.id === data.user.id ? cfg.agents : {};
@@ -252,9 +254,21 @@ async function main(argv: string[]) {
           encKey: enc.pub,
           signKey: sign.pub,
         });
+        const old = cfg.agents[name];
         cfg.agents[name] = { id: r.agent.id, token: r.token, keys: { enc, sign } };
         saveClientConfig(cfg);
         console.log(`Agent「${name}」を登録しました（${r.agent.id}）。トークンと鍵は ${configPath()} に保存しました`);
+        // 同じ名前で登録し直したときは、前の Agent をサーバでも止める（手元から消えたトークンが使えるまま残らないように）
+        if (old && old.id !== r.agent.id) {
+          try {
+            await client.request("DELETE", `/v1/agents/${encodeURIComponent(old.id)}`);
+            console.log(`前の Agent（${old.id}）は失効させました`);
+          } catch (err) {
+            console.error(
+              `前の Agent（${old.id}）を失効させられませんでした（${err instanceof Error ? err.message : err}）。souieba agent revoke ${old.id} を実行してください`,
+            );
+          }
+        }
         // 手元で覚えているグループ名を、新しい Agent 宛てにも封をしておく
         await namedGroups(client).catch(() => {});
       } else if (sub === "revoke") {
@@ -419,6 +433,8 @@ async function groupsCommand(sub: string | undefined, rest: string[]) {
       return;
     }
     case "leave": {
+      // 抜けると戻るには招待が要るので、グループが1つでも省略させない
+      if (!rest[0]) throw new Error("souieba groups leave <グループ>");
       const group = await resolveGroup(client, rest[0]);
       await client.request("DELETE", `/v1/groups/${encodeURIComponent(group.id)}/members/${encodeURIComponent(cfg.user!.id)}`);
       console.log(`グループ「${label(group)}」を抜けました`);

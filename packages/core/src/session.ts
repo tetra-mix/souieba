@@ -19,7 +19,9 @@ export function advanceSession(
   now: Date,
   gapMs: number = DEFAULT_SESSION_GAP_MS,
 ): { state: SessionState; isNewSession: boolean } {
-  const isNewSession = prev === null || now.getTime() - Date.parse(prev.lastMessageAt) >= gapMs;
+  // 状態ファイルの時刻が壊れていたら（NaN）、ずっと同じ Session にならないよう新しい Session にする
+  const last = prev === null ? Number.NaN : Date.parse(prev.lastMessageAt);
+  const isNewSession = prev === null || Number.isNaN(last) || now.getTime() - last >= gapMs;
   const state: SessionState = isNewSession
     ? { sessionId: randomUUID(), lastMessageAt: now.toISOString(), tellsInSession: 0 }
     : { ...prev, lastMessageAt: now.toISOString() };
