@@ -253,6 +253,8 @@ describe("グループに新しいメンバーが入ったことの通知", () =
 
 describe("グループ名の暗号化（#16）", () => {
   const cache = (who: string) => new GroupNameCache(join(dir, `${who}-group_names.json`));
+  const putRawBox = (groupId: string, agentId: string, box: unknown) =>
+    h.db.insert(schema.groupNameBoxes).values({ groupId, agentId, version: 1, box: JSON.stringify(box), createdAt: new Date().toISOString() }).run();
   const names = async (u: TestUser, who = u.handle) => new Map((await transport(u).groupNames(cache(who))).map((g) => [g.id, g.name] as const));
 
   it("作った人が覚えている名前を、読める Agent が順に封をし直して、新しいメンバーにも届ける", async () => {
@@ -279,8 +281,17 @@ describe("グループ名の暗号化（#16）", () => {
     const g = (await h.call("POST", "/v1/groups", alice.token, {})).body.id as string;
     const mallory = { agentId: "agt_mallory", keys: { enc: generateEncryptionKey(), sign: generateSigningKey() } };
     const forged = sealGroupName("偽の名前", { groupId: g, version: 1 }, { agentId: mallory.agentId, signKey: mallory.keys.sign }, { agentId: alice.agentId, encKey: alice.agent.keys.enc.pub });
-    await h.call("PUT", `/v1/groups/${g}/name-boxes`, alice.agentToken, { version: 1, boxes: [{ agentId: alice.agentId, box: forged }] });
+    // サーバは他人の Agent を送り主にした封を断るので、DB に直接置いて、クライアントの検査を確かめる
+    putRawBox(g, alice.agentId, forged);
     expect((await names(alice, "alice-3")).get(g)).toBeNull();
+  });
+
+  it("いっしょにいる人の Agent でも、そのグループにいない人が封をした名前は信用しない", async () => {
+    // ボブとは別のグループ（groupId）でいっしょだが、このグループには入っていない
+    const g = (await h.call("POST", "/v1/groups", alice.token, {})).body.id as string;
+    const forged = sealGroupName("偽の名前", { groupId: g, version: 1 }, { agentId: bob.agentId, signKey: bob.agent.keys.sign }, { agentId: alice.agentId, encKey: alice.agent.keys.enc.pub });
+    putRawBox(g, alice.agentId, forged);
+    expect((await names(alice, "alice-4")).get(g)).toBeNull();
   });
 });
 

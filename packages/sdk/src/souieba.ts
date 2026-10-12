@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type CreatePostInput,
@@ -9,7 +8,7 @@ import {
   canTell,
   periodOf,
 } from "@souieba/core";
-import { souiebaHome, writeSecretJson } from "./config.ts";
+import { readStateJson, souiebaHome, writeSecretJson } from "./config.ts";
 import type { SouiebaTransport } from "./transport.ts";
 
 export type SouiebaOptions = {
@@ -43,7 +42,7 @@ export class Souieba {
     this.maxTells = opts.maxTellsPerSession ?? 1;
     this.now = opts.now ?? (() => new Date());
     this.onError = opts.onError ?? (() => {});
-    this.state = existsSync(this.statePath) ? (JSON.parse(readFileSync(this.statePath, "utf8")) as SessionState) : null;
+    this.state = readStateJson<SessionState>(this.statePath);
   }
 
   get session(): SessionState | null {
