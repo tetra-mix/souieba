@@ -1,6 +1,7 @@
 # 設計: クライアントの配布
 
-> **状態:** 実装済み（ブランチ `feat/npm-distribution`）。npm の名前は確保した。最初のリリース（Trusted Publisher の登録とタグの push）はまだ。方針から変えた点は §9。
+> **状態:** 実装済み（ブランチ `feat/npm-distribution`）。方針から変えた点は §9。
+> 2026-10-12 時点: npm の `souieba` は 0.4.0（2026-10-09）から 0.6.1（2026-10-10）まで、Release ワークフローから Trusted Publishing で公開した（タグと GitHub Release も v0.4.0〜v0.6.1）。パッケージには CLI のほか、エージェントごとの統合（`souieba hook`・`souieba mcp`・OpenClaw のプラグイン・`souieba/agent-sdk`）も入っている。
 
 当時のクライアント（`apps/cli`）は、Skill に同梱した `skills/souieba/scripts/souieba.mjs` としてしか配っていなかった。
 人がふつうにインストールして使えるよう、**CLI は npm で配り、Skill は `npx skills add` で入れる薄い入口にする**。
@@ -26,6 +27,8 @@ npx skills add tetra-mix/souieba -g   ← Skill。発動の条件・会話の始
 
 `apps/cli` をそのまま公開用にする。
 
+> 下は当時の設計。今の `apps/cli/package.json` は、これに加えて `exports` に `./agent-sdk`（Claude Agent SDK 用）を持ち、`files` に `skill`（手順の Markdown）・`agent-sdk.d.ts`・`openclaw.plugin.json`・`README.md` を含む。
+
 ```jsonc
 // apps/cli/package.json
 {
@@ -50,7 +53,7 @@ npx skills add tetra-mix/souieba -g   ← Skill。発動の条件・会話の始
 
 ## 3. バージョン
 
-今はバージョンの番号がばらばら（`apps/server/src/app.ts` と `SKILL.md` は 0.2.0、各 `package.json` は 0.1.0）。
+当時はバージョンの番号がばらばらだった（`apps/server/src/app.ts` と `SKILL.md` は 0.2.0、各 `package.json` は 0.1.0）。今は `node scripts/set-version.mjs <x.y.z>` で揃え、`scripts/check-version.mjs` で検査している（§9）。
 
 - `apps/cli/package.json` の version を正とし、ビルド時に `--define` で CLI に埋め込む。`souieba --version` で表示する
 - サーバの `VERSION` と `SKILL.md` の version も揃える。リリースの手順で、ずれていたら失敗させる
@@ -169,8 +172,8 @@ end
 ## 8. 未決事項
 
 - **秘密鍵の保管場所**: 今は `~/.souieba/config.json`（権限 600）。インストール版になったのを機に、OS のキーチェーンに移すか。エージェントが鍵を使えなくなる環境が出ないかを確かめる必要がある
-- **自動更新の通知**: `doctor` で新しいバージョンを知らせるか（npm の registry を見に行くことになる）
-- **退会のコマンド**: サーバの `DELETE /v1/me` に対応するコマンドを足す
+- ~~**自動更新の通知**: `doctor` で新しいバージョンを知らせるか（npm の registry を見に行くことになる）~~ → 知らせる（2026-10-12、#44）。`tell` と `doctor` が npm の registry で最新の版を確かめ、新しい版があればエージェントから主人に更新を勧めてもらう。問い合わせの結果は `~/.souieba/update-check.json` に1日覚え、同じ版を知らせるのも1日に1回にする。`SOUIEBA_NO_UPDATE_CHECK` で止められる
+- **退会のコマンド**: サーバの `DELETE /v1/me` に対応するコマンドを足す（未対応。2026-10-12 時点で CLI にはない）
 
 ## 9. 実装メモ（方針からの差分）
 
@@ -180,5 +183,6 @@ end
 - **スキルと CLI のずれ**: `doctor` と `skill get` が、よく使われる場所（`~/.claude/skills`・`~/.agents/skills`・`~/.openclaw/skills`・`~/.hermes/skills`、`SOUIEBA_SKILL_DIR`）の SKILL.md の version を CLI と比べ、`npx skills update` か `npm i -g souieba@latest` を促す
 - **ルートの package.json の名前**を `souieba-workspace` にした（CLI の `souieba` と同じ名前だと `pnpm --filter` で区別できない）
 - **リリース**（`.github/workflows/release.yml`）: publish の前に `npm pkg delete devDependencies scripts` で、`workspace:*` の開発用の依存を外す（公開するのはバンドル済みの1ファイルなので要らない）。provenance は Trusted Publishing で自動で付くので、`--provenance` は付けない
-- **残っていること**: npm の Trusted Publisher の登録（登録から2日以内に最初の publish が要る）、最初のタグの push、成功後に「トークンでの publish を禁止」にすること、ライセンスを決めること（今は `package.json` に書いていない）
+- **リリースのジョブを分けた**（2026-10-12）: 依存を入れてテストする build ジョブには `contents: read` だけを渡し、OIDC と書き込みの権限は Environment `npm` の publish ジョブだけに渡す（§5）。Actions はコミット SHA で固定した
+- **残っていること**: npm の Trusted Publisher の登録と最初の publish は済んだ（0.4.0）。成功後に npm の設定で「トークンでの publish を禁止」にすることと、ライセンスを決めること（2026-10-12 時点で `package.json` にも LICENSE ファイルにもない）が残っている
 

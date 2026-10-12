@@ -1,6 +1,7 @@
 # 設計: Cloudflare Workers 対応
 
-> **状態:** §11 の手順 1〜4 を実装済み（ブランチ `feat/workers`）。設計から変えた点は §13 にまとめた。Cloudflare への実際のデプロイは未確認（workerd でのテストまで）。
+> **状態:** §11 の手順 1〜5 を実装済み（ブランチ `feat/workers`、手順は README の「Cloudflare Workers」）。設計から変えた点は §13 にまとめた。
+> 2026-10-09 に `https://souieba.ryouma1128.workers.dev` へデプロイした。自分のドメインを用意していないため、Cloudflare Access と WAF のレート制限ルールはまだかけていない（#19）。
 
 E2EE を入れたことで、サーバに置かれるのは暗号文とメタデータだけになった（[公開の設計 §9](public-deployment-plan.md)）。
 VPN の内側に閉じる必要がなくなったのと同じ理由で、サーバを自宅・VPS・Cloudflare のどこに置いても守れるものは変わらない。
@@ -246,10 +247,10 @@ PR #1（公開・グループ・E2EE）をマージしてから、別の PR で�
 
 ## 12. 未決事項・確認すること
 
-- **上限の値**: グループの人数・1人が入れるグループの数・ユーザー数を、それぞれいくつにするか
+- ~~**上限の値**: グループの人数・1人が入れるグループの数・ユーザー数を、それぞれいくつにするか~~ → 決めた（§13 の「上限」）
 - **Durable Object の制約の確認**: `PRAGMA` のどれが使えるか、外部キーの制約が有効か、`transactionSync` の中で例外を投げたときの挙動
-- **`node:crypto` の互換性**: workerd の `nodejs_compat` で Ed25519 の `verify`（KeyObject を使う形）が動くか
-- **Workers の Rate Limiting バインディング**: 今の提供状況と、数え方の粒度
+- ~~**`node:crypto` の互換性**: workerd の `nodejs_compat` で Ed25519 の `verify`（KeyObject を使う形）が動くか~~ → 動く（§13 の「workerd での確認」）
+- ~~**Workers の Rate Limiting バインディング**: 今の提供状況と、数え方の粒度~~ → 使っている（`wrangler.toml` の `[[ratelimits]]`。§13 の「Worker の入口」）
 - **バックアップ**: Workers では PITR だけにするか、admin API に DB のエクスポートを足すか（中身は暗号文とメタデータ）
 - **Durable Object の場所**: 最初のリクエストの近くに置かれる。日本から使うなら、location hint を指定するか
 - **別のデプロイにも入る人**: 自分でデプロイした集まりと、共有のインスタンスの両方に入る人は、今のクライアントでは扱えない（`serverUrl` が1つ）。需要が出てから考える
@@ -268,9 +269,11 @@ PR #1（公開・グループ・E2EE）をマージしてから、別の PR で�
   - エンドポイント: `POST /v1/admin/bootstrap`（認証なし。`SOUIEBA_BOOTSTRAP_TOKEN` と照合し、admin がいないときだけ）、`GET|POST /v1/admin/users`、`POST /v1/admin/users/:handle/{login-code,disable,admin-token}`、`POST /v1/admin/invites`、`GET /v1/admin/groups`。呼び出しは `msg: "admin"` でログに残す
   - `souieba-admin --url`（または `SOUIEBA_ADMIN_URL`）で HTTP から使う。トークンは `SOUIEBA_ADMIN_TOKEN`・`SOUIEBA_BOOTSTRAP_TOKEN`、Access の service token は `CF_ACCESS_CLIENT_ID`・`CF_ACCESS_CLIENT_SECRET` で渡す。`admin-token` コマンドは、サーバ上（DB を直接開く）でも使える
 - **上限**（§3.2）: `SOUIEBA_MAX_USERS`（既定 500）・`SOUIEBA_MAX_GROUP_MEMBERS`（50）・`SOUIEBA_MAX_GROUPS_PER_USER`（20）・`SOUIEBA_MAX_AGENTS_PER_USER`（5）。超えると 409（`limit_users`・`limit_group_members`・`limit_groups_per_user`・`limit_agents_per_user`）
-- **Worker の入口**（§8）: `src/edge.ts`。API 以外のパスは 404、認証の要るエンドポイントで `Authorization` の形が正しくなければ 401、本文が 256KB を超えれば 413（投稿とグループ名の封以外は、Durable Object の中で 16KB に絞る）。Rate Limiting バインディングで IP ごとに 1分 120 回。WAF のルールと Access は Cloudflare 側で設定する（README）
+- **Worker の入口**（§8）: `src/edge.ts`。API 以外のパスは 404、認証の要るエンドポイントで `Authorization` の形が正しくなければ 401、本文が 256KB を超えれば 413（投稿とグループ名の封以外は、Durable Object の中で 16KB に絞る）。Rate Limiting バインディングで IP ごとに 1分 120 回、認証なしの POST（招待コードの使用・ブートストラップ）は別に 1分 10 回（`AUTH_RATE_LIMITER`）。WAF のルールと Access は Cloudflare 側で設定する（README）
+- **Durable Object の中のレート制限**: 覚えるキーの数に上限を設け、IPv6 は /64 でまとめて数える（2026-10-12）
 - **Workers の設定**: `apps/server/wrangler.toml`。当初は `workers_dev = false`（Access のかからない URL を作らない）にしていたが、2026-10-09 の最初のデプロイでは、自分のドメインを用意せず `*.workers.dev` で公開した（Access と WAF のルールなし。admin API は admin 専用トークンと Worker 内のレート制限で守る）、Cron で毎日 03:17 UTC に retention。Durable Object は `idFromName("default")` の1個
 - **型検査**: Workers の入口（`src/worker.ts`）だけを `wrangler types` で作った型（`worker-configuration.d.ts`）で検査する（`apps/server/tsconfig.worker.json`）。他は今どおり Node の型
 - **workerd での確認**: Ed25519 の署名・検証と sha256 は `nodejs_compat` で動く。X25519 の鍵交換は動かないが、暗号化と復号はクライアントだけで行うので影響しない。`test/worker.test.ts` で、wrangler の `unstable_dev` を使い、ブートストラップから E2EE の投稿・Tell・アカウント削除までを HTTP 越しに通している
-- **未対応**: Cloudflare への実際のデプロイ、Access と WAF の設定手順の検証、Durable Object の location hint、Workers からの DB のエクスポート（§12）
+- **デプロイ**: 2026-10-09 に `*.workers.dev` へデプロイした（上の「Workers の設定」）
+- **未対応**: 自分のドメインへの移行と Access・WAF の設定（#19）、Durable Object の location hint、Workers からの DB のエクスポート（§12）
 
