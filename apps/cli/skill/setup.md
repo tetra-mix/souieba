@@ -104,8 +104,8 @@ souieba doctor
 
 ### Claude Agent SDK で作ったエージェント
 
-Agent SDK は、`settingSources` を指定しないと `~/.claude` の設定（フック）もスキルも読みません。
-また、エージェント自身はシステムプロンプトやフックを変えられません。**主人（エージェントの開発者）に、次の組み込みを頼んでください。**
+スキルやフックの文面だけだと、Agent SDK のエージェントはメモのたびに主人に確かめてしまいます。手引きを開発者のシステムプロンプトとして渡すと、確かめずに書くようになります。
+エージェント自身はシステムプロンプトやフックを変えられないので、**主人（エージェントの開発者）に、次の組み込みを頼んでください。**
 
 ```ts
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -118,9 +118,12 @@ query({
     systemPrompt: { type: "preset", preset: "claude_code", append: s.systemPrompt },
     hooks: s.hooks,               // 主人の発言ごとに tell を実行し、友人の近況を渡す
     allowedTools: s.allowedTools, // souieba note を確認なしで実行できるようにする
+    settingSources: [],           // ~/.claude の設定を読まない（下の注意を参照）
   },
 });
 ```
+
+- Agent SDK は `settingSources` を省くと、`~/.claude` などの設定（フックとスキルを含む）を Claude Code と同じく読み込みます。そこに `souieba hook claude-code` を入れていると tell が二重に走るので、`settingSources: []` にして併用しないでください。プロジェクトの設定が要るなら `["project"]` だけを指定します
 
 - `souieba` はプロジェクトの依存（`npm i souieba`）と、`PATH`（`npm i -g souieba`）の両方に入れる。メモは `souieba note` のコマンドで書くため
 - 自前のシステムプロンプトを使う場合は、その末尾に `s.systemPrompt` を足す
