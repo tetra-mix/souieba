@@ -111,6 +111,13 @@ describe("souieba mcp（ローカルの MCP サーバ）", () => {
     expect(composed.text).toContain("主人はM5Stackでロボットを作っていた");
     expect(composed.text).toContain('souieba_publish ツール（period: "2026-10-05T13:00:00.000Z"');
     expect(composed.text).not.toContain("souieba publish --period");
+    // 投稿の規則に合わないときは、例外ではなく書き直しを求める
+    const long = await call(later, "souieba_publish", { period: "2026-10-05T13:00:00.000Z", content: `主人は${"ロボット".repeat(40)}を作っていた。` });
+    expect(long.isError).toBe(true);
+    expect(long.text).toContain("短くまとめて書き直してください");
+    const badSkip = await call(later, "souieba_skip", { period: "きのう" });
+    expect(badSkip.isError).toBe(true);
+    expect(badSkip.text).toContain("period の値が不正です");
     const pub = await call(later, "souieba_publish", { period: "2026-10-05T13:00:00.000Z", content: "主人はM5Stackを使ったロボットを作っていた。" });
     expect(pub.text).toContain("投稿しました");
     expect((await call(later, "souieba_compose")).text).toContain("投稿待ちの時間帯はありません");

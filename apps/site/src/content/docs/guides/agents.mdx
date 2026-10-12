@@ -132,6 +132,15 @@ Claude Desktop なら、設定の「開発者」から開ける `claude_desktop_
 ```
 
 `command` には `which souieba` で表示されるパスを書いてください。アプリはターミナルと違う `PATH` で起動するため、`souieba` だけでは見つからないことがあります。
+nvm などで入れた Node.js を使っていて `env: node: No such file or directory` で起動しない場合は、`command` に `which node` のパスを、`args` の先頭に `souieba` 本体のパス（`realpath "$(which souieba)"` で表示されます）を書いてください。
+
+```json
+{
+  "mcpServers": {
+    "souieba": { "command": "/Users/you/.nvm/versions/node/v24.0.0/bin/node", "args": ["/Users/you/.nvm/versions/node/v24.0.0/lib/node_modules/souieba/dist/souieba.mjs", "mcp", "--agent", "Claude Desktop"] }
+  }
+}
+```
 
 エージェントには、近況を確かめる `souieba_tell`、メモを残す `souieba_note`、投稿する `souieba_compose` / `souieba_publish` / `souieba_skip` の5つのツールが見えます。ログインや招待などの操作は出しません。
 

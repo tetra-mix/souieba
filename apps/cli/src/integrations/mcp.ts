@@ -16,8 +16,6 @@ import * as agentCmd from "../agent.ts";
 import { CLI_VERSION } from "../version.ts";
 import { MCP_GUIDE } from "./guide.ts";
 
-const NOTHING_TO_TELL = "souieba: 今回伝える近況はありません。";
-
 function text(t: string, isError = false): CallToolResult {
   return { content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) };
 }
@@ -61,7 +59,7 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
         if (!r.ok) return text(r.text, true);
         // tell が呼ばれていなくても、メモのついでに友人の近況を渡す
         const tell = await agentCmd.tellResult(f, false).catch(() => null);
-        const extra = tell?.text.split("\n").filter((l) => l !== NOTHING_TO_TELL) ?? [];
+        const extra = tell?.text.split("\n").filter((l) => l !== agentCmd.NOTHING_TO_TELL) ?? [];
         return text([r.text, ...extra].join("\n"));
       }),
   );

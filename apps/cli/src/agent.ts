@@ -116,29 +116,41 @@ export function noteResult(flags: AgentFlags, text: string): AgentResult {
     notes.prune(now);
     return { ok: true, json: { ok: true, note: n }, text: "souieba: メモしました。" };
   } catch (err) {
-    if (err instanceof SecretInNoteError) {
-      return {
-        ok: false,
-        json: { ok: false, error: "secret_detected", rules: err.rules },
-        text: `souieba: ${err.message}。秘密情報を除いて書き直してください。`,
-      };
-    }
-    if (err instanceof InstructionLikePostError) {
-      return {
-        ok: false,
-        json: { ok: false, error: "instruction_like", rules: err.rules },
-        text: `souieba: ${err.message}。読み手への呼びかけ・命令形・指示やコマンドの話を含めず、「主人は〜していた」の形で書き直してください。`,
-      };
-    }
-    if (err instanceof PostTooLongError) {
-      return {
-        ok: false,
-        json: { ok: false, error: "too_long", length: err.length },
-        text: `souieba: ${err.message}。短くまとめて書き直してください。`,
-      };
-    }
-    throw err;
+    return rewriteRequest(err);
   }
+}
+
+/** メモや投稿の本文が規則に合わないときに、書き直しを求める結果にする。それ以外の例外はそのまま投げ直す */
+function rewriteRequest(err: unknown): AgentResult {
+  if (err instanceof SecretInNoteError || err instanceof SecretInPostError) {
+    return {
+      ok: false,
+      json: { ok: false, error: "secret_detected", rules: err.rules },
+      text: `souieba: ${err.message}。秘密情報を除いて書き直してください。`,
+    };
+  }
+  if (err instanceof InstructionLikePostError) {
+    return {
+      ok: false,
+      json: { ok: false, error: "instruction_like", rules: err.rules },
+      text: `souieba: ${err.message}。読み手への呼びかけ・命令形・指示やコマンドの話を含めず、「主人は〜していた」の形で書き直してください。`,
+    };
+  }
+  if (err instanceof PostTooLongError) {
+    return {
+      ok: false,
+      json: { ok: false, error: "too_long", length: err.length },
+      text: `souieba: ${err.message}。短くまとめて書き直してください。`,
+    };
+  }
+  throw err;
+}
+
+/** 時間帯の開始時刻（ISO 8601）を読み、その1時間を返す */
+function parsePeriod(periodStart: string): { periodStart: string; periodEnd: string } {
+  const start = new Date(periodStart);
+  if (Number.isNaN(start.getTime())) throw new Error(`period の値が不正です: ${periodStart}`);
+  return { periodStart: start.toISOString(), periodEnd: new Date(start.getTime() + 3_600_000).toISOString() };
 }
 
 /** 投稿待ちの時間帯と、その材料のメモを表示する。--skip で投稿しない時間帯を確定する */
@@ -147,8 +159,9 @@ export function compose(flags: AgentFlags, skip?: string): void {
 }
 
 export function skipResult(flags: AgentFlags, periodStart: string): AgentResult {
-  context(flags).notes.mark(periodStart, "skipped");
-  return { ok: true, json: { ok: true, skipped: periodStart }, text: "souieba: この時間帯は投稿しないことにしました。" };
+  const { periodStart: start } = parsePeriod(periodStart);
+  context(flags).notes.mark(start, "skipped");
+  return { ok: true, json: { ok: true, skipped: start }, text: "souieba: この時間帯は投稿しないことにしました。" };
 }
 
 export function composeResult(flags: AgentFlags): AgentResult {
@@ -181,26 +194,12 @@ export async function publish(flags: AgentFlags, content: string, periodArg = "p
 export async function publishResult(flags: AgentFlags, content: string, periodArg = "previous"): Promise<AgentResult> {
   const { transport, notes } = context(flags);
   const now = flags.now();
-  let period: { periodStart: string; periodEnd: string };
-  if (periodArg === "previous" || periodArg === "current") {
-    period = periodOf(now, periodArg);
-  } else {
-    const start = new Date(periodArg);
-    if (Number.isNaN(start.getTime())) throw new Error(`period の値が不正です: ${periodArg}`);
-    period = { periodStart: start.toISOString(), periodEnd: new Date(start.getTime() + 3_600_000).toISOString() };
-  }
+  const period = periodArg === "previous" || periodArg === "current" ? periodOf(now, periodArg) : parsePeriod(periodArg);
   let r;
   try {
     r = await transport.publish({ ...period, content });
   } catch (err) {
-    if (err instanceof SecretInPostError) {
-      return {
-        ok: false,
-        json: { ok: false, error: "secret_detected", rules: err.rules },
-        text: `souieba: ${err.message}。秘密情報を除いて書き直してください。`,
-      };
-    }
-    throw err;
+    return rewriteRequest(err);
   }
   notes.mark(period.periodStart, "published");
   return {
@@ -221,7 +220,15 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
 }
 
 /** tell の結果を、JSON と、エージェントが読む文面の両方で返す（souieba hook からも使う） */
-export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{ json: unknown; text: string }> {
+/** 伝える近況がないときの tell の1行目（souieba mcp が、メモの結果に添えるときに省く） */
+export const NOTHING_TO_TELL = "souieba: 今回伝える近況はありません。";
+
+export type TellResult = {
+  json: { tell: { postId: string; text: string; friend: string; reserved: boolean } | null; [key: string]: unknown };
+  text: string;
+};
+
+export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<TellResult> {
   const { agent, souieba, notes, transport, watch, memberWatch, state } = context(flags);
   const now = flags.now();
   souieba.beginTurn();
@@ -265,7 +272,7 @@ export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{
     );
     if (reserve) lines.push(`伝えたら souieba told ${c.postId}、伝えなかったら souieba release ${c.postId} を実行してください。`);
   } else {
-    lines.push("souieba: 今回伝える近況はありません。");
+    lines.push(NOTHING_TO_TELL);
   }
   if (pending > 0) {
     lines.push(`souieba: 投稿待ちの時間帯が ${pending} 件あります。ユーザーへの回答のあとで ${nextSteps(flags).compose}ください。`);
