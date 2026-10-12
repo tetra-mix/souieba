@@ -1,6 +1,6 @@
 import { CLIENT_VERSION_HEADER, compareVersions } from "@souieba/core";
 import { type Context, Hono } from "hono";
-import { bodyLimit } from "hono/body-limit";
+import { bodyLimit } from "./body-limit.ts";
 import { z } from "zod";
 import { type Env, authenticate, requireAgent, requireUser } from "./auth.ts";
 import type { Config } from "./config.ts";
@@ -132,11 +132,8 @@ export function createApp(deps: AppDeps) {
   });
 
   // Content-Length がない（chunked の）要求も、読みながら数えて上限を超えたところで打ち切る
-  const tooLarge = () => {
-    throw new ApiError(413, "payload_too_large", "リクエストが大きすぎます");
-  };
-  const limitBody = bodyLimit({ maxSize: BODY_LIMIT, onError: tooLarge });
-  const limitPostBody = bodyLimit({ maxSize: POST_BODY_LIMIT, onError: tooLarge });
+  const limitBody = bodyLimit(BODY_LIMIT);
+  const limitPostBody = bodyLimit(POST_BODY_LIMIT);
   const isLargeBody = (method: string, path: string) =>
     (method === "POST" && path === "/v1/posts") || (method === "PATCH" && /^\/v1\/groups\/[^/]+$/.test(path)) ||
     (method === "PUT" && /^\/v1\/groups\/[^/]+\/name-boxes$/.test(path));
