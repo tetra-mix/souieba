@@ -147,6 +147,15 @@ async function resolveGroup(client: HttpClient, ref: string | undefined): Promis
 /** テスト用に現在時刻を固定できる（SOUIEBA_NOW=ISO 8601） */
 const testableNow = () => (process.env.SOUIEBA_NOW ? new Date(process.env.SOUIEBA_NOW) : new Date());
 
+/**
+ * 出力を書き終えたらすぐ終わる。tell は期限を過ぎた補助の通信を待たずに結果を出すが、その通信が残っているとプロセスが終わらず、
+ * フックの時間制限で止められて出力ごと捨てられることがある（近況はもう TOLD になっているので、二度と伝わらない）
+ */
+async function exitAfterOutput(): Promise<never> {
+  await new Promise<void>((resolve) => process.stdout.write("", () => resolve()));
+  process.exit(process.exitCode ?? 0);
+}
+
 async function main(argv: string[]) {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -297,12 +306,14 @@ async function main(argv: string[]) {
     }
     case "tell":
       await agentCmd.tell(flags, values.reserve);
+      await exitAfterOutput();
       break;
     case "hook": {
       if (!isHookTarget(sub)) throw new Error(`souieba hook <${HOOK_TARGETS.join("|")}>`);
       const stdin = process.stdin.isTTY ? "" : await readStdin();
       const output = await hookOutput(sub, stdin, async () => (await agentCmd.tellResult({ ...flags, json: false }, false)).text).catch(() => null);
       if (output) console.log(output);
+      await exitAfterOutput();
       break;
     }
     case "mcp":
