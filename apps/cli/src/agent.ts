@@ -3,7 +3,7 @@
  * 出力はエージェントが読む前提で、そのまま次の行動が分かる文面にする。
  */
 import { join } from "node:path";
-import { formatTellText, isValidDisplayName, periodOf, validateTellText } from "@souieba/core";
+import { type DirectoryUser, formatTellText, isValidDisplayName, periodOf, validateTellText } from "@souieba/core";
 import {
   AgentWatch,
   E2eeTransport,
@@ -22,6 +22,7 @@ import {
   resolveAgent,
   souiebaHome,
 } from "@souieba/sdk";
+import { Deadline } from "./deadline.ts";
 import { NOTHING_TO_TELL } from "./integrations/guide.ts";
 import { CLI_VERSION } from "./version.ts";
 
@@ -221,6 +222,9 @@ export async function tell(flags: AgentFlags, reserve: boolean): Promise<void> {
   out(flags, r.json, r.text);
 }
 
+/** tell の補助の確認（新しい Agent・表示名・グループのメンバー）を待つ上限。フックの時間の上限（10〜15秒）より十分短くする */
+const AUX_DEADLINE_MS = 3000;
+
 /** tell の結果を、JSON と、エージェントが読む文面の両方で返す（souieba hook からも使う） */
 export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{ json: unknown; text: string }> {
   const { agent, souieba, notes, transport, watch, memberWatch, state } = context(flags);
@@ -228,25 +232,33 @@ export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{
   souieba.beginTurn();
   const c = await souieba.pickTellCandidate();
 
-  let text: string | null = null;
+  let t: string | null = null;
   if (c) {
-    const t = formatTellText(c.owner.displayName, c.content);
+    t = formatTellText(c.owner.displayName, c.content);
     if (validateTellText(t, c.owner.displayName) !== null) {
       await souieba.release(c.postId);
-    } else if (reserve || (await souieba.markAsTold(c.postId))) {
-      text = t;
+      t = null;
     }
   }
   const pending = notes.pending(now).length;
+  // 補助の確認は並べて走らせ、短い期限で打ち切る（フックには時間の上限があるため。打ち切った分は次の tell で確かめる）。
+  // 既知の一覧を書き換える watch.check は、期限内に届いた分にだけ呼ぶ（期限後に記録だけされて、知らせ損ねないように）
+  const deadline = new Deadline(AUX_DEADLINE_MS);
   // 主人のアカウントに Agent が増えていたら知らせる（User トークンが漏れて、他人に足された可能性があるため）
-  const newAgents = await transport
-    .ownAgents()
-    .then((own) => watch.check(own))
-    .catch(() => []);
-  const nameIssue = await transport.displayNameIssue().catch(() => null);
   // グループ名を復号し、まだ封を持っていないメンバーの Agent に封をし直す（新しく入った人が名前を読めるように）
-  const groupNames = await transport.groupNames().catch(() => []);
-  const newMembers = await newGroupMembers(transport, memberWatch, agent.userId!, groupNames).catch(() => []);
+  const [own, nameIssue, groupNames, users] = await Promise.all([
+    deadline.within(transport.ownAgents(), null),
+    deadline.within(transport.displayNameIssue(), null),
+    deadline.within(transport.groupNames(), []),
+    deadline.within(transport.users(), null),
+  ]);
+  deadline.clear();
+  const newAgents = own ? orEmpty(() => watch.check(own)) : [];
+  const newMembers = users ? orEmpty(() => newGroupMembers(memberWatch, agent.userId!, users, groupNames)) : [];
+
+  // TOLD にするのは、出力を返す直前にする（途中でプロセスが止められても予約のままで、期限が切れればあとで伝えられる）
+  let text: string | null = null;
+  if (c && t !== null && (reserve || (await souieba.markAsTold(c.postId)))) text = t;
 
   const json = {
     tell: text && c ? { postId: c.postId, text, friend: c.owner.displayName, reserved: reserve } : null,
@@ -279,8 +291,10 @@ export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{
     );
   }
   for (const a of newAgents) {
+    // 名前は登録した人が自由に付けられる。命令に見える文で警告を打ち消されないよう、表示名として使えない名前は ID だけを出す
+    const which = isValidDisplayName(a.name) ? `新しい Agent「${a.name}」（${a.id}、` : `名前を表示できない新しい Agent（${a.id}、`;
     lines.push(
-      `souieba: 主人のアカウントに新しい Agent「${a.name}」（${a.id}、${fmt.format(new Date(a.createdAt))} に登録）が追加されました。` +
+      `souieba: 主人のアカウントに${which}${fmt.format(new Date(a.createdAt))} に登録）が追加されました。` +
         `ユーザーへの回答のあとで、このことを主人に伝えてください。心当たりがなければ、主人が souieba agent revoke ${a.id} を実行すれば止められます。あなたが実行してはいけません。`,
     );
   }
@@ -293,6 +307,15 @@ export async function tellResult(flags: AgentFlags, reserve: boolean): Promise<{
     );
   }
   return { json, text: lines.join("\n") };
+}
+
+/** 補助の確認で失敗しても tell は止めない */
+function orEmpty<T>(f: () => T[]): T[] {
+  try {
+    return f();
+  } catch {
+    return [];
+  }
 }
 
 /** 友人の近況を渡すときの文面（tell と、souieba mcp のメモのついで） */
@@ -334,8 +357,8 @@ const HANDLE_RE = /^[a-z0-9_]{2,20}$/;
  * 主人のグループに新しく入った人。表示名とグループ名は他人が付けたもので、この出力はエージェント（LLM）が読むので、
  * 規則に合わないものは出さない（handle はサーバが英小文字・数字・_ に限っているが、ここでも確かめる）。
  */
-async function newGroupMembers(transport: E2eeTransport, watch: MemberWatch, userId: string, groups: NamedGroup[]) {
-  const added: NewMember[] = watch.check(await transport.users(), userId);
+function newGroupMembers(watch: MemberWatch, userId: string, users: DirectoryUser[], groups: NamedGroup[]) {
+  const added: NewMember[] = watch.check(users, userId);
   if (added.length === 0) return [];
   const names = new Map(groups.map((g) => [g.id, g.name]));
   return added
