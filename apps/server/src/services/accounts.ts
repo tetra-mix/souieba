@@ -1,5 +1,5 @@
 import { AGENT_SCOPES, MAX_DISPLAY_NAME_LENGTH, displayNameKey, isPublicKey, isValidDisplayName } from "@souieba/core";
-import { and, count, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, count, eq, isNull, ne, or, sql } from "drizzle-orm";
 import type { Limits } from "../config.ts";
 import { codeHash, newCode, newId, newToken, sha256 } from "../crypto.ts";
 import type { DB } from "../db/index.ts";
@@ -318,7 +318,7 @@ export function revokeAgent(db: DB, ownerId: string, agentId: string, now: Date)
   });
 }
 
-/** ユーザーを無効化する。owner だったグループは、ほかの有効なメンバーに owner を引き継ぐ */
+/** ユーザーを無効化する。owner だったグループは、ほかの有効なメンバーに owner を引き継ぐ。発行した未使用の招待とログインコードは消す */
 export function disableUser(db: DB, userId: string, now: Date): void {
   db.transaction(() => {
     const disabled = db
@@ -328,6 +328,9 @@ export function disableUser(db: DB, userId: string, now: Date): void {
       .returning({ id: users.id })
       .all();
     if (disabled.length === 0) throw notFound("ユーザー");
+    db.delete(invites)
+      .where(and(or(eq(invites.createdBy, userId), eq(invites.targetUserId, userId)), isNull(invites.usedAt)))
+      .run();
     for (const groupId of activeGroupIds(db, userId)) ensureOwner(db, groupId);
   });
 }

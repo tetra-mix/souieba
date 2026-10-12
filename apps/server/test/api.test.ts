@@ -227,6 +227,35 @@ describe("グループ", () => {
     expect((await h.join(alice, groupId, carol)).body.error.code).toBe("already_member");
   });
 
+  it("無効化されたユーザーが発行した招待コードは使えない（未使用の招待は無効化のときに消す）", async () => {
+    const { h, bob, groupId } = await twoMembers();
+    const { code } = await h.invite(bob, groupId);
+    accounts.disableUser(h.db, bob.id, h.clock.now);
+    expect(h.db.select().from(schema.invites).where(eq(schema.invites.createdBy, bob.id)).all().filter((i) => !i.usedAt)).toEqual([]);
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "carol", displayName: "キャロル" })).body.error.code).toBe("invalid_code");
+    expect(accounts.getUserByHandle(h.db, "carol")).toBeUndefined();
+  });
+
+  it("招待した人が無効化されていれば、招待が残っていても参加できない", async () => {
+    const { h, bob, groupId } = await twoMembers();
+    const { code } = await h.invite(bob, groupId);
+    // disableUser を通らずに無効化された（招待が残っている）場合も断る
+    h.db.update(schema.users).set({ disabledAt: h.clock.now.toISOString() }).where(eq(schema.users.id, bob.id)).run();
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "carol", displayName: "キャロル" })).body.error.code).toBe("invalid_code");
+    const dave = await h.user("dave", "デイブ");
+    expect((await h.call("POST", "/v1/groups/join", dave.token, { code })).body.error.code).toBe("invalid_code");
+  });
+
+  it("抜けた人が発行した招待コードは、入り直しても使えない", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const { code } = await h.invite(bob, groupId);
+    expect((await h.call("DELETE", `/v1/groups/${groupId}/members/${bob.id}`, bob.token)).status).toBe(204);
+    expect((await h.join(alice, groupId, bob)).status).toBe(201);
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "carol", displayName: "キャロル" })).body.error.code).toBe("invalid_code");
+    // 入り直してから発行したものは使える
+    expect((await h.joinNew(bob, groupId, "carol", "キャロル")).handle).toBe("carol");
+  });
+
   it("owner が抜けると最も古いメンバーが owner になり、最後の1人が抜けるとグループは消える", async () => {
     const { h, alice, bob, groupId } = await twoMembers();
     await h.call("DELETE", `/v1/groups/${groupId}/members/${alice.id}`, alice.token);

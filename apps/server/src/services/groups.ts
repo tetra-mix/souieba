@@ -330,8 +330,9 @@ export function joinWithInvite(
   limits: Pick<Limits, "maxGroupMembers" | "maxGroupsPerUser">,
 ) {
   if (!inv.groupId || !inv.createdBy) throw invalidCode();
-  // 招待者が抜けていたら、そのコードはもう使えない
+  // 招待者が抜けていたり無効化されていたりしたら、そのコードはもう使えない
   if (!activeMember(db, inv.groupId, inv.createdBy)) throw invalidCode();
+  if (db.select({ disabledAt: users.disabledAt }).from(users).where(eq(users.id, inv.createdBy)).get()?.disabledAt) throw invalidCode();
   if (activeMember(db, inv.groupId, user.id)) throw conflict("already_member", "すでにこのグループのメンバーです");
   if (activeMemberCount(db, inv.groupId) >= limits.maxGroupMembers) {
     throw conflict("limit_group_members", `このグループの人数が上限（${limits.maxGroupMembers} 人）に達しています`);
@@ -380,6 +381,8 @@ export function removeMember(db: DB, actorId: string, groupId: string, targetId:
       .set({ leftAt: now.toISOString(), role: "member" })
       .where(and(eq(groupMembers.groupId, groupId), eq(groupMembers.userId, targetId)))
       .run();
+    // 抜けた人が発行した未使用の招待は消す（入り直したときに古いコードが使えるようにならないように）
+    db.delete(invites).where(and(eq(invites.groupId, groupId), eq(invites.createdBy, targetId), isNull(invites.usedAt))).run();
     if (activeMemberCount(db, groupId) === 0) db.delete(groups).where(eq(groups.id, groupId)).run();
     else ensureOwner(db, groupId);
   });
