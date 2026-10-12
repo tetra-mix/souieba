@@ -85,6 +85,14 @@ describe("session", () => {
     // lastToldAt のない古い状態ファイルでは、今までどおり Session ごとに1件
     expect(canTell({ ...state, tellsInSession: 1 }, 1, new Date(NOW.getTime() + 60 * 60_000))).toBe(false);
   });
+
+  it("前回の時刻が壊れていたら、新しい Session にする", () => {
+    const { state } = advanceSession(null, NOW);
+    const r = advanceSession({ ...state, lastMessageAt: "broken", tellsInSession: 1 }, NOW);
+    expect(r.isNewSession).toBe(true);
+    expect(r.state.tellsInSession).toBe(0);
+    expect(r.state.lastMessageAt).toBe(NOW.toISOString());
+  });
 });
 
 describe("period", () => {
