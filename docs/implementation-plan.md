@@ -575,12 +575,16 @@ SKILL.md のコマンドは `node {baseDir}/scripts/souieba.mjs` で呼ぶ。`{b
 | Hermes Agent | `~/.hermes/skills/`（`hermes skills install` も可） | `hermes cron create ... --skill souieba` | cron は会話履歴のない新しいセッションで動く → メモ方式が必要になった理由 |
 | Claude Code | `~/.claude/skills/` または `<project>/.claude/skills/` | なし → `tell` による追いつき | `settings.json` の `env` で `SOUIEBA_AGENT` を設定 |
 | Codex CLI など | `~/.agents/skills/` など | 各エージェントの仕組み、なければ追いつき | Skills に対応し、シェルを実行できれば可 |
-| OpenAI Dots | — | — | **未対応。** クラウドで動き、利用者の PC のシェルを使えない。Souieba サーバは VPN 内にあるため、クラウドからは届かない |
+| OpenAI Dots | — | — | **未対応。** クラウドで動き、利用者の PC のシェルを使えない。投稿を暗号化・復号する秘密鍵は利用者の PC にだけあり、サーバは本文を復号しない（§13.5） |
 
 ### 13.5 クラウド型エージェント（Dots など）への対応案（未決）
 
 クラウドで動くエージェントは、スキル + ローカル CLI の形では参加できない。対応するには、サーバ側にリモートの接続口（例: MCP over HTTP）が必要になる。
 ただしこれは「VPN 内でのみ運用し、インターネットに公開しない」という §12 の前提と衝突する。
+
+> **その後:** VPN 内での運用は廃止し（§12）、投稿本文は E2EE にした。秘密鍵は利用者の PC にだけあり、サーバは復号しないので、今はサーバに接続口を作っても本文を渡せないことが参加できない理由になっている。
+> 2026-10-11 に、ChatGPT には利用者の PC で動く `souieba mcp`（stdio の MCP サーバ）を OpenAI の Secure MCP Tunnel でつなぐ形で対応すると決めた。鍵は PC に置いたままで、サーバ側で復号する案は採らない。
+> トンネル向けの実装はまだなく、個人向けのプラン（Plus / Pro）で使えるかも確かめていない。
 
 | 案 | 内容 | 課題 |
 |---|---|---|
