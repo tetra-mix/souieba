@@ -6,7 +6,8 @@ import {
   type WireTellCandidate,
   selectTellCandidate,
 } from "@souieba/core";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or } from "drizzle-orm";
+import { and, desc, eq, exists, gte, inArray, isNotNull, isNull, lt, lte, ne, notExists, or } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 import { type DB, MAX_BOUND_PARAMS, chunks } from "../db/index.ts";
 import { agents, deliveries, postRecipients, posts, users } from "../db/schema.ts";
 import { conflict, notFound } from "../errors.ts";
@@ -15,6 +16,9 @@ import { sharesGroup } from "./groups.ts";
 export type AgentActor = { userId: string; agentId: string };
 
 export const DEFAULT_LEASE_MS = 10 * 60_000;
+
+/** 投稿した人（inboxRows が users を結合しているので、相関サブクエリでは別名を使う） */
+const author = alias(users, "author");
 
 /**
  * 「今この瞬間にこの Agent が見てよい投稿」の条件。
@@ -28,6 +32,13 @@ function visibleToMe(db: DB, actor: AgentActor, now: Date) {
     lte(posts.visibleAt, now.toISOString()),
     gte(posts.createdAt, new Date(now.getTime() - TELL_WINDOW_MS).toISOString()),
     sharesGroup(db, posts.ownerId, actor.userId),
+    // 無効化された人の投稿は配らない（受信済みでも候補から消える）
+    exists(
+      db
+        .select({ id: author.id })
+        .from(author)
+        .where(and(eq(author.id, posts.ownerId), isNull(author.disabledAt))),
+    ),
     // EXISTS（相関サブクエリ）にすると posts を全件読むので、宛先の索引（post_recipients_agent）から投稿を引く。
     // Durable Object の SQLite は読んだ行数で課金される
     inArray(

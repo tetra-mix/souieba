@@ -147,6 +147,19 @@ describe("可視性（グループ）", () => {
     expect(dir.users.map((u: { handle: string }) => u.handle).sort()).toEqual(["alice", "dave"]);
   });
 
+  it("無効化された人の投稿は、受信済みのものも含めて配られず、伝えられない", async () => {
+    const { h, alice, bob } = await twoMembers();
+    await h.publish(alice, "主人は京都へ遊びに行っていた。");
+    h.clock.advance(11 * MIN);
+    expect((await h.call("POST", "/v1/sync", bob.agentToken)).body.received).toBe(1);
+    await h.publish(alice, "主人は日記を書いていた。", { periodStart: "2026-10-05T11:00:00.000Z", periodEnd: "2026-10-05T12:00:00.000Z" });
+    h.clock.advance(11 * MIN);
+    accounts.disableUser(h.db, alice.id, h.clock.now);
+    expect((await h.call("POST", "/v1/sync", bob.agentToken)).body).toEqual({ received: 0, inboxSize: 0 });
+    expect((await h.call("GET", "/v1/inbox", bob.agentToken)).body.items).toEqual([]);
+    expect((await h.call("POST", "/v1/tell/claim", bob.agentToken, {})).body.candidate).toBeNull();
+  });
+
   it("グループを抜けると、受信済みの投稿も候補から消える", async () => {
     const { h, alice, bob, groupId } = await twoMembers();
     await h.publish(alice, "主人は京都へ遊びに行っていた。");
