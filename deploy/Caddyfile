@@ -1,7 +1,9 @@
 # Let's Encrypt の証明書を自動で取得・更新する（80・443 番を開けておく）
 {$SOUIEBA_DOMAIN} {
+	# アプリの上限（apps/server/src/app.ts の POST_BODY_LIMIT = 256 * 1024）と同じにする。小さいと、人数の多いグループの投稿が
+	# Caddy で 413 になる。KB は 1000 バイトなので KiB で書く
 	request_body {
-		max_size 64KB
+		max_size 256KiB
 	}
 	header {
 		-Server

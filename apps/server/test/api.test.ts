@@ -6,6 +6,8 @@ import { runRetention } from "../src/retention.ts";
 import * as accounts from "../src/services/accounts.ts";
 import * as groups from "../src/services/groups.ts";
 import { MIN_CLIENT_VERSION } from "../src/app.ts";
+import { rateLimitKey } from "../src/net.ts";
+import { RateLimiter } from "../src/ratelimit.ts";
 import { type TestUser, harness, testConfig, twoMembers } from "./harness.ts";
 
 const MIN = 60_000;
@@ -155,6 +157,18 @@ describe("可視性（グループ）", () => {
     expect((await h.call("DELETE", `/v1/groups/${groupId}/members/${bob.id}`, bob.token)).status).toBe(204);
     expect((await h.call("POST", "/v1/tell/claim", bob.agentToken, {})).body.candidate).toBeNull();
   });
+
+  it("無効化された人の投稿は、受信済みでも候補から消え、新しく取り込みもしない", async () => {
+    const { h, alice, bob } = await twoMembers();
+    const carol = await h.joinNew(alice, (await h.call("GET", "/v1/groups", alice.token)).body.groups[0].id, "carol", "キャロル");
+    await h.publish(alice, "主人は京都へ遊びに行っていた。");
+    h.clock.advance(11 * MIN);
+    expect((await h.call("POST", "/v1/sync", bob.agentToken)).body.received).toBe(1);
+    accounts.disableUser(h.db, alice.id, h.clock.now);
+    expect((await h.call("GET", "/v1/inbox", bob.agentToken)).body.items).toEqual([]);
+    expect((await h.call("POST", "/v1/tell/claim", bob.agentToken, {})).body.candidate).toBeNull();
+    expect((await h.call("POST", "/v1/sync", carol.agentToken)).body).toEqual({ received: 0, inboxSize: 0 });
+  });
 });
 
 describe("グループ", () => {
@@ -225,6 +239,35 @@ describe("グループ", () => {
     expect(r.status).toBe(201);
     expect(r.body.inviter).toEqual({ id: alice.id, handle: "alice", displayName: "アリス" });
     expect((await h.join(alice, groupId, carol)).body.error.code).toBe("already_member");
+  });
+
+  it("無効化されたユーザーが発行した招待コードは使えない（未使用の招待は無効化のときに消す）", async () => {
+    const { h, bob, groupId } = await twoMembers();
+    const { code } = await h.invite(bob, groupId);
+    accounts.disableUser(h.db, bob.id, h.clock.now);
+    expect(h.db.select().from(schema.invites).where(eq(schema.invites.createdBy, bob.id)).all().filter((i) => !i.usedAt)).toEqual([]);
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "carol", displayName: "キャロル" })).body.error.code).toBe("invalid_code");
+    expect(accounts.getUserByHandle(h.db, "carol")).toBeUndefined();
+  });
+
+  it("招待した人が無効化されていれば、招待が残っていても参加できない", async () => {
+    const { h, bob, groupId } = await twoMembers();
+    const { code } = await h.invite(bob, groupId);
+    // disableUser を通らずに無効化された（招待が残っている）場合も断る
+    h.db.update(schema.users).set({ disabledAt: h.clock.now.toISOString() }).where(eq(schema.users.id, bob.id)).run();
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "carol", displayName: "キャロル" })).body.error.code).toBe("invalid_code");
+    const dave = await h.user("dave", "デイブ");
+    expect((await h.call("POST", "/v1/groups/join", dave.token, { code })).body.error.code).toBe("invalid_code");
+  });
+
+  it("抜けた人が発行した招待コードは、入り直しても使えない", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const { code } = await h.invite(bob, groupId);
+    expect((await h.call("DELETE", `/v1/groups/${groupId}/members/${bob.id}`, bob.token)).status).toBe(204);
+    expect((await h.join(alice, groupId, bob)).status).toBe(201);
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code, handle: "carol", displayName: "キャロル" })).body.error.code).toBe("invalid_code");
+    // 入り直してから発行したものは使える
+    expect((await h.joinNew(bob, groupId, "carol", "キャロル")).handle).toBe("carol");
   });
 
   it("owner が抜けると最も古いメンバーが owner になり、最後の1人が抜けるとグループは消える", async () => {
@@ -405,6 +448,15 @@ describe("認証", () => {
     expect((await h.call("GET", "/v1/me", alice.agentToken)).status).toBe(200);
   });
 
+  it("ログインコードを発行し直すと、前の未使用のコードは使えない", async () => {
+    const h = harness();
+    const alice = await h.user("alice", "アリス");
+    const first = accounts.issueLoginCode(h.db, alice.id, h.clock.now);
+    const second = accounts.issueLoginCode(h.db, alice.id, h.clock.now);
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: first.code })).body.error.code).toBe("invalid_code");
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: second.code })).status).toBe(201);
+  });
+
   it("redeem は IP ごとに 10回/時 まで", async () => {
     const h = harness();
     const codes = Array.from({ length: 11 }, () => h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA-BBBB-CCCC" }));
@@ -468,6 +520,34 @@ describe("ネットワーク", () => {
     for (let i = 0; i < 10; i++)
       await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" }, { "x-forwarded-for": "198.51.100.7" });
     expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" }, { "x-forwarded-for": "198.51.100.8" })).status).toBe(400);
+  });
+
+  it("レート制限は IPv6 を /64 でまとめて数える", async () => {
+    expect(rateLimitKey("2001:db8:1:2:aaaa::1")).toBe("2001:db8:1:2::/64");
+    expect(rateLimitKey("2001:DB8:1:2:ffff:ffff:ffff:ffff")).toBe("2001:db8:1:2::/64");
+    expect(rateLimitKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(rateLimitKey("::ffff:198.51.100.7")).toBe("198.51.100.7");
+    const h = harness({ remoteAddr: "2001:db8:1:2::1" });
+    for (let i = 0; i < 10; i++) {
+      h.setIp(`2001:db8:1:2::${i + 1}`);
+      await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" });
+    }
+    h.setIp("2001:db8:1:2:ffff::9");
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" })).status).toBe(429);
+    h.setIp("2001:db8:1:3::1");
+    expect((await h.call("POST", "/v1/auth/redeem", undefined, { code: "AAAA" })).status).toBe(400);
+  });
+
+  it("レート制限が覚えるキーには上限があり、古いものから忘れる", () => {
+    const limiter = new RateLimiter(1, 60_000, 100);
+    expect(limiter.take("first", 0)).toBe(true);
+    expect(limiter.take("first", 0)).toBe(false);
+    for (let i = 0; i < 200; i++) limiter.take(`k${i}`, 1);
+    expect(limiter.size).toBe(100);
+    expect(limiter.blocked("first", 1)).toBe(false);
+    // 期限の切れたものは先頭から消える
+    limiter.take("late", 120_000);
+    expect(limiter.size).toBe(1);
   });
 });
 
@@ -704,13 +784,45 @@ describe("グループ名の暗号化（#16）", () => {
     // 送り主をアリスの Agent と名乗った封は断る
     const forged = box("家族", groupId, 1, bob, alice);
     expect((await put(bob, [{ ...forged, box: { ...forged.box, senderAgentId: alice.agentId } }])).body.error.code).toBe("invalid_name_box");
-    // 送り主の Agent が失効したら、その封は読めないので、置き直せる
+  });
+
+  it("送り主の Agent が失効して読めなくなった封は、owner だけが置き直せる（メンバーは、まだ封のない Agent の分だけ）", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const put = (token: string, boxes: unknown[]) => h.call("PUT", `/v1/groups/${groupId}/name-boxes`, token, { version: 1, boxes });
+    expect((await put(alice.agentToken, [box("研究室", groupId, 1, alice, alice), box("研究室", groupId, 1, alice, bob)])).status).toBe(204);
     const fresh = await h.addAgent(alice, "新しい PC");
+    const alice2 = { ...alice, agentId: fresh.id, agentToken: fresh.token, agent: fresh };
     expect((await h.call("DELETE", `/v1/agents/${alice.agentId}`, alice.token)).status).toBe(204);
-    expect((await list(h, bob)).missingAgentIds).toContain(bob.agentId);
-    expect((await put(bob, [box("研究室", groupId, 1, bob, bob)])).status).toBe(204);
-    expect((await list(h, bob)).missingAgentIds).not.toContain(bob.agentId);
-    expect((await list(h, bob)).missingAgentIds).toContain(fresh.id);
+    const boxOf = (agentId: string) => h.db.select().from(schema.groupNameBoxes).where(eq(schema.groupNameBoxes.agentId, agentId)).get();
+    const bobsBox = boxOf(bob.agentId);
+
+    // owner でないボブには、読めない封の Agent は知らされず、別の名前で上書きもできない。まだ封のない Agent の分は置ける
+    expect((await list(h, bob)).missingAgentIds).toEqual([fresh.id]);
+    expect((await put(bob.agentToken, [box("家族", groupId, 1, bob, bob), box("家族", groupId, 1, bob, alice2)])).status).toBe(204);
+    expect(boxOf(bob.agentId)).toEqual(bobsBox);
+    expect(boxOf(fresh.id)).toBeTruthy();
+
+    // owner のアリスには、読めない封の Agent も知らされ、置き直せる
+    expect((await list(h, alice2)).missingAgentIds).toEqual([bob.agentId]);
+    expect((await put(fresh.token, [box("研究室", groupId, 1, alice2, bob)])).status).toBe(204);
+    expect(JSON.parse(boxOf(bob.agentId)!.box).senderAgentId).toBe(fresh.id);
+    expect((await list(h, alice2)).missingAgentIds).toEqual([]);
+  });
+
+  it("Agent を失効したり、メンバーが抜けたりすると、その Agent 宛ての封を消す", async () => {
+    const { h, alice, bob, groupId } = await twoMembers();
+    const bob2 = await h.addAgent(bob, "2台目");
+    const bob2User = { ...bob, agentId: bob2.id, agentToken: bob2.token, agent: bob2 };
+    await h.call("PUT", `/v1/groups/${groupId}/name-boxes`, alice.agentToken, {
+      version: 1,
+      boxes: [box("研究室", groupId, 1, alice, alice), box("研究室", groupId, 1, alice, bob), box("研究室", groupId, 1, alice, bob2User)],
+    });
+    const recipients = () => h.db.select().from(schema.groupNameBoxes).all().map((b) => b.agentId).sort();
+    expect(recipients()).toEqual([alice.agentId, bob.agentId, bob2.id].sort());
+    expect((await h.call("DELETE", `/v1/agents/${bob2.id}`, bob.token)).status).toBe(204);
+    expect(recipients()).toEqual([alice.agentId, bob.agentId].sort());
+    expect((await h.call("DELETE", `/v1/groups/${groupId}/members/${bob.id}`, alice.token)).status).toBe(204);
+    expect(recipients()).toEqual([alice.agentId]);
   });
 
   it("名前の変更は owner だけで、版を1つ上げて封を置き換える", async () => {

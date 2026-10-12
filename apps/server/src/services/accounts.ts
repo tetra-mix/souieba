@@ -1,9 +1,9 @@
 import { AGENT_SCOPES, MAX_DISPLAY_NAME_LENGTH, displayNameKey, isPublicKey, isValidDisplayName } from "@souieba/core";
-import { and, count, eq, isNull, ne, sql } from "drizzle-orm";
+import { and, count, eq, isNull, ne, or, sql } from "drizzle-orm";
 import type { Limits } from "../config.ts";
 import { codeHash, newCode, newId, newToken, sha256 } from "../crypto.ts";
 import type { DB } from "../db/index.ts";
-import { type AgentRow, type UserRow, agents, credentials, invites, users } from "../db/schema.ts";
+import { type AgentRow, type UserRow, agents, credentials, groupNameBoxes, invites, users } from "../db/schema.ts";
 import { badRequest, conflict, invalidCode, notFound } from "../errors.ts";
 import { activeGroupIds, deleteEmptyGroups, ensureOwner, findUsableInvite, joinWithInvite } from "./groups.ts";
 
@@ -154,10 +154,11 @@ export function bootstrapAdmin(db: DB, input: { handle: string; displayName: str
   });
 }
 
-/** ログインコードを発行する。トークンを失くした場合の再発行にも使う */
+/** ログインコードを発行する。トークンを失くした場合の再発行にも使う。前に発行した未使用のコードは使えなくする */
 export function issueLoginCode(db: DB, userId: string, now: Date): { code: string; expiresAt: string } {
   const code = newCode();
   const expiresAt = new Date(now.getTime() + LOGIN_CODE_TTL_MS).toISOString();
+  db.delete(invites).where(and(eq(invites.kind, "login"), eq(invites.targetUserId, userId), isNull(invites.usedAt))).run();
   db.insert(invites)
     .values({
       id: newId("inv"),
@@ -315,10 +316,12 @@ export function revokeAgent(db: DB, ownerId: string, agentId: string, now: Date)
       .set({ revokedAt: now.toISOString() })
       .where(and(eq(credentials.agentId, agentId), isNull(credentials.revokedAt)))
       .run();
+    // この Agent 宛ての封はもう開けないので消す
+    db.delete(groupNameBoxes).where(eq(groupNameBoxes.agentId, agentId)).run();
   });
 }
 
-/** ユーザーを無効化する。owner だったグループは、ほかの有効なメンバーに owner を引き継ぐ */
+/** ユーザーを無効化する。owner だったグループは、ほかの有効なメンバーに owner を引き継ぐ。発行した未使用の招待とログインコードは消す */
 export function disableUser(db: DB, userId: string, now: Date): void {
   db.transaction(() => {
     const disabled = db
@@ -328,6 +331,9 @@ export function disableUser(db: DB, userId: string, now: Date): void {
       .returning({ id: users.id })
       .all();
     if (disabled.length === 0) throw notFound("ユーザー");
+    db.delete(invites)
+      .where(and(or(eq(invites.createdBy, userId), eq(invites.targetUserId, userId)), isNull(invites.usedAt)))
+      .run();
     for (const groupId of activeGroupIds(db, userId)) ensureOwner(db, groupId);
   });
 }

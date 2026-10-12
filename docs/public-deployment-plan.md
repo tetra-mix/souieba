@@ -189,7 +189,7 @@ Agent のトークンだけが漏れた場合は、署名鍵がないので偽�
 - 期間と visibility は、冪等キー（同じ Agent・同じ時間帯は上書き）と保存期間に使うので平文で持つ。改ざんは AAD と署名で検知する
 - 宛先 = ディレクトリ（§5.2）にある、グループのメンバーの Agent ＋ 自分の全 Agent（`posts mine` で読むため）
 - `visibility: "private"` なら宛先は自分の Agent だけ
-- 宛先の上限は 200。1宛先あたり約 140 バイトなので、`POST /v1/posts` の body の上限を 64KB に上げる
+- 宛先の上限は 1000（`posts.ts` の `MAX_RECIPIENTS`）。1宛先あたり約 150 バイトなので、`POST /v1/posts` の body の上限を 256KB（`app.ts` の `POST_BODY_LIMIT`）に上げる
 - MLS のようなグループ鍵の仕組みは使わない。グループは少人数（数人〜数十人）で、投稿は1時間に1回なので、宛先ごとに鍵を包むほうが単純で、メンバーの増減にも何もしなくてよい
 
 ### 6.2 サーバ側
@@ -274,7 +274,7 @@ SKILL.md の「主人に聞かれたら」と `references/setup.md` を、Friend
 | 認証失敗のレート制限 | 今は認証に成功したリクエストだけを数えている。401 になったリクエストも IP ごとに数え（例: 10分に30回）、超えたら 429 にする |
 | 管理 API | `public` モードでは `/v1/admin/*` を 404 にする。管理はサーバ上の `souieba-admin` だけで行う |
 | `/v1/instance` | `public` モードではバージョンを返さない |
-| body の上限 | `/v1/posts` だけ 64KB、それ以外は今どおり 16KB |
+| body の上限 | `/v1/posts` とグループ名の封（`PATCH /v1/groups/:id`・`PUT /v1/groups/:id/name-boxes`）だけ 256KB（`POST_BODY_LIMIT`）、それ以外は今どおり 16KB。Caddy の `max_size` も同じにする |
 | 招待コードの有効期限 | 7日 → 3日に短くする（インターネットから redeem を試せるようになるため） |
 | CORS | 今どおり無効（ブラウザからは使わない） |
 
@@ -358,7 +358,7 @@ volumes: { caddy-data: {}, souieba-data: {} }
 ```
 {$SOUIEBA_DOMAIN} {
 	reverse_proxy server:8080
-	request_body { max_size 64KB }
+	request_body { max_size 256KiB }  # POST_BODY_LIMIT と同じ。KB は 1000 バイト
 	header -Server
 }
 ```
@@ -465,7 +465,9 @@ E2EE にしても**サーバに見えるもの**（脅威モデルとセキュ�
 
 - `GET /v1/groups` は、自分の Agent 宛ての封（`nameBoxes`）と、今の版の封をまだ持っていないメンバーの Agent（`missingAgentIds`）を返す
 - 名前を読めるクライアントが、`missingAgentIds` の Agent に封をして `PUT /v1/groups/:id/name-boxes` で置く。`souieba tell`（会話の始め）、`groups` 系のコマンド、`agent add` のたびに行う。新しく入った人や、あとから足した Agent は、誰かがこれを実行すると読めるようになる
-- メンバーなら誰でも封を置ける。悪意のあるメンバーは、新しく入った人に偽の名前を渡せる（受け入れたリスク。名前は、表示名と同じ規則に合わなければ CLI の出力に出さない）
+- メンバーなら誰でも、まだ封のない Agent に封を置ける。悪意のあるメンバーは、新しく入った人に偽の名前を渡せる（受け入れたリスク。名前は、表示名と同じ規則に合わなければ CLI の出力に出さない）
+- 封がすでにある Agent の分は、メンバーは置き直せない。送り主の Agent が失効・脱退して読めなくなった封を置き直せるのは owner だけ（メンバーが送り主の失効に乗じて、全員の名前を書き換えられないように）。そのため owner でなければ、`missingAgentIds` にはまだ封のない Agent だけが入る
+- Agent を失効したり、メンバーが抜けたりしたら、その Agent 宛ての封は消す
 
 ### 14.3 作成・招待・変更
 
