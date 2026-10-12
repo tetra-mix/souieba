@@ -61,27 +61,26 @@ async function tellForTurn(s: Souieba): Promise<string | null> {
 }
 
 describe("最小デモ（HTTP + SDK + E2EE）", () => {
-  it("アリスの Agent が暗号化して投稿し、ボブの Agent が復号して Session ごとに1件だけ伝える", async () => {
+  it("アリスの Agent が暗号化して投稿し、ボブの Agent が復号して、前の Tell から10分たつまでは次を伝えない", async () => {
     const a = souieba(transport(alice));
     await a.publish({ content: "主人はM5Stackを使ったロボットを作っていた。" });
+    await a.publish({ content: "主人は京都へ遊びに行っていた。", period: "current" });
     h.clock.advance(11 * MIN);
 
     const b = souieba(transport(bob));
-    expect(await tellForTurn(b)).toBe("あ、そういえばアリスさん、M5Stackを使ったロボットを作っていたみたいですよ。");
+    expect(await tellForTurn(b)).toMatch(/^あ、そういえばアリスさん、.*みたいですよ。$/);
 
-    // 猶予期間（10分）が明けるまで、Session の区切り（10分）より短い間隔でやりとりを続ける
-    await a.publish({ content: "主人は京都へ遊びに行っていた。", period: "current" });
+    // Session の区切り（10分）より短い間隔でやりとりを続けても、前の Tell から10分たてば次の1件を伝える
     h.clock.advance(6 * MIN);
     expect(await tellForTurn(b)).toBeNull();
     h.clock.advance(6 * MIN);
-    expect(await tellForTurn(b)).toBeNull();
-
-    h.clock.advance(31 * MIN);
-    expect(await tellForTurn(b)).toContain("京都へ遊びに行っていた");
+    expect(await tellForTurn(b)).toMatch(/^あ、そういえばアリスさん、.*みたいですよ。$/);
     expect(await transport(bob).inbox()).toEqual([]);
   });
 
   it("伝えなかった候補は release すると受信箱に戻る", async () => {
+    // 前のテストと同じ1時間に投稿すると上書きになるので、次の1時間に進めておく
+    h.clock.advance(60 * MIN);
     await souieba(transport(alice)).publish({ content: "主人はSouiebaのAPIを実装していた。", period: "current" });
     h.clock.advance(61 * MIN);
     const b = souieba(transport(bob));
