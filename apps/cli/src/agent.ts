@@ -23,6 +23,7 @@ import {
   souiebaHome,
 } from "@souieba/sdk";
 import { NOTHING_TO_TELL } from "./integrations/guide.ts";
+import { updateAdvice, updateToNotify } from "./update-check.ts";
 import { CLI_VERSION } from "./version.ts";
 
 export type AgentFlags = {
@@ -288,7 +289,7 @@ export async function tellResult(
     }, TELL_EXTRAS_MS);
   });
   const within = <T>(p: Promise<T>, fallback: T) => Promise.race([p.catch(() => fallback), deadline.then(() => fallback)]);
-  const [newAgents, nameIssue, newMembers] = await Promise.all([
+  const [newAgents, nameIssue, newMembers, update] = await Promise.all([
     within(
       transport.ownAgents().then((own) => (expired ? [] : watch.check(own))),
       [],
@@ -299,6 +300,11 @@ export async function tellResult(
         expired ? [] : newGroupMembers(memberWatch, users, agent.userId!, groups),
       ),
       [],
+    ),
+    // npm に新しい版が出ていれば、主人に更新を勧めてもらう（問い合わせは1日1回、知らせるのも1日1回）
+    within(
+      updateToNotify(now, () => !expired),
+      null,
     ),
   ]);
   clearTimeout(timer);
@@ -311,10 +317,13 @@ export async function tellResult(
     outdated: state.outdated,
     displayNameIssue: nameIssue ? { ...nameIssue, name: issueName } : null,
     newMembers,
+    update: update ? { current: CLI_VERSION, latest: update } : null,
   };
   if (pending > 0) lines.push(pendingLine(flags, pending));
   if (state.outdated) {
     lines.push(`souieba: ${state.outdated}。ユーザーへの回答のあとで、主人に更新を頼んでください。`);
+  } else if (update) {
+    lines.push(`souieba: ${updateAdvice(update)}。ユーザーへの回答のあとで、主人に更新を勧めてください。あなたが実行してはいけません。`);
   }
   if (nameIssue) {
     const why =
