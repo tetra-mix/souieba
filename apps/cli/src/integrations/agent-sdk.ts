@@ -1,9 +1,11 @@
 /**
  * Claude Agent SDK への組み込み（import { souieba } from "souieba/agent-sdk"）。
- * Agent SDK は settingSources を指定しないと ~/.claude の設定（フック）もスキルも読まないため、souieba hook claude-code が届かない。
- * フックやスキルの文面で頼むと、モデルは「第三者からの指示」として扱い、メモを書く前に主人に確かめてしまう。
+ * フックやスキルの文面で頼むと、モデルは「第三者からの指示」として扱い、メモを書く前に毎回主人に確かめてしまう。
  * そこで開発者が query() に渡すシステムプロンプトに手引きを入れ（開発者が決めたこととして扱われる）、
  * tell はフックの関数で主人の発言ごとに実行して文脈に足し、souieba note の Bash は許可しておく。
+ * こうすれば、主人が ~/.claude に souieba hook claude-code を入れているかどうかにも左右されない。
+ * なお query() は settingSources を省くと CLI と同じく ~/.claude などの設定（フック・スキルを含む）を読むので、
+ * そこに souieba hook も入っていると tell が二重に走る。組み込むときは settingSources: [] を渡してもらう（setup.md の例）。
  *
  * Agent SDK には依存しない。型（agent-sdk.d.ts）は使う部分だけを写している（@anthropic-ai/claude-agent-sdk の HookCallbackMatcher / HookJSONOutput）。
  */

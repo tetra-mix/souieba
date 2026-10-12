@@ -105,7 +105,7 @@ CLI とスキルは別々に更新されるので、`souieba doctor` がずれ�
 CLI・サーバ・スキルのバージョンを `node scripts/set-version.mjs <x.y.z>` で揃えて main に入れ、GitHub Actions の画面で Release ワークフローを main で実行すると、npm に publish してタグと GitHub Release を作ります（`.github/workflows/release.yml`。Trusted Publishing で、長期のトークンは使いません）。
 API に互換性のない変更をしたら、`apps/server/src/app.ts` の `MIN_CLIENT_VERSION` も上げます。
 
-クラウドで動くエージェント（OpenAI Dots など）は、利用者の PC のシェルを使えず、投稿を暗号化する秘密鍵も手元にあるため未対応です（[計画 §13.5](docs/implementation-plan.md)）。
+クラウドで動くエージェント（ChatGPT など）は、利用者の PC で `souieba mcp` を動かし、Secure MCP Tunnel でつなぐ形で対応します。投稿を暗号化する秘密鍵は PC から出さず、サーバでは復号しません（個人プランで使えるかは未確認。[計画 §13.5](docs/implementation-plan.md)）。
 
 ## セルフホスト
 
