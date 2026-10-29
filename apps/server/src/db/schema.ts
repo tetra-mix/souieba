@@ -185,3 +185,109 @@ export const groupNameBoxes = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.groupId, t.agentId] })],
 );
+
+// ---- v2（Relay）。docs/v2-design.md・docs/v2-relay-plan.md ----
+// v1 のユーザー・Agent とは独立している。Relay はメッセージの平文・Note・グループ・Policy を持たない
+
+/** 公開鍵ディレクトリ。Agent ID は Identity 公開鍵のハッシュ */
+export const relayAgents = sqliteTable("relay_agents", {
+  agentId: text("agent_id").primaryKey(),
+  identityKey: text("identity_key").notNull().unique(),
+  encKey: text("enc_key").notNull(),
+  encKeyVersion: integer("enc_key_version").notNull(),
+  encKeySig: text("enc_key_sig").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+/** 認証のチャレンジ。1回だけ使える */
+export const relayChallenges = sqliteTable(
+  "relay_challenges",
+  {
+    challenge: text().primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => relayAgents.agentId, { onDelete: "cascade" }),
+    expiresAt: text("expires_at").notNull(),
+  },
+  (t) => [index("relay_challenges_expires").on(t.expiresAt)],
+);
+
+/** チャレンジ・レスポンスで発行した、短命のセッショントークン（sha256 だけを持つ） */
+export const relaySessions = sqliteTable(
+  "relay_sessions",
+  {
+    tokenHash: text("token_hash").primaryKey(),
+    agentId: text("agent_id")
+      .notNull()
+      .references(() => relayAgents.agentId, { onDelete: "cascade" }),
+    expiresAt: text("expires_at").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [index("relay_sessions_expires").on(t.expiresAt)],
+);
+
+/** 接続。requester が要求し、recipient が承認すると accepted（承認後は向きを区別しない） */
+export const relayConnections = sqliteTable(
+  "relay_connections",
+  {
+    requesterId: text("requester_id")
+      .notNull()
+      .references(() => relayAgents.agentId, { onDelete: "cascade" }),
+    recipientId: text("recipient_id")
+      .notNull()
+      .references(() => relayAgents.agentId, { onDelete: "cascade" }),
+    status: text({ enum: ["pending", "accepted"] }).notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.requesterId, t.recipientId] }),
+    index("relay_connections_recipient").on(t.recipientId, t.status),
+    check("relay_connections_status_check", sql`${t.status} IN ('pending','accepted')`),
+  ],
+);
+
+export const relayBlocks = sqliteTable(
+  "relay_blocks",
+  {
+    blockerId: text("blocker_id")
+      .notNull()
+      .references(() => relayAgents.agentId, { onDelete: "cascade" }),
+    blockedId: text("blocked_id").notNull(),
+    createdAt: text("created_at").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] })],
+);
+
+/** 暗号化したメッセージの共通部分（受信者ごとの鍵は relay_deliveries）。全員に配送し終えたら body を消す */
+export const relayMessages = sqliteTable(
+  "relay_messages",
+  {
+    id: text().primaryKey(),
+    senderId: text("sender_id")
+      .notNull()
+      .references(() => relayAgents.agentId, { onDelete: "cascade" }),
+    /** RelayEnvelope から recipients を除いた JSON。配送し終えたら null */
+    body: text(),
+    createdAt: text("created_at").notNull(),
+    /** 猶予期間のあいだは配送しない（送信者が取り消せる） */
+    visibleAt: text("visible_at").notNull(),
+    deliveryExpiresAt: text("delivery_expires_at").notNull(),
+  },
+  (t) => [index("relay_messages_sender").on(t.senderId, t.createdAt), index("relay_messages_expires").on(t.deliveryExpiresAt)],
+);
+
+/** 受信者ごとの配送レコード。box は受信者分の RelayRecipientBox の JSON（配送したら null） */
+export const relayDeliveries = sqliteTable(
+  "relay_deliveries",
+  {
+    messageId: text("message_id")
+      .notNull()
+      .references(() => relayMessages.id, { onDelete: "cascade" }),
+    recipientId: text("recipient_id").notNull(),
+    box: text(),
+    deliveredAt: text("delivered_at"),
+  },
+  (t) => [primaryKey({ columns: [t.messageId, t.recipientId] }), index("relay_deliveries_recipient").on(t.recipientId, t.deliveredAt)],
+);
