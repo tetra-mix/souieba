@@ -43,7 +43,7 @@ function sleepSync(ms: number): void {
  * ロックファイルを作れた1つのプロセスだけが fn を実行する（note と compose が同時に動いても行を失わないように）。
  * 持ち主が落ちて残ったロックは、LOCK_STALE_MS たったら奪う。
  */
-function withFileLock<T>(lockPath: string, fn: () => T): T {
+export function withFileLock<T>(lockPath: string, fn: () => T): T {
   mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
   for (;;) {
     let fd: number;

@@ -116,7 +116,10 @@ function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
     tellIntervalMs: process.env.SOUIEBA_TELL_INTERVAL_MIN ? Number(process.env.SOUIEBA_TELL_INTERVAL_MIN) * 60_000 : undefined,
     now: flags.now,
     onError: (op, err) => {
-      if (err instanceof SouiebaApiError && err.code === "client_outdated") state.outdated = err.message;
+      // Relay は信頼しないので、Relay の文面ではなく手元の決まった文を出す
+      if (err instanceof SouiebaApiError && err.code === "client_outdated") {
+        state.outdated = "souieba の CLI が古いため Relay に断られました。npm i -g souieba@latest で更新し、npx skills update でスキルも更新してください";
+      }
       if (flags.debug) console.error(`[souieba] ${op} 失敗: ${err instanceof Error ? err.message : err}`);
     },
   });

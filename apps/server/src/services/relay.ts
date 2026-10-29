@@ -36,6 +36,12 @@ export const SESSION_TTL_MS = 60 * 60_000;
 export const CLOCK_SKEW_MS = 10 * 60_000;
 /** 1人が受け取れる未処理の接続要求の上限（スパム対策） */
 export const MAX_PENDING_INCOMING = 100;
+/** 1人が出せる承認待ちの要求の上限（多くの宛先に要求をばらまけないように） */
+export const MAX_PENDING_OUTGOING = 50;
+/** 承認も拒否もされない要求は、この期間で消す */
+export const PENDING_TTL_MS = 14 * 86_400_000;
+/** 1人がブロックできる相手の上限 */
+export const MAX_BLOCKS = 500;
 /** 1回の受信で返すメッセージの上限 */
 export const MAX_FETCH = 50;
 
@@ -181,7 +187,8 @@ function view(me: string, row: typeof relayConnections.$inferSelect): Connection
 
 /**
  * 接続を要求する。相手からの要求が先に届いていれば、それを承認したことになる（両方が望んでいるので）。
- * 相手にブロックされているときは、ブロックを知られないよう、要求を送ったときと同じ応答を返して何もしない。
+ * 相手にブロックされているときも、ブロックを知られないよう、ふつうの要求と同じく行を作って同じ応答を返す
+ * （その行はブロックした側には見えず、承認もできない。期限が来れば消える）。
  */
 export function requestConnection(db: DB, me: string, to: string, now: Date): ConnectionView {
   if (!isAgentId(to) || !getAgent(db, to)) throw notFound("Agent");
@@ -202,18 +209,22 @@ export function requestConnection(db: DB, me: string, to: string, now: Date): Co
         .run();
       return view(me, { ...incoming, status: "accepted", updatedAt: ts });
     }
-    const pretend: ConnectionView = { peer: to, status: "outgoing", createdAt: ts, updatedAt: ts };
-    if (isBlocked(db, to, me)) return pretend;
-    const pending =
+    const count = (col: typeof relayConnections.requesterId | typeof relayConnections.recipientId, id: string) =>
       db
         .select({ n: sql<number>`count(*)` })
         .from(relayConnections)
-        .where(and(eq(relayConnections.recipientId, to), eq(relayConnections.status, "pending")))
+        .where(and(eq(col, id), eq(relayConnections.status, "pending")))
         .get()?.n ?? 0;
-    // 相手の受信箱を要求で埋められないようにする。相手から見て意味がないので、こちらにも同じ応答を返す
-    if (pending >= MAX_PENDING_INCOMING) return pretend;
-    db.insert(relayConnections).values({ requesterId: me, recipientId: to, status: "pending", createdAt: ts, updatedAt: ts }).run();
-    return pretend;
+    if (count(relayConnections.requesterId, me) >= MAX_PENDING_OUTGOING) {
+      throw conflict("too_many_pending", `承認待ちの要求が多すぎます（${MAX_PENDING_OUTGOING} 件まで）。承認されない要求を取り消してください`);
+    }
+    // 相手の受信箱を要求で埋められないようにする。黙って捨てると、本当の友人の要求が届いたと誤解させるので、断る
+    if (count(relayConnections.recipientId, to) >= MAX_PENDING_INCOMING) {
+      throw conflict("recipient_busy", "相手の承認待ちの要求が多すぎるため、今は要求を送れません。時間をおいてください");
+    }
+    const row = { requesterId: me, recipientId: to, status: "pending" as const, createdAt: ts, updatedAt: ts };
+    db.insert(relayConnections).values(row).run();
+    return view(me, row);
   });
 }
 
@@ -224,7 +235,8 @@ export function acceptConnection(db: DB, me: string, peer: string, now: Date): C
       .from(relayConnections)
       .where(and(eq(relayConnections.requesterId, peer), eq(relayConnections.recipientId, me)))
       .get();
-    if (!row) throw notFound("接続要求");
+    // ブロックした相手からの要求は、ないものとして扱う
+    if (!row || (row.status === "pending" && isBlocked(db, me, peer))) throw notFound("接続要求");
     if (row.status === "accepted") return view(me, row);
     const ts = iso(now);
     db.update(relayConnections)
@@ -280,16 +292,24 @@ function disconnectInTx(db: DB, me: string, peer: string): void {
 }
 
 export function block(db: DB, me: string, peer: string, now: Date): void {
-  if (!isAgentId(peer)) throw badRequest("invalid_agent_id", "Agent ID の形式が不正です");
+  if (!isAgentId(peer) || !getAgent(db, peer)) throw notFound("Agent");
   if (peer === me) throw badRequest("self_block", "自分自身はブロックできません");
   db.transaction(() => {
+    const n = db.select({ n: sql<number>`count(*)` }).from(relayBlocks).where(eq(relayBlocks.blockerId, me)).get()?.n ?? 0;
+    if (n >= MAX_BLOCKS && !isBlocked(db, me, peer)) throw conflict("too_many_blocks", `ブロックできるのは ${MAX_BLOCKS} 件までです`);
     disconnectInTx(db, me, peer);
     db.insert(relayBlocks).values({ blockerId: me, blockedId: peer, createdAt: iso(now) }).onConflictDoNothing().run();
   });
 }
 
+/** ブロックを解除する。ブロック中に相手が出していた（こちらに見えていなかった）要求は消す */
 export function unblock(db: DB, me: string, peer: string): void {
-  db.delete(relayBlocks).where(and(eq(relayBlocks.blockerId, me), eq(relayBlocks.blockedId, peer))).run();
+  db.transaction(() => {
+    db.delete(relayBlocks).where(and(eq(relayBlocks.blockerId, me), eq(relayBlocks.blockedId, peer))).run();
+    db.delete(relayConnections)
+      .where(and(eq(relayConnections.requesterId, peer), eq(relayConnections.recipientId, me), eq(relayConnections.status, "pending")))
+      .run();
+  });
 }
 
 export function listConnections(db: DB, me: string): { connections: ConnectionView[]; blocked: string[] } {
@@ -305,7 +325,10 @@ export function listConnections(db: DB, me: string): { connections: ConnectionVi
     .where(eq(relayBlocks.blockerId, me))
     .all()
     .map((r) => r.id);
-  return { connections: rows.map((r) => view(me, r)), blocked };
+  const hidden = new Set(blocked);
+  // ブロックした相手からの承認待ちの要求は見せない
+  const visible = rows.filter((r) => !(r.status === "pending" && r.recipientId === me && hidden.has(r.requesterId)));
+  return { connections: visible.map((r) => view(me, r)), blocked };
 }
 
 function acceptedPeers(db: DB, me: string): Set<string> {
@@ -492,10 +515,16 @@ export function deleteMessage(db: DB, me: string, messageId: string): void {
   db.delete(relayMessages).where(eq(relayMessages.id, messageId)).run();
 }
 
-/** 期限切れのメッセージ・チャレンジ・セッションを消す */
-export function relayRetention(db: DB, now: Date): { messages: number; challenges: number; sessions: number } {
+/** 期限切れのメッセージ・チャレンジ・セッションと、古い承認待ちの要求を消す */
+export function relayRetention(db: DB, now: Date): { messages: number; challenges: number; sessions: number; requests: number } {
   const ts = iso(now);
+  const stale = iso(new Date(now.getTime() - PENDING_TTL_MS));
   return db.transaction(() => ({
+    requests: db
+      .delete(relayConnections)
+      .where(and(eq(relayConnections.status, "pending"), lt(relayConnections.createdAt, stale)))
+      .returning({ id: relayConnections.requesterId })
+      .all().length,
     messages: db.delete(relayMessages).where(lt(relayMessages.deliveryExpiresAt, ts)).returning({ id: relayMessages.id }).all().length,
     challenges: db.delete(relayChallenges).where(lt(relayChallenges.expiresAt, ts)).returning({ id: relayChallenges.challenge }).all()
       .length,

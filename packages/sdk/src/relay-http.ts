@@ -4,11 +4,17 @@
  */
 import {
   CLIENT_VERSION_HEADER,
+  MESSAGE_ID_RE,
   type RelayDirectoryEntry,
   type RelayEnvelope,
   type RelayIdentity,
   directoryEntry,
+  findInstructionLike,
+  isAgentId,
+  isCanonicalIso,
+  sanitizeContent,
   signChallenge,
+  verifyDirectoryEntry,
 } from "@souieba/core";
 import { readStateJson, writeSecretJson } from "./config.ts";
 import { SouiebaApiError } from "./http.ts";
@@ -44,6 +50,33 @@ export type RelayHttpOptions = {
 };
 
 type Session = { token: string; expiresAt: string; agentId: string; relay: string };
+
+/**
+ * Relay は信頼しない（鍵をすり替えたり、文字列にエージェントへの指示を混ぜたりしうる）。
+ * Relay から来た文字列は、エージェントが読む出力に入りうるので、ここで形を確かめてから使う
+ */
+function relayErrorMessage(status: number, message: string | undefined): string {
+  const m = message ? sanitizeContent(message).slice(0, 200) : "";
+  return m && findInstructionLike(m).length === 0 ? m : `Relay がエラーを返しました（HTTP ${status}）`;
+}
+
+const isStatus = (s: unknown): s is RelayConnection["status"] => s === "accepted" || s === "incoming" || s === "outgoing";
+
+function validConnection(c: RelayConnection): boolean {
+  return isAgentId(c?.peer) && isStatus(c.status) && isCanonicalIso(c.createdAt) && isCanonicalIso(c.updatedAt);
+}
+
+function validSent(m: RelaySentView): boolean {
+  return (
+    typeof m?.messageId === "string" &&
+    MESSAGE_ID_RE.test(m.messageId) &&
+    isCanonicalIso(m.createdAt) &&
+    isCanonicalIso(m.visibleAt) &&
+    isCanonicalIso(m.deliveryExpiresAt) &&
+    Array.isArray(m.recipients) &&
+    m.recipients.every((r) => isAgentId(r?.agentId) && (r.status === "pending" || r.status === "delivered") && (r.deliveredAt === null || isCanonicalIso(r.deliveredAt)))
+  );
+}
 
 export class RelayHttp {
   readonly origin: string;
@@ -82,7 +115,10 @@ export class RelayHttp {
     } catch {
       // 前段のプロキシが返す HTML など
     }
-    if (!res.ok) throw new SouiebaApiError(res.status, data?.error?.code ?? "http_error", data?.error?.message ?? `HTTP ${res.status}`);
+    if (!res.ok) {
+      const code = typeof data?.error?.code === "string" && /^[a-z_]{1,40}$/.test(data.error.code) ? data.error.code : "http_error";
+      throw new SouiebaApiError(res.status, code, relayErrorMessage(res.status, data?.error?.message));
+    }
     if (data === undefined) throw new SouiebaApiError(res.status, "bad_response", `Relay の応答を読めませんでした（HTTP ${res.status}）`);
     return data as T;
   }
@@ -127,18 +163,30 @@ export class RelayHttp {
     }
   }
 
+  /** 頼んだ Agent の分だけを、検証を通ったものだけ返す（固定した鍵との照合は呼び出し側で行う） */
   async lookup(agentIds: string[], interactive = false): Promise<RelayDirectoryEntry[]> {
     if (agentIds.length === 0) return [];
-    return (await this.request<{ entries: RelayDirectoryEntry[] }>("POST", "/v2/agents/lookup", { agentIds }, interactive)).entries;
+    const wanted = new Set(agentIds);
+    const { entries } = await this.request<{ entries: RelayDirectoryEntry[] }>("POST", "/v2/agents/lookup", { agentIds }, interactive);
+    return (Array.isArray(entries) ? entries : []).filter((e) => wanted.has(e?.agentId) && verifyDirectoryEntry(e).ok);
   }
-  connections(interactive = false) {
-    return this.request<{ connections: RelayConnection[]; blocked: string[] }>("GET", "/v2/connections", undefined, interactive);
+  async connections(interactive = false): Promise<{ connections: RelayConnection[]; blocked: string[] }> {
+    const r = await this.request<{ connections: RelayConnection[]; blocked: string[] }>("GET", "/v2/connections", undefined, interactive);
+    return {
+      connections: (Array.isArray(r.connections) ? r.connections : []).filter(validConnection),
+      blocked: (Array.isArray(r.blocked) ? r.blocked : []).filter(isAgentId),
+    };
   }
-  async connect(to: string): Promise<RelayConnection> {
-    return (await this.request<{ connection: RelayConnection }>("POST", "/v2/connections", { to })).connection;
+  private async connection(method: string, path: string, body?: unknown): Promise<RelayConnection> {
+    const { connection } = await this.request<{ connection: RelayConnection }>(method, path, body);
+    if (!validConnection(connection)) throw new SouiebaApiError(200, "bad_response", "Relay の応答の形が不正です");
+    return connection;
   }
-  async accept(peer: string): Promise<RelayConnection> {
-    return (await this.request<{ connection: RelayConnection }>("POST", `/v2/connections/${encodeURIComponent(peer)}/accept`)).connection;
+  connect(to: string): Promise<RelayConnection> {
+    return this.connection("POST", "/v2/connections", { to });
+  }
+  accept(peer: string): Promise<RelayConnection> {
+    return this.connection("POST", `/v2/connections/${encodeURIComponent(peer)}/accept`);
   }
   reject(peer: string) {
     return this.request<void>("POST", `/v2/connections/${encodeURIComponent(peer)}/reject`);
@@ -152,19 +200,30 @@ export class RelayHttp {
   unblock(peer: string) {
     return this.request<void>("DELETE", `/v2/blocks/${encodeURIComponent(peer)}`);
   }
-  send(envelope: RelayEnvelope) {
-    return this.request<RelaySendResult>("POST", "/v2/messages", { envelope });
+  async send(envelope: RelayEnvelope): Promise<RelaySendResult> {
+    const r = await this.request<RelaySendResult>("POST", "/v2/messages", { envelope });
+    const mine = new Set(envelope.recipients.map((b) => b.agentId));
+    return {
+      messageId: envelope.messageId,
+      visibleAt: isCanonicalIso(r.visibleAt) ? r.visibleAt : envelope.createdAt,
+      accepted: (Array.isArray(r.accepted) ? r.accepted : []).filter((id) => mine.has(id)),
+      skipped: (Array.isArray(r.skipped) ? r.skipped : [])
+        .filter((x) => mine.has(x?.agentId))
+        .map((x) => ({ agentId: x.agentId, reason: x.reason === "stale_key" ? "stale_key" : "not_connected" })),
+    };
   }
+  /** 中身の検証は受け取る側（RelayTransport）で行う */
   async fetchMessages(interactive = false): Promise<{ envelope: RelayEnvelope; receivedAt: string }[]> {
-    return (await this.request<{ messages: { envelope: RelayEnvelope; receivedAt: string }[] }>("GET", "/v2/messages", undefined, interactive))
-      .messages;
+    const { messages } = await this.request<{ messages: { envelope: RelayEnvelope; receivedAt: string }[] }>("GET", "/v2/messages", undefined, interactive);
+    return (Array.isArray(messages) ? messages : []).filter((m) => m && typeof m.envelope === "object" && m.envelope !== null);
   }
-  async ack(messageIds: string[], interactive = false): Promise<number> {
-    if (messageIds.length === 0) return 0;
-    return (await this.request<{ acked: number }>("POST", "/v2/messages/ack", { messageIds }, interactive)).acked;
+  async ack(messageIds: string[], interactive = false): Promise<void> {
+    if (messageIds.length === 0) return;
+    await this.request<{ acked: number }>("POST", "/v2/messages/ack", { messageIds }, interactive);
   }
   async sent(): Promise<RelaySentView[]> {
-    return (await this.request<{ messages: RelaySentView[] }>("GET", "/v2/messages/sent")).messages;
+    const { messages } = await this.request<{ messages: RelaySentView[] }>("GET", "/v2/messages/sent");
+    return (Array.isArray(messages) ? messages : []).filter(validSent);
   }
   deleteMessage(messageId: string) {
     return this.request<void>("DELETE", `/v2/messages/${encodeURIComponent(messageId)}`);

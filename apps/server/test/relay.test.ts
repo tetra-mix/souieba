@@ -240,6 +240,32 @@ describe("v2 Relay: 検索と接続", () => {
     expect((await h.call("GET", "/v2/connections", b.token)).body.blocked).toEqual([]);
   });
 
+  it("ブロックされた側から見ても、ふつうの承認待ちと見分けがつかない。解除するとその要求は消える", async () => {
+    const { h, member } = relayHarness();
+    const a = await member();
+    const b = await member();
+    await h.call("PUT", `/v2/blocks/${a.id.agentId}`, b.token);
+    const first = await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId });
+    h.clock.advance(60_000);
+    const second = await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId });
+    expect(second.body.connection).toEqual(first.body.connection);
+    expect((await h.call("GET", "/v2/connections", a.token)).body.connections).toMatchObject([{ peer: b.id.agentId, status: "outgoing" }]);
+    expect((await h.call("POST", `/v2/connections/${a.id.agentId}/accept`, b.token)).status).toBe(404);
+    await h.call("DELETE", `/v2/blocks/${a.id.agentId}`, b.token);
+    expect((await h.call("GET", "/v2/connections", b.token)).body.connections).toEqual([]);
+  });
+
+  it("承認待ちの要求の上限と期限、ブロックの対象の確認", async () => {
+    const { h, member } = relayHarness();
+    const a = await member();
+    // 登録されていない相手はブロックできない（表を際限なく大きくしないため）
+    expect((await h.call("PUT", `/v2/blocks/${generateRelayIdentity().agentId}`, a.token)).status).toBe(404);
+    const b = await member();
+    await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId });
+    h.clock.advance(15 * 86_400_000);
+    expect(runRetention(h.db, h.clock.now, 30 * 86_400_000).relay.requests).toBe(1);
+  });
+
   it("自分自身や、登録されていない Agent には要求できない", async () => {
     const { h, member } = relayHarness();
     const a = await member();

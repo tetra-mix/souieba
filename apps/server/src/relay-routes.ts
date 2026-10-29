@@ -73,6 +73,8 @@ export function relayRoutes(deps: { db: DB; config: Config; now: () => Date }) {
 
   const publicLimiter = new RateLimiter(30, 10 * 60_000);
   const registerLimiter = new RateLimiter(10, 60 * 60_000);
+  // 登録は消えないので、長い期間でも数える（多くの IP から上限まで埋められにくくする）
+  const registerDailyLimiter = new RateLimiter(20, 24 * 60 * 60_000);
   const sendLimiter = new RateLimiter(30, 60 * 60_000);
   const connectLimiter = new RateLimiter(30, 60 * 60_000);
   const readLimiter = new RateLimiter(60, 60_000);
@@ -93,6 +95,7 @@ export function relayRoutes(deps: { db: DB; config: Config; now: () => Date }) {
 
   app.post("/agents", async (c) => {
     take(registerLimiter, `register:${ipKey(c)}`);
+    take(registerDailyLimiter, `register-day:${ipKey(c)}`);
     const { entry } = await body(c, z.object({ entry: EntrySchema }));
     const r = relay.register(db, entry, now(), { maxAgents: config.relay.maxAgents });
     return c.json({ entry: r.entry }, r.created ? 201 : 200);

@@ -11,11 +11,13 @@ import { join } from "node:path";
 import {
   type NarrativeMessage,
   type RelayDirectoryEntry,
+  type RelayEnvelope,
   isAgentId,
   isValidDisplayName,
   verifyDirectoryEntry,
 } from "@souieba/core";
 import { readStateJson, writeSecretJson } from "./config.ts";
+import { withFileLock } from "./notes.ts";
 
 export type Contact = {
   agentId: string;
@@ -78,6 +80,10 @@ export class RelayStateStore {
     this.path = join(dir, "relay-state.json");
   }
 
+  private get lockPath(): string {
+    return `${this.path}.lock`;
+  }
+
   load(): RelayState {
     const s = readStateJson<RelayState>(this.path);
     return s && s.v === 1 ? { ...emptyState(), ...s } : emptyState();
@@ -87,11 +93,14 @@ export class RelayStateStore {
     writeSecretJson(this.path, state);
   }
 
+  /** 読んで変えて書く。同時に動く別の souieba（フック・MCP・CLI）と変更を取り合わないよう、ロックを取る */
   update<T>(fn: (s: RelayState) => T): T {
-    const s = this.load();
-    const r = fn(s);
-    this.save(s);
-    return r;
+    return withFileLock(this.lockPath, () => {
+      const s = this.load();
+      const r = fn(s);
+      this.save(s);
+      return r;
+    });
   }
 }
 
@@ -129,9 +138,24 @@ export function contactFrom(entry: RelayDirectoryEntry, name: string, now: Date)
   };
 }
 
-export function requireContactName(name: string): string {
+/**
+ * 呼び名を確かめる。Tell 文に入るので表示名と同じ規則にし、宛先の指定で見分けられるよう、
+ * ほかの連絡先（承認待ちを含む）と重なる名前と、宛先の予約語（all）は断る。self はその名前を付け直す相手の Agent ID
+ */
+export function requireContactName(name: string, state?: RelayState, self?: string): string {
   const n = name.trim();
   if (!isValidDisplayName(n)) throw new RelayStateError("呼び名は1〜40文字で、日本語・英数字・一部の記号だけにしてください");
+  if (n.toLowerCase() === "all") throw new RelayStateError("「all」は宛先の指定（全員）に使うので、呼び名にはできません");
+  if (state) {
+    const taken = [
+      ...Object.values(state.contacts).map((c) => [c.agentId, c.name] as const),
+      ...Object.entries(state.pendingNames),
+    ].some(([id, other]) => id !== self && other === n);
+    if (taken) throw new RelayStateError(`「${n}」という呼び名の相手がすでにいます。別の呼び名にしてください`);
+    if (Object.values(state.groups).some((g) => g.name === n || g.id === n)) {
+      throw new RelayStateError(`「${n}」はグループの名前と同じです。別の呼び名にしてください`);
+    }
+  }
   return n;
 }
 
@@ -232,7 +256,13 @@ export type RelayInboxItem = {
   toldAt?: string;
 };
 
-type InboxFile = { v: 1; items: RelayInboxItem[]; seen: Record<string, string> };
+/** 接続済みだが呼び名のない相手から届いた、まだ開けていないメッセージ（呼び名が付いたら検証して開く） */
+export type HeldEnvelope = { envelope: RelayEnvelope; receivedAt: string };
+
+/** 手元に置いておく、開けていないメッセージの上限 */
+export const MAX_HELD = 200;
+
+type InboxFile = { v: 1; items: RelayInboxItem[]; seen: Record<string, string>; held?: HeldEnvelope[] };
 
 /** 伝えたあとも、同じメッセージの再配送（リプレイ）を見分けるため、配送期限まで ID を覚えておく */
 export class RelayInboxStore {
@@ -252,10 +282,12 @@ export class RelayInboxStore {
   }
 
   update<T>(fn: (f: InboxFile) => T): T {
-    const f = this.load();
-    const r = fn(f);
-    this.save(f);
-    return r;
+    return withFileLock(`${this.path}.lock`, () => {
+      const f = this.load();
+      const r = fn(f);
+      this.save(f);
+      return r;
+    });
   }
 
   /**
@@ -267,5 +299,6 @@ export class RelayInboxStore {
     const dayAgo = new Date(now.getTime() - 86_400_000).toISOString();
     f.items = f.items.filter((i) => i.message.useExpiresAt > t && !(i.toldAt && i.toldAt < dayAgo));
     for (const [id, exp] of Object.entries(f.seen)) if (exp <= t) delete f.seen[id];
+    f.held = (f.held ?? []).filter((h) => typeof h.envelope?.deliveryExpiresAt === "string" && h.envelope.deliveryExpiresAt > t).slice(-MAX_HELD);
   }
 }

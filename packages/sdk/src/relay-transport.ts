@@ -7,6 +7,8 @@
 import {
   type CreatePostInput,
   DEFAULT_DELIVERY_TTL_MS,
+  HPKE_SUITE,
+  MESSAGE_ID_RE,
   DEFAULT_USE_TTL_MS,
   type InboxItem,
   MAX_MESSAGE_TTL_MS,
@@ -19,6 +21,8 @@ import {
   type Reshare,
   type SyncResult,
   type TellCandidate,
+  isAgentId,
+  isCanonicalIso,
   normalizeNarrative,
   openRelayMessage,
   sealRelayMessage,
@@ -28,6 +32,7 @@ import { checkPostContent } from "./e2ee.ts";
 import type { RelayConnection, RelayHttp } from "./relay-http.ts";
 import {
   type Contact,
+  type HeldEnvelope,
   type RelayInboxItem,
   RelayInboxStore,
   type RelayState,
@@ -53,6 +58,7 @@ export type RelayRejectReason =
   | "expired"
   | "bad_time"
   | "decrypt_failed"
+  | "bad_header"
   | NarrativeIssue;
 
 export type RelayPublishOptions = {
@@ -236,6 +242,10 @@ export class RelayTransport implements SouiebaTransport {
       { createdAt, deliveryExpiresAt: new Date(now.getTime() + ttl(o.deliveryTtlMs, DEFAULT_DELIVERY_TTL_MS)).toISOString() },
     );
     const r = await this.opts.http.send(envelope);
+    // Relay が誰も受け付けなかった（接続が切れた・鍵が替わった直後など）
+    if (r.accepted.length === 0) {
+      throw new NoRecipientsError({ recipients: [], denied: targets.denied, notConnected: [...targets.notConnected, ...r.skipped.map((x) => x.agentId)] });
+    }
     const names = new Map(ready.map((c) => [c.agentId, c.name]));
     return {
       postId: r.messageId,
@@ -261,12 +271,21 @@ export class RelayTransport implements SouiebaTransport {
     let received = 0;
     const size = this.opts.inbox.update((f) => {
       RelayInboxStore.prune(f, now);
-      for (const { envelope, receivedAt } of fetched) {
+      // 前に呼び名がなくて開けずに置いておいたものも、もう一度試す
+      const held = f.held ?? [];
+      f.held = [];
+      const fresh = fetched.filter((m) => !held.some((h) => h.envelope.messageId === m.envelope.messageId));
+      for (const { envelope, receivedAt } of [...held, ...fresh]) {
+        const isNew = fresh.some((m) => m.envelope === envelope);
+        if (isNew) ack.push(typeof envelope.messageId === "string" ? envelope.messageId : "");
         const r = this.open(envelope, state, connected, f.seen, now);
-        if (r === "hold") continue;
-        ack.push(envelope.messageId);
+        if (r === "hold") {
+          // Relay の受信の列をふさがないよう、受け取ったことにして手元に置く（配送期限まで）
+          f.held.push({ envelope, receivedAt } satisfies HeldEnvelope);
+          continue;
+        }
         if (!r.ok) {
-          this.opts.onReject?.(envelope.messageId, r.reason);
+          this.opts.onReject?.(String(envelope.messageId).slice(0, 40), r.reason);
           continue;
         }
         f.seen[envelope.messageId] = envelope.deliveryExpiresAt;
@@ -280,9 +299,13 @@ export class RelayTransport implements SouiebaTransport {
         });
         received++;
       }
+      RelayInboxStore.prune(f, now);
       return f.items.filter((i) => !i.toldAt).length;
     });
-    await this.opts.http.ack(ack, true);
+    await this.opts.http.ack(
+      ack.filter((id) => MESSAGE_ID_RE.test(id)),
+      true,
+    );
     return { received, inboxSize: size };
   }
 
@@ -298,6 +321,19 @@ export class RelayTransport implements SouiebaTransport {
     now: Date,
   ): "hold" | { ok: true; message: NarrativeMessage } | { ok: false; reason: RelayRejectReason } {
     const me = this.opts.identity;
+    // ヘッダの文字列は、署名つきでも Tell の出力（post_id）などに入るので、形を確かめる
+    if (
+      env.v !== 2 ||
+      env.suite !== HPKE_SUITE ||
+      typeof env.messageId !== "string" ||
+      !MESSAGE_ID_RE.test(env.messageId) ||
+      !isAgentId(env.sender) ||
+      !isCanonicalIso(env.createdAt) ||
+      !isCanonicalIso(env.deliveryExpiresAt) ||
+      !Array.isArray(env.recipients)
+    ) {
+      return { ok: false, reason: "bad_header" };
+    }
     const box = env.recipients[0];
     if (env.recipients.length !== 1 || !box || box.agentId !== me.agentId) return { ok: false, reason: "not_for_me" };
     const contact = state.contacts[env.sender];

@@ -371,7 +371,14 @@ async function main(argv: string[]) {
     case "relay": {
       try {
         await relayCommand(
-          { sub, rest, name: values.name, agent: values.agent, raw: argv.filter((x, i) => x !== "--agent" && argv[i - 1] !== "--agent").slice(1) },
+          {
+            sub,
+            rest,
+            name: values.name,
+            agent: values.agent,
+            // 主人に頼むコマンドは、読み取った値から組み立て直す（--agent=x のような書き方も1つにまとめる）
+            raw: [...positionals.slice(1), ...(values.name !== undefined ? ["--name", values.name] : [])],
+          },
           { log: (l) => console.log(l), confirm: ttyConfirm, now: testableNow },
         );
       } catch (err) {

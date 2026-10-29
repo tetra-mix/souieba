@@ -57,6 +57,13 @@ describe("Identity と Agent ID", () => {
     expect(verifyDirectoryEntry({ ...other, agentId: id.agentId })).toEqual({ ok: false, reason: "bad_agent_id" });
   });
 
+  it("小さい位数の点（DH の結果がすべて 0 になる鍵）を Encryption 鍵として受け付けない", () => {
+    const id = generateRelayIdentity();
+    const zero = Buffer.alloc(32).toString("base64url");
+    const e = directoryEntry({ ...id, enc: { pub: zero, priv: id.enc.priv } });
+    expect(verifyDirectoryEntry(e)).toEqual({ ok: false, reason: "bad_key" });
+  });
+
   it("チャレンジへの署名は Relay の origin に縛られる", () => {
     const id = generateRelayIdentity();
     const sig = signChallenge(id, "https://relay.test", "abc");

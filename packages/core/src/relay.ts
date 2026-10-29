@@ -9,7 +9,7 @@
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { type KeyPair, generateEncryptionKey, generateSigningKey, isPublicKey, signText, verifyText } from "./crypto.ts";
-import { HPKE_SUITE, HpkeError, hpkeOpen, hpkeSeal } from "./hpke.ts";
+import { HPKE_SUITE, HpkeError, hpkeOpen, hpkeSeal, isUsableX25519Key } from "./hpke.ts";
 import { MAX_POST_LENGTH, MIN_TELL_CONTENT_LENGTH, findInstructionLike, sanitizeContent } from "./sanitize.ts";
 
 const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64url");
@@ -88,7 +88,9 @@ export type DirectoryCheck = { ok: true } | { ok: false; reason: "bad_agent_id" 
 
 /** ディレクトリの1件が、自己矛盾なく正しいか（Agent ID と Identity 鍵の対応、Encryption 鍵の署名） */
 export function verifyDirectoryEntry(e: RelayDirectoryEntry): DirectoryCheck {
-  if (!isPublicKey("ed25519", e.identityKey) || !isPublicKey("x25519", e.encKey)) return { ok: false, reason: "bad_key" };
+  if (!isPublicKey("ed25519", e.identityKey) || !isPublicKey("x25519", e.encKey) || !isUsableX25519Key(e.encKey)) {
+    return { ok: false, reason: "bad_key" };
+  }
   if (!Number.isInteger(e.encKeyVersion) || e.encKeyVersion < 1) return { ok: false, reason: "bad_key" };
   if (deriveAgentId(e.identityKey) !== e.agentId) return { ok: false, reason: "bad_agent_id" };
   if (!verifyText(e.identityKey, encKeySigningText(e.agentId, e.encKey, e.encKeyVersion), e.encKeySig)) {
@@ -227,6 +229,13 @@ export type RelayEnvelope = {
 };
 
 export const MESSAGE_ID_RE = /^msg_[A-Za-z0-9_-]{22}$/;
+
+/** toISOString の形の日時か（署名した文字列をそのまま比べるので、別の書き方は受け付けない） */
+export function isCanonicalIso(s: unknown): s is string {
+  if (typeof s !== "string" || s.length > 40) return false;
+  const t = Date.parse(s);
+  return Number.isFinite(t) && new Date(t).toISOString() === s;
+}
 
 export function newMessageId(): string {
   return `msg_${b64(randomBytes(16))}`;

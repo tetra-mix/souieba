@@ -237,7 +237,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       const id = rest[0];
       if (!id || !isAgentId(id)) throw new Error("souieba relay connect <Agent ID> --name <呼び名>");
       if (id === r.identity.agentId) throw new Error("自分自身には接続できません");
-      const name = requireContactName(a.name ?? "");
+      const name = requireContactName(a.name ?? "", p.state.load(), id);
       const [e] = await p.http.lookup([id]);
       if (!e) throw new Error(`${id} は Relay に登録されていません`);
       await confirm(`Agent ${id} に接続を要求し、呼び名を「${name}」にします（共有はまだ始まりません。共有するには allow が必要です）`);
@@ -250,7 +250,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     case "accept": {
       const id = rest[0];
       if (!id || !isAgentId(id)) throw new Error("souieba relay accept <Agent ID> --name <呼び名>");
-      const name = requireContactName(a.name ?? "");
+      const name = requireContactName(a.name ?? "", p.state.load(), id);
       await confirm(`Agent ${id} からの接続要求を承認し、呼び名を「${name}」にします（相手からの近況が届くようになります）`);
       p.state.update((s) => void (s.pendingNames[id] = name));
       await p.http.accept(id);
@@ -268,12 +268,12 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     }
     case "rename": {
       const [ref, ...nameParts] = rest;
-      const name = requireContactName(nameParts.join(" "));
       if (!ref) throw new Error("souieba relay rename <相手> <新しい呼び名>");
       const s = p.state.load();
       const c = findContact(s, ref);
       if (!c && !isAgentId(ref)) throw new Error(`連絡先に「${ref}」がありません`);
       const id = c?.agentId ?? ref;
+      const name = requireContactName(nameParts.join(" "), s, id);
       await confirm(`${who(s, id)} の呼び名を「${name}」にします`);
       p.state.update((st) => {
         if (st.contacts[id]) st.contacts[id]!.name = name;
@@ -369,7 +369,13 @@ function forget(s: RelayState, id: string): void {
 async function init(a: RelayArgs, io: RelayIo): Promise<void> {
   const url = a.rest[0];
   if (!url) throw new Error("souieba relay init <Relay の URL> [--name <Agent名>]");
-  const relayUrl = new URL(url).origin;
+  const parsed = new URL(url);
+  const relayUrl = parsed.origin;
+  // セッショントークンを平文で流さないよう、http は手元で動かす開発用（localhost / 127.0.0.1）だけにする
+  const host = parsed.hostname.replace(/^\[|\]$/g, "");
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && (host === "localhost" || host === "127.0.0.1" || host === "::1"))) {
+    throw new Error("Relay の URL は https にしてください（http は手元で動かす開発用の localhost / 127.0.0.1 だけ）");
+  }
   const name = a.name ?? "relay";
   if (!isValidDisplayName(name)) throw new Error("Agent 名は1〜40文字で、日本語・英数字・一部の記号だけにしてください");
   const cfg = loadClientConfig();

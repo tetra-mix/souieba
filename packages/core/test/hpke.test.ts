@@ -2,7 +2,7 @@ import { Chacha20Poly1305 } from "@hpke/chacha20poly1305";
 import { CipherSuite, HkdfSha256 } from "@hpke/core";
 import { DhkemX25519HkdfSha256 } from "@hpke/dhkem-x25519";
 import { describe, expect, it } from "vitest";
-import { HpkeError, generateEncryptionKey, hpkeOpen, hpkeSeal } from "../src/index.ts";
+import { HpkeError, generateEncryptionKey, hpkeOpen, hpkeSeal, isUsableX25519Key } from "../src/index.ts";
 
 /** 参照実装（@hpke/core）。同じスイートで相互に開けることを確かめる */
 const suite = new CipherSuite({ kem: new DhkemX25519HkdfSha256(), kdf: new HkdfSha256(), aead: new Chacha20Poly1305() });
@@ -67,6 +67,15 @@ describe("HPKE（RFC 9180）", () => {
     const ct = Buffer.from(sealed.ct, "base64url");
     ct[0]! ^= 1;
     expect(() => hpkeOpen(kp, { ...sealed, ct: ct.toString("base64url") }, info, aad)).toThrow(HpkeError);
+  });
+
+  it("小さい位数の点を、ふつうの鍵と見分ける（最上位ビットを立てた書き方も）", () => {
+    expect(isUsableX25519Key(generateEncryptionKey().pub)).toBe(true);
+    for (const hex of ["00".repeat(32), `01${"00".repeat(31)}`, `ec${"ff".repeat(30)}ff`, `${"00".repeat(31)}80`]) {
+      const pub = Buffer.from(hex, "hex").toString("base64url");
+      expect(isUsableX25519Key(pub)).toBe(false);
+      expect(() => hpkeSeal(pub, info, aad, pt)).toThrow();
+    }
   });
 
   it("すべて 0 の公開鍵（小さい位数の点）を断る", () => {

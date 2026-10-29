@@ -100,6 +100,32 @@ function keySchedule(sharedSecret: Buffer, info: Buffer): { key: Buffer; nonce: 
 
 export class HpkeError extends Error {}
 
+/**
+ * X25519 の小さい位数の点（と、その別の書き方）。libsodium の has_small_order と同じ一覧で、最上位ビットは無視して比べる。
+ * これらを公開鍵にすると、DH の結果が相手の秘密鍵によらず決まる（暗号化の途中で失敗する）
+ */
+const SMALL_ORDER = [
+  "0000000000000000000000000000000000000000000000000000000000000000",
+  "0100000000000000000000000000000000000000000000000000000000000000",
+  "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+  "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+  "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+].map((h) => Buffer.from(h, "hex"));
+
+/**
+ * X25519 の公開鍵として使えるか。形式だけでなく、小さい位数の点も断る（受け付けた時点で弾いておく）。
+ * DH を計算せずに比べるだけなので、Workers（Relay）でも動く
+ */
+export function isUsableX25519Key(pub: string): boolean {
+  const raw = Buffer.from(pub, "base64url");
+  if (raw.length !== N_ENC || raw.toString("base64url") !== pub) return false;
+  const masked = Buffer.from(raw);
+  masked[31]! &= 0x7f;
+  return !SMALL_ORDER.some((p) => p.equals(masked));
+}
+
 export type HpkeSealed = {
   /** カプセル化した鍵（送信側の一時公開鍵、base64url） */
   enc: string;
