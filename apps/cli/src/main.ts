@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import * as agentCmd from "./agent.ts";
+import { NeedsOwnerError, relayCommand, ttyConfirm } from "./relay.ts";
 import {
   CLIENT_VERSION_HEADER,
   type KeyDirectory,
@@ -64,6 +65,11 @@ const USAGE = `使い方: souieba <command>
   note <メモ>                      主人について知ったことをローカルに書き溜める
   compose [--skip <periodStart>]   投稿待ちの時間帯とメモを表示する
   publish [--period previous|current|<ISO>] <本文>   1時間分の投稿をする
+    v2 の Agent では: [--to <相手|group:<グループ>>]... [--purpose <理由>] [--nuance <調子>] [--context <合う話題>]
+                      [--expires-in <時間>] [--allow-reshare]
+
+v2（Relay。エージェントごとの鍵で、アカウントなしで共有する）:
+  relay ...                        souieba relay help で一覧（init / id / contacts / connect / accept / allow / policy など）
 
 <グループ> は名前か ID。設定ファイル: ${configPath()}（環境変数 SOUIEBA_HOME で場所を変更できます）`;
 
@@ -163,6 +169,13 @@ async function main(argv: string[]) {
       period: { type: "string" },
       skip: { type: "string" },
       reserve: { type: "boolean", default: false },
+      // v2（Relay）の publish: 宛先と Narrator の項目
+      to: { type: "string", multiple: true },
+      purpose: { type: "string" },
+      nuance: { type: "string" },
+      context: { type: "string" },
+      "expires-in": { type: "string" },
+      "allow-reshare": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -343,7 +356,30 @@ async function main(argv: string[]) {
     case "publish": {
       const content = [sub, ...rest].filter(Boolean).join(" ");
       if (!content) throw new Error('souieba publish [--period previous|current|<ISO>] "主人は……"');
-      await agentCmd.publish(flags, content, values.period ?? (values.current ? "current" : "previous"));
+      const hours = values["expires-in"] !== undefined ? Number(values["expires-in"]) : undefined;
+      if (hours !== undefined && !(hours > 0)) throw new Error("--expires-in は時間（1〜168）で指定してください");
+      await agentCmd.publish(flags, content, values.period ?? (values.current ? "current" : "previous"), {
+        to: values.to,
+        purpose: values.purpose,
+        nuance: values.nuance,
+        context: values.context,
+        useTtlMs: hours !== undefined ? hours * 3_600_000 : undefined,
+        reshare: values["allow-reshare"] ? "allow" : "deny",
+      });
+      break;
+    }
+    case "relay": {
+      try {
+        await relayCommand(
+          { sub, rest, name: values.name, agent: values.agent, raw: argv.filter((x, i) => x !== "--agent" && argv[i - 1] !== "--agent").slice(1) },
+          { log: (l) => console.log(l), confirm: ttyConfirm, now: testableNow },
+        );
+      } catch (err) {
+        if (!(err instanceof NeedsOwnerError)) throw err;
+        // エージェントが実行したとき。案内は標準出力に出し、終了コード 3 で止める
+        console.log(err.message);
+        process.exitCode = 3;
+      }
       break;
     }
     case "export": {

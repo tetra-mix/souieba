@@ -102,12 +102,17 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
       inputSchema: {
         period: z.string().describe("souieba_compose が示した時間帯の開始時刻（ISO 8601）"),
         content: z.string().min(1).max(400).describe("「主人は……」で始まる近況"),
+        // v2（Relay）の Agent のときだけ使う。souieba_compose が案内する
+        to: z.array(z.string().max(80)).max(20).optional().describe("v2 のみ: 宛先（相手の呼び名か group:<グループ>）。省略すると共有してよい全員"),
+        purpose: z.string().max(200).optional().describe("v2 のみ: なぜこの相手に伝えたいか（60字以内）"),
+        nuance: z.string().max(200).optional().describe("v2 のみ: どんな調子で伝えてほしいか（60字以内）"),
+        context: z.string().max(200).optional().describe("v2 のみ: どんな話題のときに出すとよいか（60字以内）"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    ({ period, content }) =>
+    ({ period, content, to, purpose, nuance, context }) =>
       guarded(async () => {
-        const r = await agentCmd.publishResult(f, content, period);
+        const r = await agentCmd.publishResult(f, content, period, { to, purpose, nuance, context });
         return text(r.text, !r.ok);
       }),
   );

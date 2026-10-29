@@ -132,6 +132,16 @@ export class RelayTransport implements SouiebaTransport {
     return this.opts.identity.agentId;
   }
 
+  /** この Agent の手元の状態（連絡先・グループ・アクセス権限・Policy） */
+  localState(): RelayState {
+    return this.opts.state.load();
+  }
+
+  /** 接続の一覧をもう取ったか（tell のついでの確認で、取っていなければ取りに行くため） */
+  get hasConnections(): boolean {
+    return this.lastConnections !== null;
+  }
+
   /**
    * Relay の接続一覧を取り、新しく接続した相手を連絡先に加える（鍵を検証して固定する）。
    * 呼び名は、接続要求を送った・承認したときに主人が付けたもの。なければ連絡先に加えず、知らせる
@@ -313,17 +323,19 @@ export class RelayTransport implements SouiebaTransport {
 
   /** 前回の syncContacts で分かった、主人に知らせることを返し、知らせたことにする */
   takeNotices(): RelayNotices {
-    const conns = this.lastConnections ?? [];
+    const conns = this.lastConnections;
     return this.opts.state.update((s) => {
+      const keyChanges = Object.values(s.contacts)
+        .filter((c) => c.keyChangedAt)
+        .map((c) => ({ agentId: c.agentId, name: c.name, at: c.keyChangedAt! }));
+      for (const c of Object.values(s.contacts)) delete c.keyChangedAt;
+      // 接続の一覧をまだ取っていなければ、接続要求については何も言わない（知らせ済みの記録も変えない）
+      if (!conns) return { incomingRequests: [], unnamedPeers: [], keyChanges };
       const incoming = conns.filter((c) => c.status === "incoming").map((c) => c.peer);
       const fresh = incoming.filter((id) => !s.notifiedRequests.includes(id));
       // 取り消された要求は忘れる（同じ人からまた届いたら知らせ直す）
       s.notifiedRequests = incoming;
       const unnamedPeers = conns.filter((c) => c.status === "accepted" && !s.contacts[c.peer]).map((c) => c.peer);
-      const keyChanges = Object.values(s.contacts)
-        .filter((c) => c.keyChangedAt)
-        .map((c) => ({ agentId: c.agentId, name: c.name, at: c.keyChangedAt! }));
-      for (const c of Object.values(s.contacts)) delete c.keyChangedAt;
       return { incomingRequests: fresh, unnamedPeers, keyChanges };
     });
   }
