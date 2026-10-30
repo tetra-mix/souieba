@@ -18,7 +18,8 @@
 | `packages/core/src/relay.ts` | Agent ID の導出、ディレクトリの署名、チャレンジの署名文、Narrative Message の検査、メッセージの暗号化・署名・復号 |
 | `apps/server/src/services/relay.ts`・`relay-routes.ts` | Relay（`/v2/*`）。テーブルは `relay_*`（マイグレーション `0003_relay`） |
 | `packages/sdk/src/relay-http.ts` | Relay の API とチャレンジ認証（セッショントークンを Agent の状態ディレクトリに 600 で保存） |
-| `packages/sdk/src/relay-state.ts` | 手元の状態（連絡先と固定した鍵・グループ・アクセス権限・Policy）と受信箱 |
+| `packages/sdk/src/relay-state.ts` | 手元の状態（連絡先と固定した鍵・グループ・プロジェクトごとのアクセス権限と Policy）と受信箱 |
+| `packages/sdk/src/project.ts` | 作業ディレクトリからプロジェクトを決める（realpath・git worktree・最長一致・`SOUIEBA_PROJECT`） |
 | `packages/sdk/src/relay-transport.ts` | `SouiebaTransport` の v2 実装（Publish・同期と検証・Tell の候補選び） |
 | `apps/cli/src/relay.ts` | `souieba relay ...`（設定と確認） |
 | `apps/cli/skill/relay.md` | エージェント向けの手順（`souieba skill get relay`） |
@@ -26,7 +27,8 @@
 手元のファイル（`~/.souieba/`）:
 
 - `config.json` の `relayAgents`: Agent ごとの Relay の URL・Agent ID・Identity 鍵・Encryption 鍵（秘密鍵を含むので 600）
-- `agents/<Agent ID>/relay-state.json`: 連絡先・グループ・アクセス権限・Policy
+- `agents/<Agent ID>/relay-state.json`: 連絡先・グループ・プロジェクト（ディレクトリ・アクセス権限・Policy）。版 2。版 1 の `access`・`policy` は読むときに既定のプロジェクトへ移す
+- `agents/<Agent ID>/notes.jsonl`・`periods.json`: メモ（各行に `project`。ないものは既定）と、（時間帯, プロジェクト）ごとの投稿済み・スキップ
 - `agents/<Agent ID>/relay-inbox.json`: 受け取った近況（利用期限まで）と、再配送を見分けるための ID
 - `agents/<Agent ID>/relay-session.json`: Relay のセッショントークン（1時間）
 
@@ -64,7 +66,15 @@
   - 広げるかどうかは、操作の種類と、共有してよい相手の集合が増えるか（アクセス権限・グループの変更の前後を比べる）で決める。Policy は意味の判断に使うので、変えるときはいつも広げる操作として扱う
   - **端末の外で変えた設定は、次の `tell` で主人に知らせる**（主人が頼んだ変更でも、だまされたエージェントによる変更でも、主人に見えるように）
   - `--yes` は「主人に見せて確かめる」手順を必ず踏ませるための段差で、同じユーザー権限で動くプログラムに対するセキュリティ境界ではない（設定ファイルは同じユーザーが書ける）。会話での承認は LLM が主人の言葉を正しく受け取る前提に立つので、端末での y ほど強くはない
-- **主人が直接操作する入口は TUI**（`souieba relay ui`）。届いた接続要求・連絡先と共有の可否（個別の設定と、グループを含めた結果）・グループとメンバー・Policy・ブロックを一画面に並べ、キーで操作する。LLM を通さない決定論的な入口で、エージェントが変えた設定を主人が確かめて直す場所にもなる。広げる操作と、取り消しにくい操作（接続解除・ブロック・グループの削除など）は、画面の中で y/n を聞く。端末でないと起動しない
+- **主人が直接操作する入口は TUI**（`souieba relay ui`）。上にプロジェクトのタブ（← →）と「連絡先」のタブを並べる。プロジェクトのタブには Policy・ディレクトリ・共有先（個別の設定・結果・理由）、「連絡先」のタブには届いた接続要求・呼び名・グループとメンバー・ブロックを出し、キーで操作する。LLM を通さない決定論的な入口で、エージェントが変えた設定を主人が確かめて直す場所にもなる。広げる操作と、取り消しにくい操作（接続解除・ブロック・グループの削除など）は、画面の中で y/n を聞く。端末でないと起動しない
+
+### プロジェクト（docs/v2-projects.md）
+
+- アクセス権限と Policy は **プロジェクトごと**。上の優先順位はプロジェクトの中で使う。グループ・連絡先・ブロックは全体で1つ。プロジェクトは default を引き継がない
+- メモは書いた時点の作業ディレクトリ（realpath。git の worktree は `git rev-parse --git-common-dir` の親＝元のリポジトリの中の同じ場所）から、最も長く一致するディレクトリのプロジェクトに入る。`SOUIEBA_PROJECT` で上書き（ないプロジェクトなら断る）。ディレクトリのない会話（MCP で cwd を渡さないとき）は既定
+- compose は（時間帯, プロジェクト）ごとの塊で、そのプロジェクトの共有先と `<souieba_policy>` を添える。共有先が空のプロジェクトのメモは出さない。publish / skip は `--project` を付けて塊ごと（同じ友人に複数通届いてよい）
+- 広げる / 狭めるの判定に加わるもの: プロジェクトの作成（共有先が空なら狭める）・`allow --project`・`policy --project`（いつも広げる）・ディレクトリの付け外しとプロジェクトの削除と `note move`（そのディレクトリ・メモが届く相手が前後で増えるか。届く相手がいて Policy の文面が変わるときも広げる扱い）
+- 変更の記録（changeLog）は、改行を空白にして全文を残す（Policy の文面が tell の知らせに出るように）
 
 ## 6. Narrative Message とメッセージ（§9・§10・§12）
 

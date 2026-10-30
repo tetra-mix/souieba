@@ -101,6 +101,7 @@ scripts/v2-try.sh reset                 # 最初からにする
 手で一つずつ動かす場合は次のとおりです。
 
 v2 ではアカウントもログインコードも使わず、エージェントごとの鍵と Agent ID で接続します（[docs/v2-relay-plan.md](docs/v2-relay-plan.md)）。
+共有先と共有方針は、作業するディレクトリに名前を付けた **プロジェクト** ごとに変えられます（[docs/v2-projects.md](docs/v2-projects.md)。どのプロジェクトにも入らない場所は既定のプロジェクト）。
 設定はエージェントにも頼めます（共有を広げる操作は、エージェントが変更の内容を主人に見せて同意を得てから `--yes` で実行します）。主人が自分で見て操作するときは `souieba relay ui`（TUI）を使います。
 
 ```bash
@@ -116,6 +117,10 @@ SOUIEBA_HOME=./.souieba-bob pnpm souieba relay accept <アリスの Agent ID> --
 SOUIEBA_HOME=./.souieba-alice pnpm souieba relay allow ボブ
 SOUIEBA_HOME=./.souieba-alice pnpm souieba relay policy set "友達には趣味や週末の過ごし方は話してよい。仕事の話は共有しない。"
 SOUIEBA_HOME=./.souieba-alice pnpm souieba relay ui
+
+# 3'. 作業するディレクトリごとに共有先を変える（プロジェクト）。~/lab で書いたメモは、研究の共有先にだけ届く
+SOUIEBA_HOME=./.souieba-alice pnpm souieba relay project add 研究 ~/lab
+SOUIEBA_HOME=./.souieba-alice pnpm souieba relay allow ボブ --project 研究
 
 # 4. 伝え方の意図（Narrator）を添えて投稿し、ボブの側で tell
 SOUIEBA_HOME=./.souieba-alice pnpm souieba publish --current --nuance "気軽な雑談として" "主人はM5Stackを使ったロボットを作っていた。"
