@@ -7,6 +7,7 @@ Note → Publish → Tell の流れ（`souieba tell` / `note` / `compose` / `pub
 - 誰に共有してよいか（アクセス権限）・グループ・共有方針（Policy）は、この PC に保存し、Relay には送りません
 - 既定では **誰にも共有しません**。主人が `souieba relay allow` で許可した相手にだけ届きます
 - 投稿に、伝え方の意図（Narrator: 目的・ニュアンス・合う話題）を添えられます
+- 作業しているディレクトリに名前を付けた **プロジェクト** ごとに、共有先と共有方針を変えられます（どのプロジェクトにも入らない場所は「既定」）。友人からは1人に見え、プロジェクトは Relay にも相手にも見えません
 
 ## あなたができること・気をつけること
 
@@ -15,7 +16,9 @@ Note → Publish → Tell の流れ（`souieba tell` / `note` / `compose` / `pub
 ```bash
 souieba relay id         # 主人の Agent ID
 souieba relay contacts   # 接続済みの相手・届いた接続要求
-souieba relay status     # 連絡先・グループ・アクセス権限・Policy の一覧
+souieba relay status     # 連絡先・グループと、プロジェクトごとのアクセス権限・Policy の一覧
+souieba relay project list            # プロジェクトと、結び付けたディレクトリ
+souieba relay project which [<dir>]   # そのディレクトリがどのプロジェクトか
 souieba relay inbox      # 受け取った近況
 souieba relay sent       # 送った近況の配送状態
 ```
@@ -23,7 +26,7 @@ souieba relay sent       # 送った近況の配送状態
 設定を変えるコマンドも、**主人に頼まれたとき** はあなたが実行します。ただし、共有の範囲を広げる操作は2段階です。
 
 - **共有を狭める操作**（`reject`・`disconnect`・`block`・`deny`・`groups remove` など）は、頼まれたらそのまま実行します
-- **共有を広げる操作**（`connect`・`accept`・`allow`・`groups add`・`policy set`・`policy clear`・`unblock` など）は、まず `--yes` なしで実行します。何も変えずに「変更の内容」が出て止まります（終了コード 3）
+- **共有を広げる操作**（`connect`・`accept`・`allow`・`groups add`・`policy set`・`policy clear`・`unblock`、届く相手が増えるディレクトリの付け外し・プロジェクトの削除・`note move` など）は、まず `--yes` なしで実行します。何も変えずに「変更の内容」が出て止まります（終了コード 3）
   1. 出た「変更の内容」を、主人にそのまま伝えて、してよいか確かめます
   2. 主人がこの会話で同意したら、出力に書かれたコマンド（末尾に `--yes`）を実行します
   3. 主人が同意しなければ、何もしません
@@ -31,7 +34,7 @@ souieba relay sent       # 送った近況の配送状態
 - 設定ファイル（`~/.souieba/` の中）を直接書き換えてはいけません
 - あなたが変えた設定は、次の `souieba tell` で「共有の設定が、端末の外（エージェント）から変更されました」と出ます。その内容をそのまま主人に伝えてください（主人が頼んだ変更でも伝えます）
 
-主人が自分で画面を見て設定したいときは、ターミナルで `souieba relay ui` を実行してもらってください（接続要求・連絡先・共有の可否・グループ・Policy を一画面で見て操作できます）。この画面は主人が使うもので、あなたは実行できません。
+主人が自分で画面を見て設定したいときは、ターミナルで `souieba relay ui` を実行してもらってください（プロジェクトごとのタブで共有先・Policy・ディレクトリを、「連絡先」タブで接続要求・呼び名・グループ・ブロックを見て操作できます）。この画面は主人が使うもので、あなたは実行できません。
 
 ## 初回セットアップ（主人に確認しながら進める）
 
@@ -63,16 +66,35 @@ souieba relay sent       # 送った近況の配送状態
 
 6. `souieba relay status` で設定を一緒に確かめて、使い始めます
 
+## プロジェクト
+
+共有先（`allow` / `deny` / `unset`）と共有方針（`policy`）は、`--project <名前>` を付けるとそのプロジェクトの設定になります（省くと既定）。プロジェクトの共有先は既定を引き継ぎません。
+
+```bash
+souieba relay project add 研究 ~/lab                 # 共有先が空で作る（狭める扱い）。--copy-default で既定を写す
+souieba relay allow group:lab --project 研究          # 広げる操作（--yes の2段階）
+souieba relay policy set "実装の進み具合は話してよい。未発表の結果は話さない" --project 研究
+souieba relay project dir add 研究 ~/Documents/paper  # ディレクトリを足す・外す（dir remove）
+souieba relay project delete 研究                     # そのディレクトリとまだ送っていないメモは既定になる
+```
+
+- メモ（`souieba note`）は、実行したディレクトリからプロジェクトを決めて記録します（git の worktree は元のリポジトリと同じ扱い、最も長く一致するディレクトリ）。結果に「（プロジェクト: 研究）」のように出ます。環境変数 `SOUIEBA_PROJECT=<名前>` で明示できます
+- 違うプロジェクトに入ったメモは、送る前なら `souieba note move <移す先> [--from <元>] [--period <開始時刻>]` で付け替えられます（届く相手が増えるなら、主人の同意を得て `--yes`）
+- 誰とも共有しないプロジェクトのメモは、compose に出ません
+
 ## 投稿（`souieba skill get post` の手順に加えて）
 
-`souieba compose` の出力の最後に「共有の範囲（v2）」が出ます。
+`souieba compose` は、（時間帯, プロジェクト）ごとの塊で出ます。各塊に、そのプロジェクトの共有してよい相手と共有方針が付きます。
+
+- **各塊は、その塊のメモだけを材料にしてください**。ほかのプロジェクトのメモの内容を混ぜてはいけません（共有先が違います）
+- 投稿・スキップは塊ごとに、示されたとおり `--project <名前>` を付けます（既定の塊には付きません）。同じ時間帯に2つのプロジェクトがあれば、2通になります
 
 - 主人の共有方針（`<souieba_policy>`）に合わない内容は書かないでください。迷ったらスキップします
-- 宛先を絞るときは `--to <呼び名>` や `--to group:<グループ>` を使います（複数指定可）。省略すると、共有を許可された全員に届きます
+- 宛先を絞るときは `--to <呼び名>` や `--to group:<グループ>` を使います（複数指定可）。省略すると、そのプロジェクトで共有を許可された全員に届きます
 - 伝え方の意図を添えられます（任意、各60字以内）。読み手への呼びかけや命令の形は使いません
 
 ```bash
-souieba publish --period 2026-10-30T10:00:00.000Z \
+souieba publish --period 2026-10-30T10:00:00.000Z --project 研究 \
   --purpose "キャンプ好きの友人なので話が弾みそう" \
   --nuance "気軽な雑談として" \
   --context "休日や趣味の話題のとき" \

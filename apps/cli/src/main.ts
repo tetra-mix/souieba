@@ -62,10 +62,11 @@ const USAGE = `使い方: souieba <command>
   hook <${HOOK_TARGETS.join("|")}>   エージェントのフックから呼ぶ。tell の結果とメモの手引きを、そのエージェントの形式で出力する
   mcp                              MCP サーバ（stdio）として動く。シェルを使えない MCP クライアント（Claude Desktop など）用
   told <postId> | release <postId> --reserve で予約したものを確定・解除する
-  note <メモ>                      主人について知ったことをローカルに書き溜める
-  compose [--skip <periodStart>]   投稿待ちの時間帯とメモを表示する
+  note <メモ> [--cwd <ディレクトリ>]  主人について知ったことをローカルに書き溜める（v2 では作業ディレクトリからプロジェクトを決める）
+  note move <プロジェクト> [--from <プロジェクト>] [--period <開始時刻>]   v2: まだ送っていないメモを別のプロジェクトに移す
+  compose [--skip <periodStart> [--project <名前>]]   投稿待ちの時間帯とメモを表示する
   publish [--period previous|current|<ISO>] <本文>   1時間分の投稿をする
-    v2 の Agent では: [--to <相手|group:<グループ>>]... [--purpose <理由>] [--nuance <調子>] [--context <合う話題>]
+    v2 の Agent では: [--project <名前>] [--to <相手|group:<グループ>>]... [--purpose <理由>] [--nuance <調子>] [--context <合う話題>]
                       [--expires-in <時間>] [--allow-reshare]
 
 v2（Relay。エージェントごとの鍵で、アカウントなしで共有する）:
@@ -178,6 +179,11 @@ async function main(argv: string[]) {
       "allow-reshare": { type: "boolean", default: false },
       // souieba relay: 主人の承認を得たあとで、共有を広げる操作を実行する
       yes: { type: "boolean", default: false },
+      // v2 のプロジェクト（設定・publish・compose --skip・note）
+      project: { type: "string" },
+      "copy-default": { type: "boolean", default: false },
+      from: { type: "string" },
+      cwd: { type: "string" },
       json: { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -347,13 +353,25 @@ async function main(argv: string[]) {
       break;
     }
     case "note": {
+      if (sub === "move") {
+        const to = rest[0];
+        if (!to) throw new Error("souieba note move <移す先のプロジェクト> [--from <プロジェクト>] [--period <開始時刻>]");
+        try {
+          await agentCmd.noteMove(flags, to, { from: values.from, periodStart: values.period, yes: values.yes });
+        } catch (err) {
+          if (!(err instanceof NeedsApprovalError)) throw err;
+          console.log(err.message);
+          process.exitCode = 3;
+        }
+        break;
+      }
       const text = [sub, ...rest].filter(Boolean).join(" ");
       if (!text) throw new Error("souieba note <メモ>");
-      agentCmd.note(flags, text);
+      agentCmd.note(flags, text, values.cwd ?? process.cwd());
       break;
     }
     case "compose":
-      agentCmd.compose(flags, values.skip);
+      agentCmd.compose(flags, values.skip, values.project);
       break;
     case "publish": {
       const content = [sub, ...rest].filter(Boolean).join(" ");
@@ -367,6 +385,7 @@ async function main(argv: string[]) {
         context: values.context,
         useTtlMs: hours !== undefined ? hours * 3_600_000 : undefined,
         reshare: values["allow-reshare"] ? "allow" : "deny",
+        project: values.project,
       });
       break;
     }
@@ -379,8 +398,15 @@ async function main(argv: string[]) {
             name: values.name,
             agent: values.agent,
             yes: values.yes,
+            project: values.project,
+            copyDefault: values["copy-default"],
             // 承認のあとに実行するコマンドは、読み取った値から組み立て直す（--agent=x のような書き方も1つにまとめる）
-            raw: [...positionals.slice(1), ...(values.name !== undefined ? ["--name", values.name] : [])],
+            raw: [
+              ...positionals.slice(1),
+              ...(values.name !== undefined ? ["--name", values.name] : []),
+              ...(values.project !== undefined ? ["--project", values.project] : []),
+              ...(values["copy-default"] ? ["--copy-default"] : []),
+            ],
           },
           { log: (l) => console.log(l), interactive: isInteractive(), ask: ttyAsk, now: testableNow },
         );

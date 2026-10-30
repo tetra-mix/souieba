@@ -4,21 +4,33 @@
  * どの操作も、まず「何が変わるか」（Change）を組み立ててから実行する。
  * 共有の範囲を広げる操作（widens）は、呼び出し側で主人の承認を取ってから apply する（docs/v2-relay-plan.md §5）。
  * 広げるかどうかは、共有してよい相手の集合が増えるか（アクセス権限・グループ）と、操作の種類（接続・承認・ブロック解除・Policy）で決める。
+ * 共有先と Policy はプロジェクトごと（docs/v2-projects.md）。ディレクトリの付け外しとプロジェクトの削除は、
+ * そのディレクトリのメモが届く相手が、前後で増えるかで決める。
  */
 import { isAgentId, isValidDisplayName } from "@souieba/core";
+import { resolve } from "node:path";
 import {
   type AccessRule,
   type Contact,
+  DEFAULT_PROJECT,
   type LocalGroup,
   MAX_CHANGE_LOG,
   MAX_LOCAL_GROUPS,
   MAX_POLICY_LENGTH,
+  MAX_PROJECTS,
+  NotesStore,
+  type Project,
   type RelayState,
   allowedSet,
+  canonicalDir,
+  emptyProject,
   findContact,
   findGroup,
+  findProject,
   isGroupId,
+  matchProject,
   requireContactName,
+  requireProjectName,
 } from "@souieba/sdk";
 import type { relayParts } from "./relay.ts";
 
@@ -53,6 +65,30 @@ export function requireContact(state: RelayState, ref: string | undefined): Cont
   return c;
 }
 
+export function requireProject(state: RelayState, ref: string | undefined): Project {
+  const p = findProject(state, ref ?? DEFAULT_PROJECT);
+  if (!p) throw new OpError(`プロジェクト「${ref}」はありません（souieba relay project list で確かめられます）`);
+  return p;
+}
+
+/** 画面や文面に出すプロジェクトの名前 */
+export const projectLabel = (name: string) => (name === DEFAULT_PROJECT ? "既定" : name);
+
+/** 変更の説明の頭に付ける、どのプロジェクトの設定か（プロジェクトを作っていなければ付けない） */
+function scope(state: RelayState, name: string): string {
+  if (name === DEFAULT_PROJECT && Object.keys(state.projects).length === 1) return "";
+  return name === DEFAULT_PROJECT ? "既定のプロジェクトで、" : `プロジェクト「${name}」で、`;
+}
+
+/** 引数のディレクトリを、比べるときの形（realpath・worktree は元のリポジトリ）にする */
+function dirArg(dir: string): string {
+  try {
+    return canonicalDir(resolve(dir));
+  } catch {
+    throw new OpError(`ディレクトリ「${dir}」が見つかりません`);
+  }
+}
+
 export function requireGroup(state: RelayState, ref: string | undefined): LocalGroup {
   const g = ref ? findGroup(state, ref) : undefined;
   if (!g) throw new OpError(`グループ「${(ref ?? "").replace(/^group:/, "")}」はありません`);
@@ -63,42 +99,73 @@ export function requireGroup(state: RelayState, ref: string | undefined): LocalG
 function forget(s: RelayState, id: string): void {
   delete s.contacts[id];
   delete s.pendingNames[id];
-  delete s.access.agents[id];
+  for (const p of Object.values(s.projects)) delete p.access.agents[id];
   for (const g of Object.values(s.groups)) g.members = g.members.filter((m) => m !== id);
 }
 
-/** 共有してよい相手の変化の説明（増えた人・減った人） */
-function describeDiff(before: RelayState, after: RelayState): { widens: boolean; note: string } {
-  const b = allowedSet(before);
-  const a = allowedSet(after);
-  const added = [...a].filter((id) => !b.has(id));
-  const removed = [...b].filter((id) => !a.has(id));
+/**
+ * 比べる組（変える前のプロジェクト, 変えたあとのプロジェクト, 見出し）。
+ * 共有の設定を変える操作では、同じプロジェクトの前後。ディレクトリの付け外しでは、そのディレクトリが入るプロジェクトの前後
+ */
+type Shift = { before: string; after: string; label: string };
+
+/** 共有してよい相手の変化の説明（増えた人・減った人）。Policy が変わって、届く相手がいれば、それも広げる扱い */
+function describeDiff(before: RelayState, after: RelayState, shifts: Shift[]): { widens: boolean; note: string } {
   const names = (ids: string[]) => ids.map((id) => after.contacts[id]?.name ?? before.contacts[id]?.name ?? short(id)).join("、");
   const parts: string[] = [];
-  if (added.length) parts.push(`共有する相手が増えます: ${names(added)}`);
-  if (removed.length) parts.push(`共有しなくなる相手: ${names(removed)}`);
-  return { widens: added.length > 0, note: parts.length ? `（${parts.join("。")}）` : "" };
+  let widens = false;
+  for (const sh of shifts) {
+    const b = before.projects[sh.before] ? allowedSet(before, sh.before) : new Set<string>();
+    const a = after.projects[sh.after] ? allowedSet(after, sh.after) : new Set<string>();
+    const added = [...a].filter((id) => !b.has(id));
+    const removed = [...b].filter((id) => !a.has(id));
+    const tag = sh.label ? `（${sh.label}）` : "";
+    if (added.length) parts.push(`共有する相手が増えます${tag}: ${names(added)}`);
+    if (removed.length) parts.push(`共有しなくなる相手${tag}: ${names(removed)}`);
+    if (added.length) widens = true;
+    if (sh.before !== sh.after && a.size > 0 && before.projects[sh.before]?.policy?.text !== after.projects[sh.after]?.policy?.text) {
+      parts.push(`共有方針が変わります${tag}`);
+      widens = true;
+    }
+  }
+  return { widens, note: parts.length ? `（${parts.join("。")}）` : "" };
+}
+
+/** 共有の設定を変える操作で比べる組（どのプロジェクトも、同じプロジェクトの前後）。プロジェクトが1つなら見出しは付けない */
+function sameProjects(before: RelayState): Shift[] {
+  const names = Object.keys(before.projects);
+  return names.map((n) => ({ before: n, after: n, label: names.length > 1 ? projectLabel(n) : "" }));
 }
 
 export function relayOps(ctx: OpsContext) {
   const { parts: p } = ctx;
   const load = () => p.state.load();
 
-  /** 手元の状態だけを変える操作。変える前後で、共有してよい相手が増えるかを比べる */
-  function mutation(summary: string, fn: (s: RelayState) => void, done: string, opts: { alwaysWidens?: boolean } = {}): Change {
+  /** 手元の状態だけを変える操作。変える前後で、共有してよい相手が増えるかを比べる（既定は、どのプロジェクトも同じプロジェクトの前後） */
+  function mutation(
+    summary: string,
+    fn: (s: RelayState) => void,
+    done: string,
+    opts: { alwaysWidens?: boolean; shifts?: (before: RelayState, after: RelayState) => Shift[]; after?: () => void } = {},
+  ): Change {
     const before = load();
     const after = structuredClone(before);
     fn(after);
-    const diff = describeDiff(before, after);
+    const diff = describeDiff(before, after, opts.shifts ? opts.shifts(before, after) : sameProjects(before));
     return {
       summary: `${summary}${diff.note}`,
       widens: opts.alwaysWidens || diff.widens,
       apply: async () => {
         p.state.update(fn);
+        opts.after?.();
         return done;
       },
     };
   }
+
+  /** ディレクトリごとに、そのメモが入るプロジェクトの前後を比べる */
+  const dirShifts = (dirs: string[]) => (before: RelayState, after: RelayState) =>
+    dirs.map((d) => ({ before: matchProject(before, d).project, after: matchProject(after, d).project, label: d }));
 
   return {
     connect(id: string, rawName: string): Change {
@@ -195,21 +262,23 @@ export function relayOps(ctx: OpsContext) {
       };
     },
 
-    /** rule が null なら個別の設定を消す */
-    setAccess(ref: string, rule: AccessRule | null): Change {
+    /** rule が null なら個別の設定を消す。project を省くと既定のプロジェクト */
+    setAccess(ref: string, rule: AccessRule | null, project: string = DEFAULT_PROJECT): Change {
       const s = load();
+      const pr = requireProject(s, project).name;
       const g = ref.startsWith("group:") || (!findContact(s, ref) && findGroup(s, ref)) ? requireGroup(s, ref) : undefined;
       const id = g ? g.id : requireContact(s, ref).agentId;
       const target = g ? `グループ「${g.name}」（${g.members.length}人）` : who(s, id);
       const verb = rule === "allow" ? "に近況を共有してよいことにします" : rule === "deny" ? "には近況を共有しないことにします" : "の個別の設定を消します";
       return mutation(
-        `${target}${verb}`,
+        `${scope(s, pr)}${target}${verb}`,
         (st) => {
-          const table = g ? st.access.groups : st.access.agents;
+          const acc = st.projects[pr]!.access;
+          const table = g ? acc.groups : acc.agents;
           if (rule === null) delete table[id];
           else table[id] = rule;
         },
-        `${target}${verb.replace("ことにします", "ことにしました").replace("消します", "消しました")}`,
+        `${scope(s, pr)}${target}${verb.replace("ことにします", "ことにしました").replace("消します", "消しました")}`,
       );
     },
 
@@ -260,30 +329,143 @@ export function relayOps(ctx: OpsContext) {
         `グループ「${g.name}」を消します（このグループへの共有の設定も消えます）`,
         (st) => {
           delete st.groups[g.id];
-          delete st.access.groups[g.id];
+          for (const pr of Object.values(st.projects)) delete pr.access.groups[g.id];
         },
         `グループ「${g.name}」を消しました`,
       );
     },
 
     /** Policy は意味の判断に使うもので、機械的には狭めたか広げたか分からないので、変えるときはいつも承認を取る */
-    policySet(text: string): Change {
+    policySet(text: string, project: string = DEFAULT_PROJECT): Change {
       const t = text.trim();
       if (!t) throw new OpError("共有方針の文章を指定してください");
       if (t.length > MAX_POLICY_LENGTH) throw new OpError(`共有方針は ${MAX_POLICY_LENGTH} 文字までにしてください`);
-      return mutation(`共有方針を次の内容にします:\n  ${t}`, (st) => void (st.policy = { text: t, updatedAt: ctx.now().toISOString() }), "共有方針を設定しました", {
+      const s = load();
+      const pr = requireProject(s, project).name;
+      return mutation(
+        `${scope(s, pr)}共有方針を次の内容にします:\n  ${t}`,
+        (st) => void (st.projects[pr]!.policy = { text: t, updatedAt: ctx.now().toISOString() }),
+        "共有方針を設定しました",
+        { alwaysWidens: true },
+      );
+    },
+
+    policyClear(project: string = DEFAULT_PROJECT): Change {
+      const s = load();
+      const pr = requireProject(s, project).name;
+      return mutation(`${scope(s, pr)}共有方針を消します（方針による制限がなくなります）`, (st) => void (st.projects[pr]!.policy = null), "共有方針を消しました", {
         alwaysWidens: true,
       });
     },
 
-    policyClear(): Change {
-      return mutation("共有方針を消します（方針による制限がなくなります）", (st) => void (st.policy = null), "共有方針を消しました", { alwaysWidens: true });
+    /**
+     * プロジェクトを作る。共有先は空で始まる（copyDefault なら既定のプロジェクトの共有先と Policy を写す）。
+     * ディレクトリを渡せば結び付ける。そのディレクトリのメモが届く相手が増えるなら、広げる操作
+     */
+    projectAdd(rawName: string, dirs: string[], opts: { copyDefault?: boolean } = {}): Change {
+      const s = load();
+      let name: string;
+      try {
+        name = requireProjectName(rawName, s);
+      } catch (err) {
+        throw new OpError(err instanceof Error ? err.message : String(err));
+      }
+      if (Object.keys(s.projects).length >= MAX_PROJECTS) throw new OpError(`プロジェクトは ${MAX_PROJECTS} 個までです`);
+      const canon = [...new Set(dirs.map(dirArg))];
+      const def = s.projects[DEFAULT_PROJECT]!;
+      const where = canon.length ? `（ディレクトリ: ${canon.join("、")}）` : "";
+      const how = opts.copyDefault ? "既定のプロジェクトの共有先と共有方針を写して" : "共有先を空で";
+      return mutation(
+        `プロジェクト「${name}」を${how}作ります${where}`,
+        (st) => {
+          const pr = emptyProject(name, ctx.now().toISOString(), canon);
+          if (opts.copyDefault) {
+            pr.access = structuredClone(def.access);
+            pr.policy = def.policy ? { ...def.policy } : null;
+          }
+          for (const other of Object.values(st.projects)) other.dirs = other.dirs.filter((d) => !canon.includes(d));
+          st.projects[name] = pr;
+        },
+        `プロジェクト「${name}」を作りました`,
+        { shifts: dirShifts(canon) },
+      );
+    },
+
+    /** ディレクトリを付ける・外す。ほかのプロジェクトに付いていたディレクトリは、そちらから外して付け替える */
+    projectDirs(ref: string, add: string[], remove: string[]): Change {
+      const s = load();
+      const pr = requireProject(s, ref);
+      if (pr.name === DEFAULT_PROJECT) throw new OpError("既定のプロジェクトにはディレクトリを付けられません（どのプロジェクトにも入らないディレクトリが既定になります）");
+      const addDirs = [...new Set(add.map(dirArg))];
+      const removeDirs = remove.map((d) => {
+        const hit = pr.dirs.find((x) => x === d || x === resolve(d));
+        if (hit) return hit;
+        const c = dirArg(d);
+        if (!pr.dirs.includes(c)) throw new OpError(`プロジェクト「${pr.name}」にディレクトリ「${d}」は付いていません`);
+        return c;
+      });
+      if (addDirs.length + removeDirs.length === 0) throw new OpError("付ける・外すディレクトリを指定してください");
+      const what = [
+        addDirs.length ? `プロジェクト「${pr.name}」に ${addDirs.join("、")} を付けます` : "",
+        removeDirs.length ? `プロジェクト「${pr.name}」から ${removeDirs.join("、")} を外します（ほかに合うプロジェクトがなければ既定になります）` : "",
+      ]
+        .filter(Boolean)
+        .join("。");
+      return mutation(
+        what,
+        (st) => {
+          for (const other of Object.values(st.projects)) if (other.name !== pr.name) other.dirs = other.dirs.filter((d) => !addDirs.includes(d));
+          const t = st.projects[pr.name]!;
+          t.dirs = [...new Set([...t.dirs.filter((d) => !removeDirs.includes(d)), ...addDirs])];
+        },
+        `プロジェクト「${pr.name}」のディレクトリを変えました`,
+        { shifts: dirShifts([...addDirs, ...removeDirs]) },
+      );
+    },
+
+    /** プロジェクトを消す。そのディレクトリと、まだ送っていないメモは既定のプロジェクトになる */
+    projectDelete(ref: string): Change {
+      const s = load();
+      const pr = requireProject(s, ref);
+      if (pr.name === DEFAULT_PROJECT) throw new OpError("既定のプロジェクトは消せません");
+      return mutation(
+        `プロジェクト「${pr.name}」を消します（ディレクトリと、まだ送っていないメモは既定のプロジェクトになります）`,
+        (st) => void delete st.projects[pr.name],
+        `プロジェクト「${pr.name}」を消しました`,
+        {
+          shifts: () => [{ before: pr.name, after: DEFAULT_PROJECT, label: "このプロジェクトのメモ" }],
+          after: () => void new NotesStore("", p.dir).move(DEFAULT_PROJECT, { from: pr.name }, ctx.now()),
+        },
+      );
+    },
+
+    /** まだ送っていないメモを別のプロジェクトに付け替える（souieba note move）。届く相手が増えるなら広げる操作 */
+    noteMove(to: string, opts: { from?: string; periodStart?: string }): Change {
+      const s = load();
+      const target = requireProject(s, to).name;
+      const from = opts.from !== undefined ? requireProject(s, opts.from).name : undefined;
+      const sources = from !== undefined ? [from] : Object.keys(s.projects).filter((n) => n !== target);
+      const label = (n: string) => (n === DEFAULT_PROJECT ? "既定" : `「${n}」`);
+      const diff = describeDiff(
+        s,
+        s,
+        sources.map((n) => ({ before: n, after: target, label: `${label(n)}のメモ` })),
+      );
+      const what = `${from !== undefined ? `プロジェクト${label(from)}の` : ""}${opts.periodStart ? `${opts.periodStart} からの1時間の` : ""}まだ送っていないメモを、プロジェクト${label(target)}に移します`;
+      return {
+        summary: `${what}${diff.note}`,
+        widens: diff.widens,
+        apply: async () => {
+          const n = new NotesStore("", p.dir).move(target, { from, periodStart: opts.periodStart }, ctx.now());
+          return n > 0 ? `${n} 件のメモをプロジェクト${label(target)}に移しました` : "移すメモはありませんでした";
+        },
+      };
     },
 
     /** 端末の外（エージェント）から変えたことを記録する。次の tell で主人に知らせる */
     record(change: Change): void {
       p.state.update((st) => {
-        st.changeLog = [...(st.changeLog ?? []), { at: ctx.now().toISOString(), summary: change.summary.split("\n")[0]!, widens: change.widens, notified: false }].slice(
+        st.changeLog = [...(st.changeLog ?? []), { at: ctx.now().toISOString(), summary: change.summary.replace(/\s*\n\s*/g, " "), widens: change.widens, notified: false }].slice(
           -MAX_CHANGE_LOG,
         );
       });

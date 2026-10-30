@@ -59,12 +59,16 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
       title: "主人の近況をメモする",
       description:
         "主人から作業を頼まれたときや、主人がしていること・したこと・これからすることが話に出たときに、回答を書く前に呼ぶ。メモはこの PC にだけ保存され、1時間ごとの投稿の材料になる。認証情報・住所・金融情報・健康や家族の話題・他人の個人情報・主人が内緒と言ったことは書かない。",
-      inputSchema: { text: z.string().min(1).max(400).describe("「主人は……」で始まる三人称のメモ（〜100字）") },
+      inputSchema: {
+        text: z.string().min(1).max(400).describe("「主人は……」で始まる三人称のメモ（〜100字）"),
+        cwd: z.string().max(1000).optional().describe("v2 のみ: 主人と作業しているディレクトリ（分かるときだけ。共有先を決めるプロジェクトの判定に使う）"),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    ({ text: memo }) =>
+    ({ text: memo, cwd }) =>
       guarded(async () => {
-        const r = agentCmd.noteResult(f, memo);
+        // ディレクトリが分からない会話（Claude Desktop など）は既定のプロジェクト。サーバのカレントディレクトリは使わない
+        const r = agentCmd.noteResult(f, memo, cwd ?? null);
         if (!r.ok) return text(r.text, true);
         // 投稿待ちの時間帯も知らせる（手引きのとおり。手元のファイルを読むだけなので、メモは遅くならない）
         let pending: string | null = null;
@@ -103,6 +107,7 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
         period: z.string().describe("souieba_compose が示した時間帯の開始時刻（ISO 8601）"),
         content: z.string().min(1).max(400).describe("「主人は……」で始まる近況"),
         // v2（Relay）の Agent のときだけ使う。souieba_compose が案内する
+        project: z.string().max(80).optional().describe("v2 のみ: souieba_compose が示したプロジェクト（省略すると既定）"),
         to: z.array(z.string().max(80)).max(20).optional().describe("v2 のみ: 宛先（相手の呼び名か group:<グループ>）。省略すると共有してよい全員"),
         purpose: z.string().max(200).optional().describe("v2 のみ: なぜこの相手に伝えたいか（60字以内）"),
         nuance: z.string().max(200).optional().describe("v2 のみ: どんな調子で伝えてほしいか（60字以内）"),
@@ -110,9 +115,9 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    ({ period, content, to, purpose, nuance, context }) =>
+    ({ period, content, project, to, purpose, nuance, context }) =>
       guarded(async () => {
-        const r = await agentCmd.publishResult(f, content, period, { to, purpose, nuance, context });
+        const r = await agentCmd.publishResult(f, content, period, { to, purpose, nuance, context, project });
         return text(r.text, !r.ok);
       }),
   );
@@ -122,10 +127,13 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
     {
       title: "時間帯を投稿しないことにする",
       description: "souieba_compose で示された時間帯に伝える価値のある内容がなければ、投稿せずに済ませる。",
-      inputSchema: { period: z.string().describe("souieba_compose が示した時間帯の開始時刻（ISO 8601）") },
+      inputSchema: {
+        period: z.string().describe("souieba_compose が示した時間帯の開始時刻（ISO 8601）"),
+        project: z.string().max(80).optional().describe("v2 のみ: souieba_compose が示したプロジェクト（省略すると既定）"),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ period }) => guarded(() => text(agentCmd.skipResult(f, period).text)),
+    ({ period, project }) => guarded(() => text(agentCmd.skipResult(f, period, project).text)),
   );
 
   return server;

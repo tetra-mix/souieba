@@ -19,14 +19,17 @@ import {
   RelayStateStore,
   RelayTransport,
   type ResolvedRelayAgent,
+  DEFAULT_PROJECT,
   accessFor,
+  canonicalDir,
+  resolveProject,
   agentNameTaken,
   loadClientConfig,
   resolveRelayAgent,
   saveClientConfig,
   souiebaHome,
 } from "@souieba/sdk";
-import { type Change, OpError, relayOps, who } from "./relay-ops.ts";
+import { type Change, OpError, projectLabel, relayOps, requireProject, who } from "./relay-ops.ts";
 import { CLI_VERSION } from "./version.ts";
 
 export type RelayIo = {
@@ -73,10 +76,18 @@ export const RELAY_USAGE = `使い方: souieba relay <command>（v2: Relay 経�
   rename <相手> <新しい呼び名>            呼び名を変える（呼び名のない接続済みの相手に付けるのにも使う）
   disconnect <相手> | block <相手> | unblock <Agent ID>
   groups [list] | groups create <ID> <名前> | groups add <グループ> <相手...> | groups remove <グループ> <相手...> | groups delete <グループ>
-  allow <相手|group:<グループ>> | deny <相手|group:<グループ>> | unset <相手|group:<グループ>>
+  allow <相手|group:<グループ>> | deny <相手|group:<グループ>> | unset <相手|group:<グループ>>  [--project <名前>]
                                           共有してよいか（既定はすべて禁止。個人の設定はグループより優先、グループ同士は deny が優先）
-  policy | policy set <方針の文章> | policy clear
+  policy | policy set <方針の文章> | policy clear  [--project <名前>]
                                           共有方針（自然言語）。エージェントが投稿前に読んで判断する
+
+プロジェクト（作業するディレクトリごとに、共有先と共有方針を変える。--project を省くと既定のプロジェクト）:
+  project list                            プロジェクトと、結び付けたディレクトリ
+  project add <名前> [<ディレクトリ>...] [--copy-default]
+                                          作る（共有先は空で始まる。--copy-default で既定の共有先と方針を写す）
+  project dir add|remove <名前> <ディレクトリ>...
+  project delete <名前>                   消す（そのディレクトリとまだ送っていないメモは既定になる）
+  project which [<ディレクトリ>]          そのディレクトリ（省略時はカレント）がどのプロジェクトか
 
 <相手> は呼び名か Agent ID。<グループ> は ID か名前
 共有を狭める操作（reject・disconnect・block・deny・groups remove など）は、確認なしで実行します`;
@@ -124,7 +135,17 @@ function shellQuote(a: string): string {
   return a.length > 0 && !/[\s'"$`\\!*?;&|<>(){}[\]#~=%]/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`;
 }
 
-export type RelayArgs = { sub: string | undefined; rest: string[]; name?: string; agent?: string; yes?: boolean; raw: string[] };
+export type RelayArgs = {
+  sub: string | undefined;
+  rest: string[];
+  name?: string;
+  agent?: string;
+  yes?: boolean;
+  /** 設定するプロジェクト（省略時は既定） */
+  project?: string;
+  copyDefault?: boolean;
+  raw: string[];
+};
 
 export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
   const { sub, rest } = a;
@@ -193,7 +214,8 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       io.log("## 接続済み");
       for (const c of by("accepted")) {
         const contact = s.contacts[c.peer];
-        io.log(`- ${contact ? contact.name : "（呼び名なし。souieba relay rename で付けてください）"}  ${c.peer}  共有: ${accessFor(s, c.peer).allowed ? "許可" : "禁止"}`);
+        const shared = Object.keys(s.projects).filter((pr) => accessFor(s, c.peer, pr).allowed).map(projectLabel);
+        io.log(`- ${contact ? contact.name : "（呼び名なし。souieba relay rename で付けてください）"}  ${c.peer}  共有: ${shared.length ? shared.join("、") : "なし"}`);
       }
       io.log("## 届いた接続要求（承認: souieba relay accept <ID> --name <呼び名>）");
       for (const c of by("incoming")) io.log(`- ${c.peer}（${c.createdAt}）`);
@@ -205,11 +227,19 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     case "status": {
       const s = p.state.load();
       io.log(`Agent ID: ${r.identity.agentId}（${r.name}、Relay: ${r.relayUrl}）`);
-      io.log(`連絡先: ${Object.values(s.contacts).map((c) => `${c.name}${accessFor(s, c.agentId).allowed ? "（共有可）" : ""}`).join("、") || "なし"}`);
-      io.log(`グループ: ${Object.values(s.groups).map((g) => `${g.name}[${g.id}]（${g.members.length}人${s.access.groups[g.id] ? `、${s.access.groups[g.id]}` : ""}）`).join("、") || "なし"}`);
-      const rules = Object.entries(s.access.agents).map(([id, rule]) => `${who(s, id)}: ${rule}`);
-      io.log(`個人のアクセス権限: ${rules.join("、") || "なし"}`);
-      io.log(`Policy: ${s.policy ? s.policy.text : "未設定（souieba relay policy set <方針> で設定）"}`);
+      io.log(`連絡先: ${Object.values(s.contacts).map((c) => c.name).join("、") || "なし"}`);
+      io.log(`グループ: ${Object.values(s.groups).map((g) => `${g.name}[${g.id}]（${g.members.length}人）`).join("、") || "なし"}`);
+      for (const pr of Object.values(s.projects)) {
+        io.log("");
+        io.log(`## プロジェクト: ${projectLabel(pr.name)}${pr.name === DEFAULT_PROJECT ? "（どのプロジェクトにも入らないディレクトリ）" : ""}`);
+        if (pr.name !== DEFAULT_PROJECT) io.log(`ディレクトリ: ${pr.dirs.join("、") || "なし"}`);
+        io.log(`共有する相手: ${Object.values(s.contacts).filter((c) => accessFor(s, c.agentId, pr.name).allowed).map((c) => `${c.name}（共有可）`).join("、") || "なし"}`);
+        const g = Object.entries(pr.access.groups).map(([id, rule]) => `${s.groups[id]?.name ?? id}: ${rule}`);
+        if (g.length) io.log(`グループのアクセス権限: ${g.join("、")}`);
+        const rules = Object.entries(pr.access.agents).map(([id, rule]) => `${who(s, id)}: ${rule}`);
+        io.log(`個人のアクセス権限: ${rules.join("、") || "なし"}`);
+        io.log(`Policy: ${pr.policy ? pr.policy.text : `未設定（souieba relay policy set <方針>${pr.name === DEFAULT_PROJECT ? "" : ` --project ${pr.name}`} で設定）`}`);
+      }
       return;
     }
     case "inbox": {
@@ -258,7 +288,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
         if (Object.keys(s.groups).length === 0) io.log("グループはありません");
         for (const g of Object.values(s.groups)) {
           io.log(
-            `- ${g.name} [${g.id}]（共有: ${s.access.groups[g.id] ?? "未設定"}）: ${g.members.map((m) => s.contacts[m]?.name ?? short(m)).join("、") || "メンバーなし"}`,
+            `- ${g.name} [${g.id}]（共有: ${Object.values(s.projects).filter((pr) => pr.access.groups[g.id]).map((pr) => `${projectLabel(pr.name)}=${pr.access.groups[g.id]}`).join("、") || "未設定"}）: ${g.members.map((m) => s.contacts[m]?.name ?? short(m)).join("、") || "メンバーなし"}`,
           );
         }
         return;
@@ -272,17 +302,53 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     case "allow":
     case "deny":
     case "unset":
-      return run(ops.setAccess(need(rest[0], `souieba relay ${sub} <相手|group:<グループ>>`), sub === "unset" ? null : sub));
+      return run(ops.setAccess(need(rest[0], `souieba relay ${sub} <相手|group:<グループ>> [--project <名前>]`), sub === "unset" ? null : sub, a.project));
     case "policy": {
       const action = rest[0];
       if (action === undefined) {
-        const s = p.state.load();
-        io.log(s.policy ? `共有方針（${s.policy.updatedAt} に設定）:\n${s.policy.text}` : "共有方針は未設定です");
+        const pol = requireProject(p.state.load(), a.project).policy;
+        io.log(pol ? `共有方針（${pol.updatedAt} に設定）:\n${pol.text}` : "共有方針は未設定です");
         return;
       }
-      if (action === "clear") return run(ops.policyClear());
-      if (action === "set") return run(ops.policySet(rest.slice(1).join(" ")));
-      throw new OpError("souieba relay policy [set <方針> | clear]");
+      if (action === "clear") return run(ops.policyClear(a.project));
+      if (action === "set") return run(ops.policySet(rest.slice(1).join(" "), a.project));
+      throw new OpError("souieba relay policy [set <方針> | clear] [--project <名前>]");
+    }
+    case "project": {
+      const [action, ...args] = rest;
+      if (action === undefined || action === "list") {
+        const s = p.state.load();
+        for (const pr of Object.values(s.projects)) {
+          const n = Object.values(s.contacts).filter((c) => accessFor(s, c.agentId, pr.name).allowed).length;
+          const dirs = pr.name === DEFAULT_PROJECT ? "（ほかのどのプロジェクトにも入らないディレクトリ）" : pr.dirs.join("、") || "ディレクトリなし";
+          io.log(`- ${projectLabel(pr.name)}: 共有先 ${n} 人、方針${pr.policy ? "あり" : "なし"}  ${dirs}`);
+        }
+        return;
+      }
+      if (action === "which") {
+        const dir = args[0] ?? process.cwd();
+        const s = p.state.load();
+        const c = resolveProject(s, { cwd: dir, env: {} });
+        let canon = dir;
+        try {
+          canon = canonicalDir(dir);
+        } catch {
+          // ないディレクトリは既定
+        }
+        io.log(`${canon}: ${c.dir ? `プロジェクト「${c.project}」（${c.dir}）` : "既定のプロジェクト"}`);
+        if (process.env.SOUIEBA_PROJECT) io.log(`（環境変数 SOUIEBA_PROJECT=${process.env.SOUIEBA_PROJECT} があるので、メモはそちらに入ります）`);
+        return;
+      }
+      if (action === "add") return run(ops.projectAdd(need(args[0], "souieba relay project add <名前> [<ディレクトリ>...] [--copy-default]"), args.slice(1), { copyDefault: a.copyDefault }));
+      if (action === "dir") {
+        const [verb, name, ...dirs] = args;
+        const usage = "souieba relay project dir add|remove <名前> <ディレクトリ>...";
+        if (verb === "add") return run(ops.projectDirs(need(name, usage), dirs, []));
+        if (verb === "remove") return run(ops.projectDirs(need(name, usage), [], dirs));
+        throw new OpError(usage);
+      }
+      if (action === "delete") return run(ops.projectDelete(need(args[0], "souieba relay project delete <名前>")));
+      throw new OpError("souieba relay project [list | add | dir add | dir remove | delete | which]");
     }
     default:
       throw new Error(`不明なコマンドです: relay ${sub}\n${RELAY_USAGE}`);
