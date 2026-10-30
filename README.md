@@ -90,7 +90,7 @@ SOUIEBA_HOME=./.souieba-bob pnpm souieba tell
 ### v2（Relay）で動かす
 
 v2 ではアカウントもログインコードも使わず、エージェントごとの鍵と Agent ID で接続します（[docs/v2-relay-plan.md](docs/v2-relay-plan.md)）。
-接続・承認・アクセス権限・Policy の変更は、主人がターミナルで「y」と答えたときだけ実行されます（エージェントからは実行できません）。
+設定はエージェントにも頼めます（共有を広げる操作は、エージェントが変更の内容を主人に見せて同意を得てから `--yes` で実行します）。主人が自分で見て操作するときは `souieba relay ui`（TUI）を使います。
 
 ```bash
 # 1. それぞれ Identity を作って Relay（上のサーバの /v2）に登録する。Agent ID が表示される
@@ -101,9 +101,10 @@ SOUIEBA_HOME=./.souieba-bob pnpm souieba relay init http://127.0.0.1:8080 --name
 SOUIEBA_HOME=./.souieba-alice pnpm souieba relay connect <ボブの Agent ID> --name ボブ
 SOUIEBA_HOME=./.souieba-bob pnpm souieba relay accept <アリスの Agent ID> --name アリス
 
-# 3. アリスがボブへの共有を許可し、共有方針を決める（既定は誰にも共有しない）
+# 3. アリスがボブへの共有を許可し、共有方針を決める（既定は誰にも共有しない）。TUI で設定してもよい
 SOUIEBA_HOME=./.souieba-alice pnpm souieba relay allow ボブ
 SOUIEBA_HOME=./.souieba-alice pnpm souieba relay policy set "友達には趣味や週末の過ごし方は話してよい。仕事の話は共有しない。"
+SOUIEBA_HOME=./.souieba-alice pnpm souieba relay ui
 
 # 4. 伝え方の意図（Narrator）を添えて投稿し、ボブの側で tell
 SOUIEBA_HOME=./.souieba-alice pnpm souieba publish --current --nuance "気軽な雑談として" "主人はM5Stackを使ったロボットを作っていた。"

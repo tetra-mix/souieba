@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import * as agentCmd from "./agent.ts";
-import { NeedsOwnerError, relayCommand, ttyConfirm } from "./relay.ts";
+import { NeedsApprovalError, isInteractive, relayCommand, ttyAsk } from "./relay.ts";
 import {
   CLIENT_VERSION_HEADER,
   type KeyDirectory,
@@ -176,6 +176,8 @@ async function main(argv: string[]) {
       context: { type: "string" },
       "expires-in": { type: "string" },
       "allow-reshare": { type: "boolean", default: false },
+      // souieba relay: 主人の承認を得たあとで、共有を広げる操作を実行する
+      yes: { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -376,14 +378,15 @@ async function main(argv: string[]) {
             rest,
             name: values.name,
             agent: values.agent,
-            // 主人に頼むコマンドは、読み取った値から組み立て直す（--agent=x のような書き方も1つにまとめる）
+            yes: values.yes,
+            // 承認のあとに実行するコマンドは、読み取った値から組み立て直す（--agent=x のような書き方も1つにまとめる）
             raw: [...positionals.slice(1), ...(values.name !== undefined ? ["--name", values.name] : [])],
           },
-          { log: (l) => console.log(l), confirm: ttyConfirm, now: testableNow },
+          { log: (l) => console.log(l), interactive: isInteractive(), ask: ttyAsk, now: testableNow },
         );
       } catch (err) {
-        if (!(err instanceof NeedsOwnerError)) throw err;
-        // エージェントが実行したとき。案内は標準出力に出し、終了コード 3 で止める
+        if (!(err instanceof NeedsApprovalError)) throw err;
+        // エージェントが --yes なしで実行したとき。案内は標準出力に出し、終了コード 3 で止める
         console.log(err.message);
         process.exitCode = 3;
       }

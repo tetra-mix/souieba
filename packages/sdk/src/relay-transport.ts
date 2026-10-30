@@ -112,6 +112,8 @@ export type RelayNotices = {
   unnamedPeers: string[];
   /** Encryption 鍵が新しい版に替わった連絡先 */
   keyChanges: { agentId: string; name: string; at: string }[];
+  /** 端末の外（エージェント）から変えた共有の設定で、まだ主人に知らせていないもの */
+  settingsChanges: { at: string; summary: string; widens: boolean }[];
 };
 
 export type RelayTransportOptions = {
@@ -152,8 +154,8 @@ export class RelayTransport implements SouiebaTransport {
    * Relay の接続一覧を取り、新しく接続した相手を連絡先に加える（鍵を検証して固定する）。
    * 呼び名は、接続要求を送った・承認したときに主人が付けたもの。なければ連絡先に加えず、知らせる
    */
-  async syncContacts(interactive = false): Promise<{ connections: RelayConnection[]; connected: Set<string> }> {
-    const { connections } = await this.opts.http.connections(interactive);
+  async syncContacts(interactive = false): Promise<{ connections: RelayConnection[]; connected: Set<string>; blocked: string[] }> {
+    const { connections, blocked } = await this.opts.http.connections(interactive);
     this.lastConnections = connections;
     const accepted = connections.filter((c) => c.status === "accepted").map((c) => c.peer);
     const state = this.opts.state.load();
@@ -170,7 +172,7 @@ export class RelayTransport implements SouiebaTransport {
         }
       });
     }
-    return { connections, connected: new Set(accepted) };
+    return { connections, connected: new Set(accepted), blocked };
   }
 
   // ---- Publish ----
@@ -365,14 +367,16 @@ export class RelayTransport implements SouiebaTransport {
         .filter((c) => c.keyChangedAt)
         .map((c) => ({ agentId: c.agentId, name: c.name, at: c.keyChangedAt! }));
       for (const c of Object.values(s.contacts)) delete c.keyChangedAt;
+      const settingsChanges = (s.changeLog ?? []).filter((c) => !c.notified).map(({ at, summary, widens }) => ({ at, summary, widens }));
+      for (const c of s.changeLog ?? []) c.notified = true;
       // 接続の一覧をまだ取っていなければ、接続要求については何も言わない（知らせ済みの記録も変えない）
-      if (!conns) return { incomingRequests: [], unnamedPeers: [], keyChanges };
+      if (!conns) return { incomingRequests: [], unnamedPeers: [], keyChanges, settingsChanges };
       const incoming = conns.filter((c) => c.status === "incoming").map((c) => c.peer);
       const fresh = incoming.filter((id) => !s.notifiedRequests.includes(id));
       // 取り消された要求は忘れる（同じ人からまた届いたら知らせ直す）
       s.notifiedRequests = incoming;
       const unnamedPeers = conns.filter((c) => c.status === "accepted" && !s.contacts[c.peer]).map((c) => c.peer);
-      return { incomingRequests: fresh, unnamedPeers, keyChanges };
+      return { incomingRequests: fresh, unnamedPeers, keyChanges, settingsChanges };
     });
   }
 

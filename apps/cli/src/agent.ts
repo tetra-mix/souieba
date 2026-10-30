@@ -517,13 +517,21 @@ async function relayTellResult(
   else if (update) lines.push(`souieba: ${updateAdvice(update)}。ユーザーへの回答のあとで、主人に更新を勧めてください。あなたが実行してはいけません。`);
   for (const id of notices.incomingRequests) {
     lines.push(
-      `souieba: Agent ${id} から接続要求が届いています。ユーザーへの回答のあとで、このことを主人に伝えてください。承認するかは主人が決めます` +
-        `（承認: souieba relay accept ${id} --name <呼び名>、拒否: souieba relay reject ${id}。主人がターミナルで実行します）。あなたが実行してはいけません。`,
+      `souieba: Agent ${id} から接続要求が届いています。ユーザーへの回答のあとで、このことを主人に伝えてください。承認するかは主人が決めます。` +
+        `主人に承認を頼まれたら souieba relay accept ${id} --name <呼び名> を（変更の内容を主人に見せて同意を得てから --yes を付けて）、断るよう頼まれたら souieba relay reject ${id} を実行します。主人に頼まれないうちに実行してはいけません。`,
     );
   }
   for (const id of notices.unnamedPeers) {
     lines.push(
       `souieba: 接続済みの Agent ${id} にまだ呼び名がないため、この人からの近況を受け取れていません。ユーザーへの回答のあとで、主人に souieba relay rename ${id} <呼び名> を頼んでください。`,
+    );
+  }
+  if (notices.settingsChanges.length > 0) {
+    // 主人が頼んだ変更でも、だまされたエージェントによる変更でも、主人に見えるようにする
+    const list = notices.settingsChanges.map((c) => `・${c.summary}`).join("\n");
+    lines.push(
+      `souieba: 共有の設定が、端末の外（エージェント）から変更されました。ユーザーへの回答のあとで、次の内容をそのまま主人に伝えてください。` +
+        `心当たりがなければ、主人が souieba relay ui で確かめて直せます。あなたが元に戻そうとしてはいけません。\n${list}`,
     );
   }
   for (const k of notices.keyChanges) {
@@ -540,6 +548,7 @@ async function relayTellResult(
     connectionRequests: notices.incomingRequests,
     unnamedPeers: notices.unnamedPeers,
     keyChanges: notices.keyChanges,
+    settingsChanges: notices.settingsChanges,
   };
   return { json, text: lines.join("\n") };
 }

@@ -49,7 +49,17 @@ export type RelayState = {
   notifiedRequests: string[];
   /** 最後に Tell した相手（次は他の人を優先する） */
   lastToldSender: string | null;
+  /**
+   * 端末の外（エージェント）から変えた共有の設定。次の tell で主人に知らせる（知らせたら notified にする）。
+   * 主人がだまされたエージェントに設定を変えられても、気づけるように
+   */
+  changeLog?: SettingsChange[];
 };
+
+export type SettingsChange = { at: string; summary: string; widens: boolean; notified: boolean };
+
+/** 手元に残す変更の記録の上限 */
+export const MAX_CHANGE_LOG = 50;
 
 export const emptyState = (): RelayState => ({
   v: 1,
@@ -60,7 +70,13 @@ export const emptyState = (): RelayState => ({
   policy: null,
   notifiedRequests: [],
   lastToldSender: null,
+  changeLog: [],
 });
+
+/** 共有してよい相手（今の設定で、Publish の宛先になりうる連絡先） */
+export function allowedSet(state: RelayState): Set<string> {
+  return new Set(Object.keys(state.contacts).filter((id) => accessFor(state, id).allowed));
+}
 
 export const MAX_POLICY_LENGTH = 1000;
 export const MAX_LOCAL_GROUPS = 50;
