@@ -10,3 +10,6 @@ dist/
 .wrangler/
 .dev.vars*
 .reviews/
+
+# scripts/v2-try.sh の作業場所
+.v2-try/

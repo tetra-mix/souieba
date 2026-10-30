@@ -89,6 +89,17 @@ SOUIEBA_HOME=./.souieba-bob pnpm souieba tell
 
 ### v2（Relay）で動かす
 
+手早く試すなら `scripts/v2-try.sh` を使います（ビルドして、ローカルの Relay とアリス・ボブの2人分を `.v2-try/` に用意します。`~/.souieba` には触りません）。
+
+```bash
+scripts/v2-try.sh check                 # 一通りの流れを確かめる（途中で y/N を聞き、最後に TUI が開く）
+scripts/v2-try.sh up                    # Relay を起動してアリスとボブを用意する（別のターミナルで as を使う）
+scripts/v2-try.sh as bob relay ui       # ボブとして TUI を開く
+scripts/v2-try.sh reset                 # 最初からにする
+```
+
+手で一つずつ動かす場合は次のとおりです。
+
 v2 ではアカウントもログインコードも使わず、エージェントごとの鍵と Agent ID で接続します（[docs/v2-relay-plan.md](docs/v2-relay-plan.md)）。
 設定はエージェントにも頼めます（共有を広げる操作は、エージェントが変更の内容を主人に見せて同意を得てから `--yes` で実行します）。主人が自分で見て操作するときは `souieba relay ui`（TUI）を使います。
 
