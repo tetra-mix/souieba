@@ -72,6 +72,8 @@ export type RelayPublishOptions = {
   /** 配送期限（作成から）。1時間〜7日 */
   deliveryTtlMs?: number;
   reshare?: Reshare;
+  /** どのプロジェクトの投稿か。共有先はこのプロジェクトの設定だけで決める（既定は default） */
+  project?: string;
 };
 
 export type RelayPublishResult = PublishResult & {
@@ -205,7 +207,7 @@ export class RelayTransport implements SouiebaTransport {
 
     const { connected } = await this.syncContacts();
     const state = this.opts.state.load();
-    const targets = resolveTargets(state, o.to ?? [], connected);
+    const targets = resolveTargets(state, o.to ?? [], connected, o.project);
     if (targets.recipients.length === 0) throw new NoRecipientsError(targets);
 
     // 宛先の今の鍵を Relay から取り、固定した鍵と照らし合わせる

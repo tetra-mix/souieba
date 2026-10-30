@@ -81,8 +81,8 @@ function setup() {
 
   const allow = (x: A, ref: string, rule: "allow" | "deny" = "allow") =>
     x.state.update((s) => {
-      if (ref.startsWith("group:")) s.access.groups[ref.slice(6)] = rule;
-      else s.access.agents[ref] = rule;
+      if (ref.startsWith("group:")) s.projects.default!.access.groups[ref.slice(6)] = rule;
+      else s.projects.default!.access.agents[ref] = rule;
     });
 
   async function tellForTurn(x: A) {
@@ -383,21 +383,21 @@ describe("v2: アクセス権限と宛先の解決（手元の状態だけ）", 
 
   it("個人 > グループの deny > グループの allow > 既定の禁止", () => {
     const s = structuredClone(state);
-    s.access.groups.friends = "allow";
-    s.access.groups.work = "deny";
+    s.projects.default!.access.groups.friends = "allow";
+    s.projects.default!.access.groups.work = "deny";
     expect(accessFor(s, b)).toEqual({ allowed: false, why: "group_deny" });
     expect(accessFor(s, c)).toEqual({ allowed: false, why: "group_deny" });
     expect(accessFor(s, d)).toEqual({ allowed: true, why: "group_allow" });
-    s.access.agents[c] = "allow";
+    s.projects.default!.access.agents[c] = "allow";
     expect(accessFor(s, c)).toEqual({ allowed: true, why: "agent_allow" });
     expect(accessFor(emptyState(), b)).toEqual({ allowed: false, why: "default_deny" });
   });
 
   it("宛先は呼び名・Agent ID・グループで指定でき、接続が切れた相手は除く", () => {
     const s = structuredClone(state);
-    s.access.agents[b] = "allow";
-    s.access.agents[c] = "allow";
-    s.access.agents[d] = "allow";
+    s.projects.default!.access.agents[b] = "allow";
+    s.projects.default!.access.agents[c] = "allow";
+    s.projects.default!.access.agents[d] = "allow";
     const connected = new Set([b, c]);
     expect(resolveTargets(s, ["group:友達"], connected).recipients.map((x) => x.name)).toEqual(["キャロル"]);
     expect(resolveTargets(s, ["group:友達"], connected).notConnected).toEqual([d]);

@@ -10,3 +10,4 @@ export * from "./e2ee.ts";
 export * from "./relay-http.ts";
 export * from "./relay-state.ts";
 export * from "./relay-transport.ts";
+export * from "./project.ts";

@@ -15,13 +15,27 @@ import { dirname, join } from "node:path";
 import { HOUR_MS, MAX_POST_AGE_MS, floorToHour, sanitizeContent, scanSecrets } from "@souieba/core";
 import { readStateJson, souiebaHome, writeSecretJson } from "./config.ts";
 
-export type Note = { ts: string; text: string };
+/** project がないメモ（v1 の Agent・プロジェクトを入れる前のメモ）は既定のプロジェクト */
+export type Note = { ts: string; text: string; project?: string };
 
+/** プロジェクトの既定の名前（relay-state の DEFAULT_PROJECT と同じ） */
+const DEFAULT = "default";
+
+export const noteProject = (n: Note): string => n.project ?? DEFAULT;
+
+/** 投稿待ちの（時間帯, プロジェクト）。v1 の Agent では project はいつも default */
 export type PendingPeriod = {
   periodStart: string;
   periodEnd: string;
+  project: string;
   notes: Note[];
 };
+
+/** 投稿済み・スキップの記録のキー。default はプロジェクトを入れる前と同じ（時間帯の開始時刻だけ） */
+function periodKey(periodStart: string | number, project: string): string {
+  const iso = new Date(periodStart).toISOString();
+  return project === DEFAULT ? iso : `${iso}#${project}`;
+}
 
 type PeriodsFile = { done: Record<string, "published" | "skipped"> };
 
@@ -91,12 +105,13 @@ export class NotesStore {
     this.lockPath = join(dir, "notes.lock");
   }
 
-  add(text: string, now: Date): Note {
+  /** project を渡したとき（v2 の Agent）は、メモに記録する */
+  add(text: string, now: Date, project?: string): Note {
     const clean = sanitizeContent(text).slice(0, MAX_NOTE_LENGTH);
     if (!clean) throw new Error("メモが空です");
     const findings = [...scanSecrets(text), ...scanSecrets(clean)];
     if (findings.length > 0) throw new SecretInNoteError([...new Set(findings.map((f) => f.rule))]);
-    const note = { ts: now.toISOString(), text: clean };
+    const note: Note = { ts: now.toISOString(), text: clean, ...(project ? { project } : {}) };
     withFileLock(this.lockPath, () => appendFileSync(this.notesPath, `${JSON.stringify(note)}\n`, { mode: 0o600 }));
     return note;
   }
@@ -124,35 +139,82 @@ export class NotesStore {
     });
   }
 
-  /** メモがあり、まだ投稿もスキップもしていない、確定済みの時間帯（古い順） */
+  /**
+   * メモがあり、まだ投稿もスキップもしていない、確定済みの（時間帯, プロジェクト）。古い時間帯から、同じ時間帯では default を先に
+   */
   pending(now: Date): PendingPeriod[] {
     const done = this.readPeriods().done;
-    const currentStart = floorToHour(now).getTime();
-    // サーバは48時間より古い期間を受け付けないので、少し余裕を持たせる
-    const oldest = now.getTime() - MAX_POST_AGE_MS + 10 * 60_000;
-    const byPeriod = new Map<number, Note[]>();
+    const byKey = new Map<string, { start: number; project: string; notes: Note[] }>();
     for (const n of this.all()) {
-      const start = floorToHour(new Date(n.ts)).getTime();
-      if (start >= currentStart || start < oldest) continue;
-      const key = new Date(start).toISOString();
+      const start = this.openPeriod(n, now);
+      if (start === null) continue;
+      const project = noteProject(n);
+      const key = periodKey(start, project);
       if (done[key]) continue;
-      byPeriod.set(start, [...(byPeriod.get(start) ?? []), n]);
+      const e = byKey.get(key) ?? { start, project, notes: [] };
+      e.notes.push(n);
+      byKey.set(key, e);
     }
-    return [...byPeriod.entries()]
-      .sort(([a], [b]) => a - b)
-      .map(([start, notes]) => ({
+    return [...byKey.values()]
+      .sort((a, b) => a.start - b.start || Number(b.project === DEFAULT) - Number(a.project === DEFAULT) || a.project.localeCompare(b.project))
+      .map(({ start, project, notes }) => ({
         periodStart: new Date(start).toISOString(),
         periodEnd: new Date(start + HOUR_MS).toISOString(),
+        project,
         notes,
       }));
   }
 
-  mark(periodStart: string, state: "published" | "skipped"): void {
+  /** メモの時間帯が、確定済みで投稿できる古さなら、その開始時刻 */
+  private openPeriod(n: Note, now: Date): number | null {
+    const start = floorToHour(new Date(n.ts)).getTime();
+    // サーバは48時間より古い期間を受け付けないので、少し余裕を持たせる
+    const oldest = now.getTime() - MAX_POST_AGE_MS + 10 * 60_000;
+    return start >= floorToHour(now).getTime() || start < oldest ? null : start;
+  }
+
+  mark(periodStart: string, state: "published" | "skipped", project: string = DEFAULT): void {
     withFileLock(this.lockPath, () => {
       const p = this.readPeriods();
-      p.done[new Date(periodStart).toISOString()] = state;
+      p.done[periodKey(periodStart, project)] = state;
       writeSecretJson(this.periodsPath, p);
     });
+  }
+
+  /** その（時間帯, プロジェクト）をもう投稿・スキップしたか */
+  isDone(periodStart: string, project: string = DEFAULT): boolean {
+    return !!this.readPeriods().done[periodKey(periodStart, project)];
+  }
+
+  /**
+   * まだ投稿もスキップもしていないメモを、別のプロジェクトに付け替える（souieba note move）。
+   * from・periodStart で絞れる（どちらもなければ、まだ送っていないメモ全部）。現在の時間帯のメモも対象。付け替えた件数を返す
+   */
+  move(to: string, opts: { from?: string; periodStart?: string }, now: Date): number {
+    const want = opts.periodStart ? floorToHour(new Date(opts.periodStart)).getTime() : null;
+    return withFileLock(this.lockPath, () => {
+      const done = this.readPeriods().done;
+      const notes = this.all();
+      let moved = 0;
+      for (const n of notes) {
+        const start = floorToHour(new Date(n.ts)).getTime();
+        if (start < now.getTime() - MAX_POST_AGE_MS) continue;
+        if (want !== null && start !== want) continue;
+        if (opts.from !== undefined && noteProject(n) !== opts.from) continue;
+        if (noteProject(n) === to || done[periodKey(start, noteProject(n))]) continue;
+        n.project = to;
+        moved++;
+      }
+      if (moved > 0) this.rewrite(notes);
+      return moved;
+    });
+  }
+
+  /** 途中で落ちても元のファイルが残るよう、一時ファイルに書いてから置き換える */
+  private rewrite(notes: Note[]): void {
+    const tmp = `${this.notesPath}.${process.pid}.${randomUUID()}.tmp`;
+    writeFileSync(tmp, notes.map((n) => `${JSON.stringify(n)}\n`).join(""), { mode: 0o600 });
+    renameSync(tmp, this.notesPath);
   }
 
   /** 48時間より古いメモと記録を消す。消すものがなければ書き直さない */
@@ -161,14 +223,9 @@ export class NotesStore {
     withFileLock(this.lockPath, () => {
       const lines = this.lines();
       const keep = this.all().filter((n) => Date.parse(n.ts) >= cutoff);
-      if (keep.length !== lines.length) {
-        // 途中で落ちても元のファイルが残るよう、一時ファイルに書いてから置き換える
-        const tmp = `${this.notesPath}.${process.pid}.${randomUUID()}.tmp`;
-        writeFileSync(tmp, keep.map((n) => `${JSON.stringify(n)}\n`).join(""), { mode: 0o600 });
-        renameSync(tmp, this.notesPath);
-      }
+      if (keep.length !== lines.length) this.rewrite(keep);
       const p = this.readPeriods();
-      const old = Object.keys(p.done).filter((k) => Date.parse(k) < cutoff);
+      const old = Object.keys(p.done).filter((k) => Date.parse(k.split("#")[0]!) < cutoff);
       for (const k of old) delete p.done[k];
       if (old.length > 0) writeSecretJson(this.periodsPath, p);
     });
