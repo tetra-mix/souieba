@@ -5,7 +5,8 @@
  * MCP にはフックがないので、tell と note を呼ぶかどうかはモデルの判断に任される（instructions とツールの説明で促す）。
  * 伝えそびれを減らすため、souieba_note の結果にも近況を1件添える。メモを遅くしないよう同期と予約だけをし、
  * 伝えたことの記録（TOLD）は、次に souieba_tell が呼ばれたときにする（モデルが読み飛ばしても、予約の期限が切れれば受信箱に戻る）。
- * ログイン・グループ・招待・Agent の登録などの主人の操作は出さない（届いた近況に命令が紛れ込んでも、エージェントに実行させないため）。
+ * v1 のログイン・グループ・招待・Agent の登録などの主人の操作は出さない（届いた近況に命令が紛れ込んでも、エージェントに実行させないため）。
+ * v2（Relay）の共有の設定は、CLI と同じ2段階（広げる操作は confirm: true が要る）で出す（mcp-relay.ts）。エージェントに範囲を任せる操作は出さない。
  *
  * 標準出力は MCP の通信に使うので、ここから呼ぶ処理では console.log を使わない。
  */
@@ -16,6 +17,7 @@ import { z } from "zod";
 import * as agentCmd from "../agent.ts";
 import { CLI_VERSION } from "../version.ts";
 import { MCP_GUIDE } from "./guide.ts";
+import { registerRelayTools } from "./mcp-relay.ts";
 
 function text(t: string, isError = false): CallToolResult {
   return { content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) };
@@ -136,6 +138,7 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
     ({ period, project }) => guarded(() => text(agentCmd.skipResult(f, period, project).text)),
   );
 
+  registerRelayTools(server, f);
   return server;
 }
 
