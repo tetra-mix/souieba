@@ -16,6 +16,9 @@ import { migrate } from "../../server/src/db/index.ts";
 import { openDb } from "../../server/src/db/node.ts";
 import { PassThrough } from "node:stream";
 import { resolveRelayAgent } from "@souieba/sdk";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { relayCommand, relayParts } from "../src/relay.ts";
 import { createRelayTui, displayWidth } from "../src/relay-tui.ts";
 
@@ -359,6 +362,139 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
     await t.keys("\x1b[A", "\x1b[A", "\x1b[A", "\x1b[A", "\x1b[A");
     expect(t.ui.screen()).toContain("共有方針:");
     await t.quit();
+  });
+
+  it("任せる範囲: 任せるのは主人だけ。範囲の中は確認なしで実行され tell で知らされ、範囲の外・期限切れは確認が要る", { timeout: 180_000 }, async () => {
+    // エージェントは任せられない（--yes を付けても）。終了コード 4 で、何も変えない
+    const byAgent = await souieba("alice", "relay", "delegate", "grant", "audience", "--project", "研究", "--yes");
+    expect(byAgent.code).toBe(4);
+    expect(byAgent.out).toContain("主人が自分でしかできません");
+    expect((await souieba("alice", "relay", "delegate")).out).toContain("なし");
+
+    // 主人が端末で y と答えると任せられる
+    await owner("alice", ["delegate", "grant", "audience"], undefined, { project: "研究", term: "24h" });
+    expect((await souieba("alice", "relay", "delegate", "list")).out).toContain("プロジェクト「研究」の共有先");
+
+    // 範囲の中の広げる操作は --yes なしで実行される
+    const inside = await souieba("alice", "relay", "allow", "ボブ", "--project", "研究");
+    expect(inside.code).toBe(0);
+    expect(inside.out).toContain("任された範囲での変更");
+    // 範囲の外（同じプロジェクトの共有方針・ほかのプロジェクトの共有先）は、これまでどおり確認が要る
+    expect((await souieba("alice", "relay", "policy", "set", "何でも話してよい", "--project", "研究")).code).toBe(3);
+    expect((await souieba("alice", "relay", "allow", "キャロル")).code).toBe(3);
+    // 任せた範囲での変更も、次の tell で知らせる
+    const told = await souieba("alice", "tell");
+    expect(told.out).toContain("（任せた範囲での変更）プロジェクト「研究」で、ボブ（sb_");
+
+    // 期限が切れたら、また確認が要る
+    now = new Date(now.getTime() + 25 * 3_600_000);
+    expect((await souieba("alice", "relay", "deny", "ボブ", "--project", "研究")).code).toBe(0);
+    expect((await souieba("alice", "relay", "allow", "ボブ", "--project", "研究")).code).toBe(3);
+    expect((await souieba("alice", "relay", "delegate")).out).toContain("期限切れ");
+
+    // 取り消すのは狭める操作なので、エージェントからもできる
+    await owner("alice", ["delegate", "grant", "audience"], undefined, { project: "研究", term: "forever" });
+    expect((await souieba("alice", "relay", "delegate")).out).toContain("期限なし");
+    expect((await souieba("alice", "relay", "delegate", "revoke", "audience", "--project", "研究")).code).toBe(0);
+    expect((await souieba("alice", "relay", "delegate")).out).toContain("なし（");
+    expect((await souieba("alice", "relay", "unset", "ボブ", "--project", "研究")).code).toBe(0);
+
+    // 名前の変更は狭める扱い。メモ・任せた範囲も付いていく。既定は変えられない
+    await owner("alice", ["delegate", "grant", "policy"], undefined, { project: "研究" });
+    await souieba("alice", "note", "--cwd", join(tmp, "lab"), "主人は研究の図を描いていた");
+    const ren = await souieba("alice", "relay", "project", "rename", "研究", "ラボ");
+    expect(ren.code).toBe(0);
+    expect((await souieba("alice", "relay", "project", "rename", "default", "x")).code).toBe(1);
+    expect((await souieba("alice", "relay", "project", "list")).out).toContain("- ラボ:");
+    expect((await souieba("alice", "relay", "delegate")).out).toContain("プロジェクト「ラボ」の共有方針");
+    expect((await souieba("alice", "relay", "project", "which", join(tmp, "lab"))).out).toContain("プロジェクト「ラボ」");
+    now = new Date(now.getTime() + 3_600_000);
+    const comp = await souieba("alice", "compose");
+    expect(comp.out).toContain("プロジェクト: ラボ");
+    expect(comp.out).toContain("図を描いていた");
+
+    // 共有先が空のプロジェクトは、compose で自動でスキップする（数えず、メモも出さない）
+    const work = join(tmp, "work");
+    mkdirSync(work, { recursive: true });
+    expect((await souieba("alice", "relay", "project", "add", "仕事", work)).code).toBe(0);
+    await souieba("alice", "note", "--cwd", work, "主人は社外秘の見積もりを作っていた");
+    now = new Date(now.getTime() + 3_600_000);
+    const c2 = await souieba("alice", "compose");
+    expect(c2.out).not.toContain("見積もり");
+    expect(c2.out).not.toContain("プロジェクト: 仕事");
+    expect((await souieba("alice", "compose", "--json")).out).not.toContain("仕事");
+
+    // TUI: プロジェクトのタブで任せる（期限を選んで y）・取り消す。連絡先のタブには全体の範囲
+    const t = await tui("alice");
+    for (let i = 0; i < 5 && !t.ui.screen().includes("[ ラボ ]"); i++) await t.keys(RIGHT);
+    expect(t.ui.screen()).toContain("[ ラボ ]");
+    expect(t.ui.screen()).toContain("エージェントに任せる範囲");
+    await t.keys(...Array(30).fill(DOWN), "\x1b[A", "\x1b[A");
+    expect(t.ui.screen()).toMatch(/任せていない\s+プロジェクト「ラボ」の共有先/);
+    await t.keys(ENTER, ENTER);
+    expect(t.ui.screen()).toContain("エージェントに、プロジェクト「ラボ」の共有先");
+    await t.keys("y");
+    expect(t.ui.screen()).toMatch(/任せている（[0-9-]+ [0-9:]+ まで）\s+プロジェクト「ラボ」の共有先/);
+    await t.keys(ENTER);
+    expect(t.ui.screen()).toMatch(/任せていない\s+プロジェクト「ラボ」の共有先/);
+    // 名前を変える（N）
+    await t.keys("N", ...Array(4).fill("\x7f"));
+    await t.type("研究");
+    await t.keys(ENTER);
+    expect(t.ui.screen()).toContain("[ 研究 ]");
+    for (let i = 0; i < 5 && !t.ui.screen().includes("[ 連絡先 ]"); i++) await t.keys(RIGHT);
+    expect(t.ui.screen()).toContain("[ 連絡先 ]");
+    expect(t.ui.screen()).toContain("届いた接続要求を承認すること");
+    expect(t.ui.screen()).toContain("グループ「友達」のメンバーを出し入れすること");
+    await t.quit();
+  });
+
+  it("MCP: 広げる操作は confirm の2段階、狭める操作はそのまま。任せた範囲は confirm なしで通り、任せること自体はできない", { timeout: 120_000 }, async () => {
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await client.connect(
+      new StdioClientTransport({
+        command: TSX,
+        args: [CLI, "mcp"],
+        env: { ...(process.env as Record<string, string>), HOME: join(tmp, "alice"), SOUIEBA_HOME: join(tmp, "alice"), SOUIEBA_NOW: now.toISOString(), SOUIEBA_AGENT: "" },
+        stderr: "ignore",
+      }),
+    );
+    const call = async (name: string, args: Record<string, unknown> = {}) => {
+      const r = (await client.callTool({ name, arguments: args })) as CallToolResult;
+      return { text: r.content.map((c) => (c.type === "text" ? c.text : "")).join("\n"), isError: r.isError === true };
+    };
+    try {
+      // 広げる操作: confirm がなければ変更の内容を返して何もしない
+      const ask = await call("souieba_relay_access", { rule: "allow", target: "キャロル" });
+      expect(ask.isError).toBe(false);
+      expect(ask.text).toContain("主人の承認が必要");
+      expect(ask.text).toContain("confirm: true");
+      expect(ask.text).toContain("キャロル");
+      const def = (t: string) => t.split("## プロジェクト: ")[1]!;
+      expect(def((await call("souieba_relay_status")).text)).not.toContain("キャロル（共有可）");
+      expect((await call("souieba_relay_access", { rule: "allow", target: "キャロル", confirm: true })).text).toContain("共有してよいことにしました");
+      expect(def((await call("souieba_relay_status")).text)).toContain("キャロル（共有可）");
+      // 狭める操作はそのまま
+      expect((await call("souieba_relay_access", { rule: "deny", target: "キャロル" })).text).toContain("共有しないことにしました");
+      // グループのメンバー: 任されていなければ確認が要り、主人が任せると confirm なしで通る
+      expect((await call("souieba_relay_access", { rule: "allow", target: "group:友達", project: "仕事", confirm: true })).isError).toBe(false);
+      expect((await call("souieba_relay_group", { action: "add", group: "友達", members: ["キャロル"] })).text).toContain("主人の承認が必要");
+      await owner("alice", ["delegate", "grant", "members", "友達"]);
+      const inside = await call("souieba_relay_group", { action: "add", group: "友達", members: ["キャロル"] });
+      expect(inside.text).toContain("任された範囲での変更");
+      expect((await call("souieba_relay_status", { view: "delegations" })).text).toContain("グループ「友達」のメンバー");
+      // 取り消しはエージェントからもできる
+      expect((await call("souieba_relay_delegation_revoke", { scope: "members", group: "友達" })).text).toContain("取り消しました");
+      // プロジェクトの名前の変更
+      expect((await call("souieba_relay_project", { action: "rename", name: "研究", new_name: "ラボ" })).text).toContain("「ラボ」にしました");
+      expect((await call("souieba_relay_project", { action: "rename", name: "ラボ", new_name: "研究" })).isError).toBe(false);
+      // ここで変えたことは、次の tell で（任せた範囲のものは印つきで）知らせる
+      const told = await call("souieba_tell");
+      expect(told.text).toContain("端末の外（エージェント）から変更されました");
+      expect(told.text).toContain("（任せた範囲での変更）グループ「友達」に キャロル を加えます");
+    } finally {
+      await client.close();
+    }
   });
 
   it("TUI は端末でないと起動しない", { timeout: 60_000 }, async () => {
