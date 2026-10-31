@@ -4,12 +4,27 @@
  * 入口は test/fixtures/worker-entry.ts（本番の Worker に、Durable Object の行を数える口などを足したもの）。
  */
 import { fileURLToPath } from "node:url";
-import { CLIENT_VERSION_HEADER, type KeyPair, generateEncryptionKey, generateSigningKey, openPost, periodOf, sealPost } from "@souieba/core";
+import {
+  CLIENT_VERSION_HEADER,
+  type KeyPair,
+  type RelayIdentity,
+  directoryEntry,
+  generateEncryptionKey,
+  generateRelayIdentity,
+  generateSigningKey,
+  openPost,
+  openRelayMessage,
+  periodOf,
+  sealPost,
+  sealRelayMessage,
+  signChallenge,
+} from "@souieba/core";
 import { MIN_CLIENT_VERSION } from "../src/app.ts";
 import { type Unstable_DevWorker, unstable_dev } from "wrangler";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const BOOTSTRAP = "worker-test-bootstrap-0123456789";
+const PUBLIC_URL = "https://souieba.ryouma1128.workers.dev";
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 let worker: Unstable_DevWorker;
@@ -157,6 +172,40 @@ describe("Workers 版（workerd + Durable Object）", () => {
     expect((await call("GET", "/v1/inbox", bob.agent.token)).body.items).toEqual([]);
     expect((await call("GET", "/v1/admin/groups", adminToken)).body.groups).toMatchObject([{ id: groupId, memberCount: 1 }]);
   }, 60_000);
+
+  it("v2: 登録 → チャレンジ認証 → 接続 → 受信者別の暗号化メッセージの配送", async () => {
+    const ids = [generateRelayIdentity(), generateRelayIdentity()];
+    const tokens: string[] = [];
+    for (const id of ids) {
+      expect((await call("POST", "/v2/agents", undefined, { entry: directoryEntry(id) })).status).toBe(201);
+      const ch = await call("POST", "/v2/auth/challenge", undefined, { agentId: id.agentId });
+      // wrangler.toml の SOUIEBA_PUBLIC_URL が、署名に含める Relay の origin になる
+      const s = await call("POST", "/v2/auth/session", undefined, {
+        agentId: id.agentId,
+        challenge: ch.body.challenge,
+        sig: signChallenge(id, new URL(PUBLIC_URL).origin, ch.body.challenge),
+      });
+      expect(s.status).toBe(201);
+      tokens.push(s.body.token);
+    }
+    const [a, b] = ids as [RelayIdentity, RelayIdentity];
+    const [ta, tb] = tokens as [string, string];
+    await call("POST", "/v2/connections", ta, { to: b.agentId });
+    expect((await call("POST", `/v2/connections/${a.agentId}/accept`, tb)).body.connection.status).toBe("accepted");
+    const now = Date.now();
+    const env = sealRelayMessage(
+      { v: 1, content: "主人は今日はじめて自分でパンを焼いたらしい", useExpiresAt: new Date(now + 86_400_000).toISOString(), reshare: "deny" },
+      a,
+      [{ agentId: b.agentId, encKey: b.enc.pub, encKeyVersion: 1 }],
+      { createdAt: new Date(now).toISOString(), deliveryExpiresAt: new Date(now + 86_400_000).toISOString() },
+    );
+    const sent = await call("POST", "/v2/messages", ta, { envelope: env });
+    expect(sent.status).toBe(201);
+    const got = await call("GET", "/v2/messages", tb);
+    expect(got.body.messages).toHaveLength(1);
+    expect(openRelayMessage(got.body.messages[0].envelope, b)).toMatchObject({ content: "主人は今日はじめて自分でパンを焼いたらしい" });
+    expect((await call("POST", "/v2/messages/ack", tb, { messageIds: [env.messageId] })).body.acked).toBe(1);
+  });
 
   // 送信元 IP ごとの回数を使い切るので最後に置く
   it("認証なしの POST は、% でエンコードしたパスでも入口の AUTH_RATE_LIMITER（10回/分）で数える", async () => {

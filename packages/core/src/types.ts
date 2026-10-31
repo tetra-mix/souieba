@@ -33,6 +33,17 @@ export type TellCandidate = {
   periodEnd: string;
   content: string;
   reservedUntil: string;
+  /** v2 の Narrative Message のとき、送信側の Agent が添えた伝え方の意図（信頼できない入力。参考にするだけ） */
+  narrative?: TellNarrative;
+};
+
+export type TellNarrative = {
+  purpose?: string;
+  nuance?: string;
+  context?: string;
+  /** 他の人へ伝え直してよいか */
+  reshare: "deny" | "allow";
+  useExpiresAt: string;
 };
 
 export type InboxItem = Omit<TellCandidate, "reservedUntil"> & {

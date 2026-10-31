@@ -1,6 +1,7 @@
 import { statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import * as agentCmd from "./agent.ts";
+import { NeedsApprovalError, OwnerOnlyError, isInteractive, relayCommand, ttyAsk } from "./relay.ts";
 import {
   CLIENT_VERSION_HEADER,
   type KeyDirectory,
@@ -61,9 +62,15 @@ const USAGE = `使い方: souieba <command>
   hook <${HOOK_TARGETS.join("|")}>   エージェントのフックから呼ぶ。tell の結果とメモの手引きを、そのエージェントの形式で出力する
   mcp                              MCP サーバ（stdio）として動く。シェルを使えない MCP クライアント（Claude Desktop など）用
   told <postId> | release <postId> --reserve で予約したものを確定・解除する
-  note <メモ>                      主人について知ったことをローカルに書き溜める
-  compose [--skip <periodStart>]   投稿待ちの時間帯とメモを表示する
+  note <メモ> [--cwd <ディレクトリ>]  主人について知ったことをローカルに書き溜める（v2 では作業ディレクトリからプロジェクトを決める）
+  note move <プロジェクト> [--from <プロジェクト>] [--period <開始時刻>]   v2: まだ送っていないメモを別のプロジェクトに移す
+  compose [--skip <periodStart> [--project <名前>]]   投稿待ちの時間帯とメモを表示する
   publish [--period previous|current|<ISO>] <本文>   1時間分の投稿をする
+    v2 の Agent では: [--project <名前>] [--to <相手|group:<グループ>>]... [--purpose <理由>] [--nuance <調子>] [--context <合う話題>]
+                      [--expires-in <時間>] [--allow-reshare]
+
+v2（Relay。エージェントごとの鍵で、アカウントなしで共有する）:
+  relay ...                        souieba relay help で一覧（init / id / contacts / connect / accept / allow / policy など）
 
 <グループ> は名前か ID。設定ファイル: ${configPath()}（環境変数 SOUIEBA_HOME で場所を変更できます）`;
 
@@ -163,6 +170,22 @@ async function main(argv: string[]) {
       period: { type: "string" },
       skip: { type: "string" },
       reserve: { type: "boolean", default: false },
+      // v2（Relay）の publish: 宛先と Narrator の項目
+      to: { type: "string", multiple: true },
+      purpose: { type: "string" },
+      nuance: { type: "string" },
+      context: { type: "string" },
+      "expires-in": { type: "string" },
+      "allow-reshare": { type: "boolean", default: false },
+      // souieba relay: 主人の承認を得たあとで、共有を広げる操作を実行する
+      yes: { type: "boolean", default: false },
+      // v2 のプロジェクト（設定・publish・compose --skip・note）
+      project: { type: "string" },
+      "copy-default": { type: "boolean", default: false },
+      from: { type: "string" },
+      // souieba relay delegate grant の期限
+      for: { type: "string" },
+      cwd: { type: "string" },
       json: { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -332,18 +355,76 @@ async function main(argv: string[]) {
       break;
     }
     case "note": {
+      if (sub === "move") {
+        const to = rest[0];
+        if (!to) throw new Error("souieba note move <移す先のプロジェクト> [--from <プロジェクト>] [--period <開始時刻>]");
+        try {
+          await agentCmd.noteMove(flags, to, { from: values.from, periodStart: values.period, yes: values.yes });
+        } catch (err) {
+          if (!(err instanceof NeedsApprovalError)) throw err;
+          console.log(err.message);
+          process.exitCode = 3;
+        }
+        break;
+      }
       const text = [sub, ...rest].filter(Boolean).join(" ");
       if (!text) throw new Error("souieba note <メモ>");
-      agentCmd.note(flags, text);
+      agentCmd.note(flags, text, values.cwd ?? process.cwd());
       break;
     }
     case "compose":
-      agentCmd.compose(flags, values.skip);
+      agentCmd.compose(flags, values.skip, values.project);
       break;
     case "publish": {
       const content = [sub, ...rest].filter(Boolean).join(" ");
       if (!content) throw new Error('souieba publish [--period previous|current|<ISO>] "主人は……"');
-      await agentCmd.publish(flags, content, values.period ?? (values.current ? "current" : "previous"));
+      const hours = values["expires-in"] !== undefined ? Number(values["expires-in"]) : undefined;
+      if (hours !== undefined && !(hours > 0)) throw new Error("--expires-in は時間（1〜168）で指定してください");
+      await agentCmd.publish(flags, content, values.period ?? (values.current ? "current" : "previous"), {
+        to: values.to,
+        purpose: values.purpose,
+        nuance: values.nuance,
+        context: values.context,
+        useTtlMs: hours !== undefined ? hours * 3_600_000 : undefined,
+        reshare: values["allow-reshare"] ? "allow" : "deny",
+        project: values.project,
+      });
+      break;
+    }
+    case "relay": {
+      try {
+        await relayCommand(
+          {
+            sub,
+            rest,
+            name: values.name,
+            agent: values.agent,
+            yes: values.yes,
+            project: values.project,
+            copyDefault: values["copy-default"],
+            term: values.for,
+            // 承認のあとに実行するコマンドは、読み取った値から組み立て直す（--agent=x のような書き方も1つにまとめる）
+            raw: [
+              ...positionals.slice(1),
+              ...(values.name !== undefined ? ["--name", values.name] : []),
+              ...(values.project !== undefined ? ["--project", values.project] : []),
+              ...(values["copy-default"] ? ["--copy-default"] : []),
+            ],
+          },
+          { log: (l) => console.log(l), interactive: isInteractive(), ask: ttyAsk, now: testableNow },
+        );
+      } catch (err) {
+        if (err instanceof OwnerOnlyError) {
+          // 任せる操作を端末の外から呼んだとき。--yes を付け直しても通らないので、終了コード 3 ではなく 4 にする
+          console.log(err.message);
+          process.exitCode = 4;
+          break;
+        }
+        if (!(err instanceof NeedsApprovalError)) throw err;
+        // エージェントが --yes なしで実行したとき。案内は標準出力に出し、終了コード 3 で止める
+        console.log(err.message);
+        process.exitCode = 3;
+      }
       break;
     }
     case "export": {

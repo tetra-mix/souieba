@@ -33,6 +33,16 @@ describe("Workers の入口での検査", () => {
     expect(edgeGuard(req("/v1/admin/users", { headers: { authorization: "Bearer sou_m_abc" } }))).toBeNull();
   });
 
+  it("v2（Relay）の公開エンドポイントと、セッショントークン（sou_r_）を通す", () => {
+    expect(edgeGuard(req("/v2/agents", { method: "POST" }))).toBeNull();
+    expect(edgeGuard(req("/v2/auth/challenge", { method: "POST" }))).toBeNull();
+    expect(edgeGuard(req("/v2/auth/session", { method: "POST" }))).toBeNull();
+    expect(isPublicPost(req("/v2/auth/session", { method: "POST" }))).toBe(true);
+    expect(edgeGuard(req("/v2/messages"))?.status).toBe(401);
+    expect(edgeGuard(req("/v2/messages", { headers: { authorization: "Bearer sou_r_abc" } }))).toBeNull();
+    expect(edgeGuard(req("/v3/messages", { headers: { authorization: "Bearer sou_r_abc" } }))?.status).toBe(404);
+  });
+
   it("大きすぎる本文は 413", () => {
     const r = req("/v1/posts", { method: "POST", headers: { authorization: "Bearer sou_a_x", "content-length": String(1024 * 1024) } });
     expect(edgeGuard(r)?.status).toBe(413);

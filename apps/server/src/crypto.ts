@@ -13,7 +13,7 @@ export function newId(prefix: string): string {
 
 export const sha256 = sha256Hex;
 
-const TOKEN_PREFIX = { user: "u", agent: "a", admin: "m" } as const;
+const TOKEN_PREFIX = { user: "u", agent: "a", admin: "m", relay: "r" } as const;
 
 export function newToken(kind: keyof typeof TOKEN_PREFIX): string {
   return `sou_${TOKEN_PREFIX[kind]}_${Buffer.from(randomBytes(32)).toString("base64url")}`;

@@ -7,3 +7,7 @@ export * from "./agent-watch.ts";
 export * from "./member-watch.ts";
 export * from "./group-names.ts";
 export * from "./e2ee.ts";
+export * from "./relay-http.ts";
+export * from "./relay-state.ts";
+export * from "./relay-transport.ts";
+export * from "./project.ts";

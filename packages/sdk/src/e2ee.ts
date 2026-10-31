@@ -43,6 +43,21 @@ export class PostTooLongError extends Error {
   }
 }
 
+/**
+ * 送る前の本文の検査と正規化（v1 の投稿と v2 の Narrative Message で共通）。
+ * サーバ・Relay は本文を見られないので、秘密情報の検査と正規化は送る前にクライアントで行う
+ */
+export function checkPostContent(raw: string): string {
+  const content = sanitizeContent(raw);
+  const rules = [...new Set([...scanSecrets(raw), ...scanSecrets(content)].map((f) => f.rule))];
+  if (rules.length > 0) throw new SecretInPostError(rules);
+  if (content.length === 0) throw new Error("本文が空です");
+  if (content.length > MAX_POST_LENGTH) throw new PostTooLongError(content.length);
+  const suspicious = findInstructionLike(content);
+  if (suspicious.length > 0) throw new InstructionLikePostError(suspicious);
+  return content;
+}
+
 export type RejectReason =
   | "unknown_author"
   | "unknown_agent"
@@ -139,14 +154,7 @@ export class E2eeTransport implements SouiebaTransport {
   }
 
   async publish(post: CreatePostInput): Promise<PublishResult> {
-    // サーバは本文を見られないので、秘密情報の検査と正規化は送る前にここで行う
-    const content = sanitizeContent(post.content);
-    const rules = [...new Set([...scanSecrets(post.content), ...scanSecrets(content)].map((f) => f.rule))];
-    if (rules.length > 0) throw new SecretInPostError(rules);
-    if (content.length === 0) throw new Error("本文が空です");
-    if (content.length > MAX_POST_LENGTH) throw new PostTooLongError(content.length);
-    const suspicious = findInstructionLike(content);
-    if (suspicious.length > 0) throw new InstructionLikePostError(suspicious);
+    const content = checkPostContent(post.content);
 
     const visibility = post.visibility ?? "groups";
     const { userId, agentId, keys } = this.opts;
