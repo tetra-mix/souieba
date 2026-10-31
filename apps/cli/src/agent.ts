@@ -34,7 +34,7 @@ import {
   souiebaHome,
 } from "@souieba/sdk";
 import { NOTHING_TO_TELL } from "./integrations/guide.ts";
-import { NeedsApprovalError, relayParts } from "./relay.ts";
+import { NeedsApprovalError, approvalMessage, relayParts } from "./relay.ts";
 import { OpError, projectLabel, relayOps } from "./relay-ops.ts";
 import { updateAdvice, updateToNotify } from "./update-check.ts";
 import { CLI_VERSION } from "./version.ts";
@@ -135,6 +135,24 @@ function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
   return { mode: "relay" as const, relay: r, parts, transport, souieba, state, notes: new NotesStore(r.identity.agentId, parts.dir) };
 }
 
+/**
+ * 投稿待ちの（時間帯, プロジェクト）。v2 では、共有先が空のプロジェクトのものを自動でスキップにして、数えない（docs/v2-projects.md §4）。
+ * ただし、まだどのプロジェクトでも誰にも共有していないとき（使い始め）は、設定を促すために残す
+ */
+function pendingPeriods(ctx: ReturnType<typeof anyContext>, now: Date): PendingPeriod[] {
+  const pending = ctx.notes.pending(now);
+  if (ctx.mode !== "relay" || pending.length === 0) return pending;
+  const s = ctx.transport.localState();
+  const audience = (pr: string) => Object.keys(s.contacts).some((id) => accessFor(s, id, pr).allowed);
+  if (!Object.keys(s.projects).some(audience)) return pending;
+  return pending.filter((p) => {
+    // 消したプロジェクトのメモ（付け替えの前に書かれたもの）は既定として扱う
+    if (audience(s.projects[p.project] ? p.project : DEFAULT_PROJECT)) return true;
+    ctx.notes.mark(p.periodStart, "skipped", p.project);
+    return false;
+  });
+}
+
 /** v1 と v2 のどちらの Agent かを見分けて、Note・Session・Tell に共通の部分を返す */
 function anyContext(flags: AgentFlags) {
   const r = resolveRelayAgent(flags.agent);
@@ -201,14 +219,7 @@ export async function noteMove(flags: AgentFlags, to: string, opts: { from?: str
   if (change.widens && !opts.yes) {
     if (!interactive) {
       const cmd = ["souieba note move", shq(to), ...(opts.from ? ["--from", shq(opts.from)] : []), ...(periodStart ? ["--period", periodStart] : [])].join(" ");
-      throw new NeedsApprovalError(
-        [
-          "souieba: この操作は共有の範囲を広げるので、主人の承認が必要です。まだ何も変えていません。",
-          `変更の内容: ${change.summary}`,
-          "この内容を主人にそのまま伝えて、してよいか確かめてください。主人がこの会話で同意したら、次のコマンドを実行してください:",
-          `  ${cmd} --yes`,
-        ].join("\n"),
-      );
+      throw new NeedsApprovalError(approvalMessage(change.summary, `次のコマンドを実行してください:\n  ${cmd} --yes`));
     }
     const { ttyAsk } = await import("./relay.ts");
     if (!(await ttyAsk(change.summary))) throw new OpError("取りやめました");
@@ -274,7 +285,7 @@ export function composeResult(flags: AgentFlags): AgentResult {
   const { notes } = ctx;
   const now = flags.now();
   notes.prune(now);
-  const pending = notes.pending(now);
+  const pending = pendingPeriods(ctx, now);
   if (pending.length === 0) return { ok: true, json: { pending }, text: "souieba: 投稿待ちの時間帯はありません。" };
   if (ctx.mode === "relay") return relayCompose(flags, pending, ctx.transport.localState());
 
@@ -325,11 +336,8 @@ function relayCompose(flags: AgentFlags, pending: PendingPeriod[], s: RelayState
     const pr = projectOf(p);
     const tag = pr === DEFAULT_PROJECT ? "" : pr;
     lines.push("", `## ${fmt.format(new Date(p.periodStart))}〜${hm.format(new Date(p.periodEnd))}${multi ? `  プロジェクト: ${projectLabel(pr)}` : ""}`);
+    // 共有先が空のプロジェクトは pendingPeriods で自動でスキップしてあるので、ここには来ない（誰にも共有していない使い始めを除く）
     const allowed = allowedIn(pr);
-    if (anyAllowed && allowed.length === 0) {
-      lines.push("このプロジェクトは誰とも共有しない設定なので、メモは出しません。投稿せずにスキップしてください。", next.skip(p.periodStart, tag || undefined));
-      continue;
-    }
     if (allowed.length > 0) {
       const proj = s.projects[pr]!;
       lines.push(`共有してよい相手: ${allowed.map((c) => c.name).join("、")}`);
@@ -608,7 +616,7 @@ async function relayTellResult(
   }
   const notices = transport.takeNotices();
   const update = await Promise.race([updateToNotify(now, () => true).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), TELL_EXTRAS_MS))]);
-  const pending = notes.pending(now).length;
+  const pending = pendingPeriods(ctx, now).length;
   if (pending > 0) lines.push(pendingLine(flags, pending));
   if (state.outdated) lines.push(`souieba: ${state.outdated}。ユーザーへの回答のあとで、主人に更新を頼んでください。`);
   else if (update) lines.push(`souieba: ${updateAdvice(update)}。ユーザーへの回答のあとで、主人に更新を勧めてください。あなたが実行してはいけません。`);
@@ -625,7 +633,7 @@ async function relayTellResult(
   }
   if (notices.settingsChanges.length > 0) {
     // 主人が頼んだ変更でも、だまされたエージェントによる変更でも、主人に見えるようにする
-    const list = notices.settingsChanges.map((c) => `・${c.summary}`).join("\n");
+    const list = notices.settingsChanges.map((c) => `・${c.delegated ? "（任せた範囲での変更）" : ""}${c.summary}`).join("\n");
     lines.push(
       `souieba: 共有の設定が、端末の外（エージェント）から変更されました。ユーザーへの回答のあとで、次の内容をそのまま主人に伝えてください。` +
         `心当たりがなければ、主人が souieba relay ui で確かめて直せます。あなたが元に戻そうとしてはいけません。\n${list}`,
@@ -656,7 +664,7 @@ function pendingLine(flags: AgentFlags, pending: number): string {
 
 /** 投稿待ちの時間帯があれば、その知らせ（souieba mcp のメモの結果に添える）。手元のファイルを読むだけで、通信はしない */
 export function pendingNotice(flags: AgentFlags): string | null {
-  const pending = anyContext(flags).notes.pending(flags.now()).length;
+  const pending = pendingPeriods(anyContext(flags), flags.now()).length;
   return pending > 0 ? pendingLine(flags, pending) : null;
 }
 

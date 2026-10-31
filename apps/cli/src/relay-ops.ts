@@ -6,13 +6,19 @@
  * 広げるかどうかは、共有してよい相手の集合が増えるか（アクセス権限・グループ）と、操作の種類（接続・承認・ブロック解除・Policy）で決める。
  * 共有先と Policy はプロジェクトごと（docs/v2-projects.md）。ディレクトリの付け外しとプロジェクトの削除は、
  * そのディレクトリのメモが届く相手が、前後で増えるかで決める。
+ *
+ * 主人がエージェントに任せた範囲（delegations。docs/v2-projects.md §9）の中の広げる操作は、1回ごとの確認なしで実行できる。
+ * どの操作がどの範囲に入るかは、操作ごとに scopes で示す（scopes がない広げる操作は、任せられない）。
+ * 任せる操作（delegateGrant）は ownerOnly で、主人が直接（TUI か端末での y/N）しか実行できない。
  */
 import { isAgentId, isValidDisplayName } from "@souieba/core";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { resolve, sep } from "node:path";
 import {
   type AccessRule,
   type Contact,
   DEFAULT_PROJECT,
+  type DelegationScope,
   type LocalGroup,
   MAX_CHANGE_LOG,
   MAX_LOCAL_GROUPS,
@@ -23,6 +29,7 @@ import {
   type RelayState,
   allowedSet,
   canonicalDir,
+  delegationCovers,
   emptyProject,
   findContact,
   findGroup,
@@ -31,6 +38,7 @@ import {
   matchProject,
   requireContactName,
   requireProjectName,
+  scopeKey,
 } from "@souieba/sdk";
 import type { relayParts } from "./relay.ts";
 
@@ -41,7 +49,24 @@ export type Change = {
   widens: boolean;
   /** 実行して、結果の文を返す */
   apply: () => Promise<string>;
+  /** 広げる操作のとき、主人がこのすべてをエージェントに任せていれば、確認なしで実行してよい（ないなら任せられない） */
+  scopes?: DelegationScope[];
+  /** 主人が直接（TUI か、端末での y/N）しか実行できない操作。--yes・MCP の confirm・任せた範囲では実行しない */
+  ownerOnly?: boolean;
 };
+
+/** 任せる期限の選び方（TUI・CLI 共通） */
+export const DELEGATION_TERMS = { "24h": 24 * 3_600_000, "7d": 7 * 86_400_000, forever: null } as const;
+export type DelegationTerm = keyof typeof DELEGATION_TERMS;
+
+export function parseTerm(v: string | undefined): DelegationTerm {
+  const t = (v ?? "24h").trim();
+  if (t === "無期限" || t === "none") return "forever";
+  if (t in DELEGATION_TERMS) return t as DelegationTerm;
+  throw new OpError("期限は 24h・7d・forever のどれかにしてください");
+}
+
+const termLabel = (t: DelegationTerm) => (t === "24h" ? "24時間" : t === "7d" ? "7日間" : "期限なし（取り消すまで）");
 
 export type OpsContext = {
   parts: ReturnType<typeof relayParts>;
@@ -69,6 +94,34 @@ export function requireProject(state: RelayState, ref: string | undefined): Proj
   const p = findProject(state, ref ?? DEFAULT_PROJECT);
   if (!p) throw new OpError(`プロジェクト「${ref}」はありません（souieba relay project list で確かめられます）`);
   return p;
+}
+
+/** 任せる範囲の説明（主人に見せる） */
+export function describeScope(state: RelayState, sc: DelegationScope): string {
+  switch (sc.kind) {
+    case "audience":
+      return `プロジェクト「${projectLabel(sc.project)}」の共有先（連絡先やグループの許可 / 禁止 / 設定なし）を変えること`;
+    case "policy":
+      return `プロジェクト「${projectLabel(sc.project)}」の共有方針を書き換えること`;
+    case "dirs":
+      return `プロジェクト「${projectLabel(sc.project)}」のディレクトリを付け外しすること`;
+    case "members":
+      return `グループ「${state.groups[sc.group]?.name ?? sc.group}」のメンバーを出し入れすること`;
+    case "accept":
+      return "届いた接続要求を承認すること（承認しても、共有するには別に許可が要ります）";
+  }
+}
+
+/** CLI の引数（audience|policy|dirs [--project] / members <グループ> / accept）から、任せる範囲を作る */
+export function parseScope(state: RelayState, kind: string | undefined, arg: string | undefined, project: string | undefined): DelegationScope {
+  if (kind === "audience" || kind === "policy" || kind === "dirs") {
+    const pr = requireProject(state, project).name;
+    if (kind === "dirs" && pr === DEFAULT_PROJECT) throw new OpError("既定のプロジェクトにはディレクトリがないので、dirs は任せられません");
+    return { kind, project: pr };
+  }
+  if (kind === "members") return { kind, group: requireGroup(state, arg).id };
+  if (kind === "accept") return { kind };
+  throw new OpError("任せる範囲は audience・policy・dirs（--project <名前>）・members <グループ>・accept のどれかです");
 }
 
 /** 画面や文面に出すプロジェクトの名前 */
@@ -137,6 +190,23 @@ function sameProjects(before: RelayState): Shift[] {
   return names.map((n) => ({ before: n, after: n, label: names.length > 1 ? projectLabel(n) : "" }));
 }
 
+/**
+ * ディレクトリの付け外しを任せられる範囲。付け外すプロジェクトのほか、ディレクトリを取ってくるプロジェクトの dirs も要る。
+ * ホームディレクトリやその上を足す（ほとんどの作業場所が入ってしまう）のは、任せた範囲でもさせない
+ */
+function dirScopes(s: RelayState, project: string, added: string[]): DelegationScope[] | undefined {
+  let home = resolve(homedir());
+  try {
+    home = canonicalDir(home);
+  } catch {
+    // ホームがなければ、そのまま比べる
+  }
+  if (added.some((d) => home === d || home.startsWith(d.endsWith(sep) ? d : d + sep))) return undefined;
+  const from = new Set<string>([project]);
+  for (const other of Object.values(s.projects)) if (other.name !== project && other.dirs.some((d) => added.includes(d))) from.add(other.name);
+  return [...from].map((n) => ({ kind: "dirs" as const, project: n }));
+}
+
 export function relayOps(ctx: OpsContext) {
   const { parts: p } = ctx;
   const load = () => p.state.load();
@@ -146,7 +216,7 @@ export function relayOps(ctx: OpsContext) {
     summary: string,
     fn: (s: RelayState) => void,
     done: string,
-    opts: { alwaysWidens?: boolean; shifts?: (before: RelayState, after: RelayState) => Shift[]; after?: () => void } = {},
+    opts: { alwaysWidens?: boolean; shifts?: (before: RelayState, after: RelayState) => Shift[]; after?: () => void; scopes?: DelegationScope[] } = {},
   ): Change {
     const before = load();
     const after = structuredClone(before);
@@ -155,6 +225,7 @@ export function relayOps(ctx: OpsContext) {
     return {
       summary: `${summary}${diff.note}`,
       widens: opts.alwaysWidens || diff.widens,
+      scopes: opts.scopes,
       apply: async () => {
         p.state.update(fn);
         opts.after?.();
@@ -192,6 +263,7 @@ export function relayOps(ctx: OpsContext) {
       return {
         summary: `Agent ${id} からの接続要求を承認し、呼び名を「${name}」にします（相手からの近況が届くようになります。こちらから共有するには、別に許可が要ります）`,
         widens: true,
+        scopes: [{ kind: "accept" }],
         apply: async () => {
           p.state.update((s) => void (s.pendingNames[id] = name));
           await p.http.accept(id);
@@ -279,6 +351,7 @@ export function relayOps(ctx: OpsContext) {
           else table[id] = rule;
         },
         `${scope(s, pr)}${target}${verb.replace("ことにします", "ことにしました").replace("消します", "消しました")}`,
+        { scopes: [{ kind: "audience", project: pr }] },
       );
     },
 
@@ -319,6 +392,7 @@ export function relayOps(ctx: OpsContext) {
           grp.members = [...new Set([...grp.members.filter((m) => !removeIds.includes(m)), ...addIds])];
         },
         `グループ「${g.name}」のメンバーを変えました`,
+        { scopes: [{ kind: "members", group: g.id }] },
       );
     },
 
@@ -330,6 +404,7 @@ export function relayOps(ctx: OpsContext) {
         (st) => {
           delete st.groups[g.id];
           for (const pr of Object.values(st.projects)) delete pr.access.groups[g.id];
+          st.delegations = (st.delegations ?? []).filter((d) => !(d.scope.kind === "members" && d.scope.group === g.id));
         },
         `グループ「${g.name}」を消しました`,
       );
@@ -346,7 +421,7 @@ export function relayOps(ctx: OpsContext) {
         `${scope(s, pr)}共有方針を次の内容にします:\n  ${t}`,
         (st) => void (st.projects[pr]!.policy = { text: t, updatedAt: ctx.now().toISOString() }),
         "共有方針を設定しました",
-        { alwaysWidens: true },
+        { alwaysWidens: true, scopes: [{ kind: "policy", project: pr }] },
       );
     },
 
@@ -355,6 +430,7 @@ export function relayOps(ctx: OpsContext) {
       const pr = requireProject(s, project).name;
       return mutation(`${scope(s, pr)}共有方針を消します（方針による制限がなくなります）`, (st) => void (st.projects[pr]!.policy = null), "共有方針を消しました", {
         alwaysWidens: true,
+        scopes: [{ kind: "policy", project: pr }],
       });
     },
 
@@ -419,7 +495,7 @@ export function relayOps(ctx: OpsContext) {
           t.dirs = [...new Set([...t.dirs.filter((d) => !removeDirs.includes(d)), ...addDirs])];
         },
         `プロジェクト「${pr.name}」のディレクトリを変えました`,
-        { shifts: dirShifts([...addDirs, ...removeDirs]) },
+        { shifts: dirShifts([...addDirs, ...removeDirs]), scopes: dirScopes(s, pr.name, addDirs) },
       );
     },
 
@@ -430,13 +506,90 @@ export function relayOps(ctx: OpsContext) {
       if (pr.name === DEFAULT_PROJECT) throw new OpError("既定のプロジェクトは消せません");
       return mutation(
         `プロジェクト「${pr.name}」を消します（ディレクトリと、まだ送っていないメモは既定のプロジェクトになります）`,
-        (st) => void delete st.projects[pr.name],
+        (st) => {
+          delete st.projects[pr.name];
+          st.delegations = (st.delegations ?? []).filter((d) => !("project" in d.scope && d.scope.project === pr.name));
+        },
         `プロジェクト「${pr.name}」を消しました`,
         {
           shifts: () => [{ before: pr.name, after: DEFAULT_PROJECT, label: "このプロジェクトのメモ" }],
           after: () => void new NotesStore("", p.dir).move(DEFAULT_PROJECT, { from: pr.name }, ctx.now()),
         },
       );
+    },
+
+    /** プロジェクトの名前を変える。共有先・方針・ディレクトリ・メモ・任せた範囲はそのまま付いていく（届く相手は変わらないので、狭める扱い） */
+    projectRename(ref: string, rawName: string): Change {
+      const s = load();
+      const pr = requireProject(s, ref);
+      if (pr.name === DEFAULT_PROJECT) throw new OpError("既定のプロジェクトの名前は変えられません");
+      let name: string;
+      try {
+        name = requireProjectName(rawName, s);
+      } catch (err) {
+        throw new OpError(err instanceof Error ? err.message : String(err));
+      }
+      return {
+        summary: `プロジェクト「${pr.name}」の名前を「${name}」にします`,
+        widens: false,
+        apply: async () => {
+          p.state.update((st) => {
+            const t = st.projects[pr.name];
+            if (!t) throw new OpError(`プロジェクト「${pr.name}」はありません`);
+            if (st.projects[name]) throw new OpError(`プロジェクト「${name}」はすでにあります`);
+            delete st.projects[pr.name];
+            st.projects[name] = { ...t, name };
+            for (const d of st.delegations ?? []) if ("project" in d.scope && d.scope.project === pr.name) d.scope.project = name;
+          });
+          new NotesStore("", p.dir).renameProject(pr.name, name);
+          return `プロジェクト「${pr.name}」の名前を「${name}」にしました`;
+        },
+      };
+    },
+
+    /** エージェントに範囲を任せる（期限を延ばすのも同じ）。主人が直接するときだけ実行できる */
+    delegateGrant(sc: DelegationScope, term: DelegationTerm): Change {
+      const s = load();
+      const ms = DELEGATION_TERMS[term];
+      const expiresAt = ms === null ? null : new Date(ctx.now().getTime() + ms).toISOString();
+      const desc = describeScope(s, sc);
+      return {
+        summary: `エージェントに、${desc}を任せます（${termLabel(term)}）。この範囲の中で共有を広げる操作は、1回ごとの確認なしで実行されるようになります（変えたことは次の tell で知らされます）`,
+        widens: true,
+        ownerOnly: true,
+        apply: async () => {
+          p.state.update((st) => {
+            const key = scopeKey(sc);
+            st.delegations = [
+              ...(st.delegations ?? []).filter((d) => scopeKey(d.scope) !== key),
+              { scope: sc, grantedAt: ctx.now().toISOString(), expiresAt },
+            ];
+          });
+          return `${desc}を任せました（${termLabel(term)}）`;
+        },
+      };
+    },
+
+    /** 任せた範囲を取り消す（null ならすべて）。狭める操作なので、どこからでも実行できる */
+    delegateRevoke(sc: DelegationScope | null): Change {
+      const s = load();
+      const has = (s.delegations ?? []).some((d) => sc === null || scopeKey(d.scope) === scopeKey(sc));
+      if (!has) throw new OpError(sc === null ? "任せている範囲はありません" : `「${describeScope(s, sc)}」は任せていません`);
+      return {
+        summary: sc === null ? "エージェントに任せた範囲を、すべて取り消します" : `エージェントに任せた「${describeScope(s, sc)}」を取り消します`,
+        widens: false,
+        apply: async () => {
+          p.state.update((st) => {
+            st.delegations = sc === null ? [] : (st.delegations ?? []).filter((d) => scopeKey(d.scope) !== scopeKey(sc));
+          });
+          return "取り消しました";
+        },
+      };
+    },
+
+    /** 主人が任せた範囲の中の操作か（期限切れは数えない） */
+    covered(change: Change): boolean {
+      return !!change.scopes && !change.ownerOnly && delegationCovers(load(), change.scopes, ctx.now());
     },
 
     /** まだ送っていないメモを別のプロジェクトに付け替える（souieba note move）。届く相手が増えるなら広げる操作 */
@@ -463,9 +616,10 @@ export function relayOps(ctx: OpsContext) {
     },
 
     /** 端末の外（エージェント）から変えたことを記録する。次の tell で主人に知らせる */
-    record(change: Change): void {
+    record(change: Change, opts: { delegated?: boolean } = {}): void {
       p.state.update((st) => {
-        st.changeLog = [...(st.changeLog ?? []), { at: ctx.now().toISOString(), summary: change.summary.replace(/\s*\n\s*/g, " "), widens: change.widens, notified: false }].slice(
+        const entry = { at: ctx.now().toISOString(), summary: change.summary.replace(/\s*\n\s*/g, " "), widens: change.widens, notified: false, ...(opts.delegated ? { delegated: true } : {}) };
+        st.changeLog = [...(st.changeLog ?? []), entry].slice(
           -MAX_CHANGE_LOG,
         );
       });

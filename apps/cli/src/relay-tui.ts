@@ -4,6 +4,8 @@
  * 上にタブを並べる。プロジェクトのタブ（← → で切り替え）では、そのプロジェクトのディレクトリ・共有先・Policy を出し、
  * 「連絡先」のタブには、全体のもの（届いた接続要求・連絡先の呼び名・グループ・ブロック）をまとめる（docs/v2-projects.md §6）。
  * 操作の中身は CLI と同じ relay-ops.ts を使う。共有を広げる操作と、取り消しにくい操作は、画面の中で y/n を聞く。
+ * エージェントに範囲を任せる（delegation）のは主人だけなので、ここ（と端末での y/N）が入口になる。
+ * プロジェクトのタブに、そのプロジェクトの範囲（共有先・共有方針・ディレクトリ）を、「連絡先」のタブに全体の範囲（接続要求の承認・グループのメンバー）を出す。
  * 外部のライブラリは使わない（CLI を依存なしで配るため）。
  *
  * 表示の決まり:
@@ -12,9 +14,9 @@
  * - 画面を消してから描き直すとちらつくので、行ごとに上書きして行末を消す
  */
 import { emitKeypressEvents } from "node:readline";
-import type { RelayConnection, RelayState, ResolvedRelayAgent } from "@souieba/sdk";
-import { DEFAULT_PROJECT, accessFor } from "@souieba/sdk";
-import { type Change, projectLabel, relayOps } from "./relay-ops.ts";
+import type { DelegationScope, RelayConnection, RelayState, ResolvedRelayAgent } from "@souieba/sdk";
+import { DEFAULT_PROJECT, accessFor, activeDelegations, scopeKey } from "@souieba/sdk";
+import { type Change, describeScope, parseTerm, projectLabel, relayOps } from "./relay-ops.ts";
 import type { relayParts } from "./relay.ts";
 
 type Key = { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean; sequence?: string };
@@ -44,7 +46,8 @@ type Row =
   | { kind: "outgoing"; id: string }
   | { kind: "group"; id: string }
   | { kind: "blocked"; id: string }
-  | { kind: "member"; id: string };
+  | { kind: "member"; id: string }
+  | { kind: "delegation"; scope: DelegationScope };
 
 type Style = "bold" | "dim" | "green" | "red" | "section";
 
@@ -194,6 +197,21 @@ export function createRelayTui(opts: TuiOptions) {
   }
 
   const currentProject = () => tabs()[tab]?.project ?? null;
+
+  /** 任せる範囲の行（任せていれば期限、いなければ「任せていない」） */
+  function delegationLines(scopes: DelegationScope[]): Line[] {
+    const active = new Map(activeDelegations(state, opts.now()).map((d) => [scopeKey(d.scope), d]));
+    return scopes.map((sc) => {
+      const d = active.get(scopeKey(sc));
+      return {
+        cells: [
+          { t: d ? (d.expiresAt ? `  任せている（${d.expiresAt.slice(0, 16).replace("T", " ")} まで）` : "  任せている（期限なし）") : "  任せていない", w: 40, style: d ? ("green" as const) : ("dim" as const) },
+          { t: plain(describeScope(state, sc)) },
+        ],
+        row: { kind: "delegation" as const, scope: sc },
+      };
+    });
+  }
   const groupName = (id: string) => plain(state.groups[id]?.name ?? id);
 
   function projectLines(name: string): Line[] {
@@ -259,6 +277,9 @@ export function createRelayTui(opts: TuiOptions) {
         });
       }
     }
+    L.push(text(""), text("エージェントに任せる範囲（任せると、この範囲で共有を広げる操作を、1回ごとの確認なしで実行します）", "section"));
+    const kinds = name === DEFAULT_PROJECT ? (["audience", "policy"] as const) : (["audience", "policy", "dirs"] as const);
+    L.push(...delegationLines(kinds.map((kind) => ({ kind, project: name }))));
     return L;
   }
 
@@ -315,6 +336,9 @@ export function createRelayTui(opts: TuiOptions) {
       L.push(text(""), text("ブロック中", "section"));
       for (const id of blocked) L.push({ cells: [{ t: `  ${id}` }], row: { kind: "blocked", id } });
     }
+
+    L.push(text(""), text("エージェントに任せる範囲（全体）", "section"));
+    L.push(...delegationLines([{ kind: "accept" }, ...groups.map((g) => ({ kind: "members" as const, group: g.id }))]));
     return L;
   }
 
@@ -362,6 +386,8 @@ export function createRelayTui(opts: TuiOptions) {
         return "m / Enter: メンバー  d: 削除";
       case "blocked":
         return "u: ブロックを解除";
+      case "delegation":
+        return "Enter: 任せる / 取り消す";
       default:
         return "";
     }
@@ -373,7 +399,7 @@ export function createRelayTui(opts: TuiOptions) {
     const global =
       pr === null
         ? "c: 接続を要求  g: グループを作る"
-        : `p: プロジェクトを作る${pr !== DEFAULT_PROJECT ? "  D: このプロジェクトを消す" : ""}`;
+        : `p: プロジェクトを作る${pr !== DEFAULT_PROJECT ? "  N: 名前を変える  D: このプロジェクトを消す" : ""}`;
     return [keysFor(row), "左右: タブ  上下: 選ぶ", global, "R: 再読み込み  q: 終了"].filter(Boolean).join("  ");
   }
 
@@ -483,6 +509,11 @@ export function createRelayTui(opts: TuiOptions) {
     else if (str === "R") {
       message = "再読み込みしました";
       await reload();
+    } else if (row?.kind === "delegation" && (name === "return" || name === "space")) {
+      const sc = row.scope;
+      // 取り消すのは狭める操作なのでそのまま。任せるときは期限を選んでから y/n を聞く
+      if (activeDelegations(state, opts.now()).some((d) => scopeKey(d.scope) === scopeKey(sc))) await attempt(async () => perform(ops.delegateRevoke(sc)));
+      else prompt("任せる期限（24h / 7d / forever）", "24h", (t) => attempt(async () => perform(ops.delegateGrant(sc, parseTerm(t)))));
     } else if (pr !== null) {
       // プロジェクトのタブ
       if (str === "p") {
@@ -494,6 +525,14 @@ export function createRelayTui(opts: TuiOptions) {
               if (i >= 0) tab = i;
             }),
           ),
+        );
+      } else if (str === "N" && pr !== DEFAULT_PROJECT) {
+        prompt("新しい名前", pr, (n) =>
+          attempt(async () => {
+            await perform(ops.projectRename(pr, n));
+            const i = tabs().findIndex((t) => t.project === n.trim());
+            if (i >= 0) tab = i;
+          }),
         );
       } else if (str === "D" && pr !== DEFAULT_PROJECT) {
         await attempt(async () => perform(ops.projectDelete(pr), { destructive: true }));

@@ -1,7 +1,7 @@
 import { statSync } from "node:fs";
 import { parseArgs } from "node:util";
 import * as agentCmd from "./agent.ts";
-import { NeedsApprovalError, isInteractive, relayCommand, ttyAsk } from "./relay.ts";
+import { NeedsApprovalError, OwnerOnlyError, isInteractive, relayCommand, ttyAsk } from "./relay.ts";
 import {
   CLIENT_VERSION_HEADER,
   type KeyDirectory,
@@ -183,6 +183,8 @@ async function main(argv: string[]) {
       project: { type: "string" },
       "copy-default": { type: "boolean", default: false },
       from: { type: "string" },
+      // souieba relay delegate grant の期限
+      for: { type: "string" },
       cwd: { type: "string" },
       json: { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
@@ -400,6 +402,7 @@ async function main(argv: string[]) {
             yes: values.yes,
             project: values.project,
             copyDefault: values["copy-default"],
+            term: values.for,
             // 承認のあとに実行するコマンドは、読み取った値から組み立て直す（--agent=x のような書き方も1つにまとめる）
             raw: [
               ...positionals.slice(1),
@@ -411,6 +414,12 @@ async function main(argv: string[]) {
           { log: (l) => console.log(l), interactive: isInteractive(), ask: ttyAsk, now: testableNow },
         );
       } catch (err) {
+        if (err instanceof OwnerOnlyError) {
+          // 任せる操作を端末の外から呼んだとき。--yes を付け直しても通らないので、終了コード 3 ではなく 4 にする
+          console.log(err.message);
+          process.exitCode = 4;
+          break;
+        }
         if (!(err instanceof NeedsApprovalError)) throw err;
         // エージェントが --yes なしで実行したとき。案内は標準出力に出し、終了コード 3 で止める
         console.log(err.message);

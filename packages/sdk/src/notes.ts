@@ -210,6 +210,29 @@ export class NotesStore {
     });
   }
 
+  /** プロジェクトの名前を変えたときに、メモと（時間帯, プロジェクト）の記録を付け替える */
+  renameProject(from: string, to: string): void {
+    withFileLock(this.lockPath, () => {
+      const notes = this.all();
+      let changed = false;
+      for (const n of notes) {
+        if (noteProject(n) === from) {
+          n.project = to;
+          changed = true;
+        }
+      }
+      if (changed) this.rewrite(notes);
+      const p = this.readPeriods();
+      const suffix = `#${from}`;
+      const keys = Object.keys(p.done).filter((k) => k.endsWith(suffix));
+      for (const k of keys) {
+        p.done[periodKey(k.slice(0, -suffix.length), to)] = p.done[k]!;
+        delete p.done[k];
+      }
+      if (keys.length > 0) writeSecretJson(this.periodsPath, p);
+    });
+  }
+
   /** 途中で落ちても元のファイルが残るよう、一時ファイルに書いてから置き換える */
   private rewrite(notes: Note[]): void {
     const tmp = `${this.notesPath}.${process.pid}.${randomUUID()}.tmp`;

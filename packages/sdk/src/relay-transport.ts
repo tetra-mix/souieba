@@ -115,7 +115,7 @@ export type RelayNotices = {
   /** Encryption 鍵が新しい版に替わった連絡先 */
   keyChanges: { agentId: string; name: string; at: string }[];
   /** 端末の外（エージェント）から変えた共有の設定で、まだ主人に知らせていないもの */
-  settingsChanges: { at: string; summary: string; widens: boolean }[];
+  settingsChanges: { at: string; summary: string; widens: boolean; delegated: boolean }[];
 };
 
 export type RelayTransportOptions = {
@@ -369,7 +369,7 @@ export class RelayTransport implements SouiebaTransport {
         .filter((c) => c.keyChangedAt)
         .map((c) => ({ agentId: c.agentId, name: c.name, at: c.keyChangedAt! }));
       for (const c of Object.values(s.contacts)) delete c.keyChangedAt;
-      const settingsChanges = (s.changeLog ?? []).filter((c) => !c.notified).map(({ at, summary, widens }) => ({ at, summary, widens }));
+      const settingsChanges = (s.changeLog ?? []).filter((c) => !c.notified).map(({ at, summary, widens, delegated }) => ({ at, summary, widens, delegated: !!delegated }));
       for (const c of s.changeLog ?? []) c.notified = true;
       // 接続の一覧をまだ取っていなければ、接続要求については何も言わない（知らせ済みの記録も変えない）
       if (!conns) return { incomingRequests: [], unnamedPeers: [], keyChanges, settingsChanges };

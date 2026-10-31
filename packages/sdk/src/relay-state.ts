@@ -76,9 +76,48 @@ export type RelayState = {
    * 主人がだまされたエージェントに設定を変えられても、気づけるように
    */
   changeLog?: SettingsChange[];
+  /**
+   * 主人がエージェントに任せた範囲（docs/v2-projects.md §9）。この範囲の中の「広げる操作」は、1回ごとの確認なしで実行できる。
+   * 任せる・広げるのは主人だけ（TUI か、端末での y/N）。取り消すのはどこからでもよい
+   */
+  delegations?: Delegation[];
 };
 
-export type SettingsChange = { at: string; summary: string; widens: boolean; notified: boolean };
+/** 変えたのが、主人に任された範囲の中でのことなら delegated */
+export type SettingsChange = { at: string; summary: string; widens: boolean; notified: boolean; delegated?: boolean };
+
+/**
+ * 任せる範囲。小さく、はっきりしたものだけにする。どれも「任せる範囲そのものを作る・広げる」ことは含まない
+ * - audience: プロジェクトの共有先（個人・グループの allow / deny / unset）
+ * - policy: プロジェクトの共有方針
+ * - dirs: プロジェクトのディレクトリの付け外し
+ * - members: グループのメンバーの出し入れ
+ * - accept: 届いた接続要求の承認（承認しても、共有するには別に許可が要る）
+ */
+export type DelegationScope =
+  | { kind: "audience" | "policy" | "dirs"; project: string }
+  | { kind: "members"; group: string }
+  | { kind: "accept" };
+
+export type Delegation = { scope: DelegationScope; grantedAt: string; /** null なら期限なし */ expiresAt: string | null };
+
+/** 任せる範囲を1つの文字列にする（同じ範囲は1つだけ持つ） */
+export function scopeKey(s: DelegationScope): string {
+  return s.kind === "accept" ? "accept" : s.kind === "members" ? `members:${s.group}` : `${s.kind}:${s.project}`;
+}
+
+/** 今も効いている、任せた範囲 */
+export function activeDelegations(state: RelayState, now: Date): Delegation[] {
+  const t = now.toISOString();
+  return (state.delegations ?? []).filter((d) => d.expiresAt === null || d.expiresAt > t);
+}
+
+/** scopes のどれもが、今も効いている任せた範囲に入っているか（空なら false） */
+export function delegationCovers(state: RelayState, scopes: DelegationScope[], now: Date): boolean {
+  if (scopes.length === 0) return false;
+  const keys = new Set(activeDelegations(state, now).map((d) => scopeKey(d.scope)));
+  return scopes.every((s) => keys.has(scopeKey(s)));
+}
 
 /** 手元に残す変更の記録の上限 */
 export const MAX_CHANGE_LOG = 50;
