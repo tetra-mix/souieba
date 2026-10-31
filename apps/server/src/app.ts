@@ -13,8 +13,9 @@ import * as accounts from "./services/accounts.ts";
 import * as groups from "./services/groups.ts";
 import * as inboxSvc from "./services/inbox.ts";
 import * as posts from "./services/posts.ts";
+import { RELAY_PUBLIC_ROUTES, isLargeRelayBody, relayRoutes } from "./relay-routes.ts";
 
-export const VERSION = "0.7.0";
+export const VERSION = "2.0.0";
 
 /**
  * これより古いクライアントと、バージョンを送らないクライアントは 426 で断る（黙って壊れないように、更新を促す）。
@@ -82,7 +83,13 @@ const BODY_LIMIT = 16 * 1024;
 export const POST_BODY_LIMIT = 256 * 1024;
 
 /** 認証なしで呼べるエンドポイント（Workers の入口で、それ以外の Authorization のない要求を先に弾くため） */
-export const PUBLIC_ROUTES = ["GET /healthz", "GET /v1/instance", "POST /v1/auth/redeem", "POST /v1/admin/bootstrap"];
+export const PUBLIC_ROUTES = [
+  "GET /healthz",
+  "GET /v1/instance",
+  "POST /v1/auth/redeem",
+  "POST /v1/admin/bootstrap",
+  ...RELAY_PUBLIC_ROUTES,
+];
 
 export function createApp(deps: AppDeps) {
   const { db, config } = deps;
@@ -138,6 +145,7 @@ export function createApp(deps: AppDeps) {
     (method === "POST" && path === "/v1/posts") || (method === "PATCH" && /^\/v1\/groups\/[^/]+$/.test(path)) ||
     (method === "PUT" && /^\/v1\/groups\/[^/]+\/name-boxes$/.test(path));
   app.use("/v1/*", (c, next) => (isLargeBody(c.req.method, c.req.path) ? limitPostBody : limitBody)(c, next));
+  app.use("/v2/*", (c, next) => (isLargeRelayBody(c.req.method, c.req.path) ? limitPostBody : limitBody)(c, next));
 
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/v1/instance", (c) =>
@@ -146,11 +154,12 @@ export function createApp(deps: AppDeps) {
       registration: "invite",
       inviteBy: config.inviteBy,
       minClientVersion: MIN_CLIENT_VERSION,
+      relay: config.relay.enabled,
     }),
   );
 
   // 利用者・エージェント用の API は、クライアントのバージョンを確かめる。admin API は souieba-admin が使うので対象外
-  app.use("/v1/*", async (c, next) => {
+  const checkClientVersion = async (c: Context<Env>, next: () => Promise<void>) => {
     if (c.req.path !== "/v1/instance" && !c.req.path.startsWith("/v1/admin/")) {
       const v = c.req.header(CLIENT_VERSION_HEADER);
       if (!v || compareVersions(v, MIN_CLIENT_VERSION) < 0) {
@@ -162,7 +171,12 @@ export function createApp(deps: AppDeps) {
       }
     }
     await next();
-  });
+  };
+  app.use("/v1/*", checkClientVersion);
+  app.use("/v2/*", checkClientVersion);
+
+  // v2 の Relay（Identity 鍵の署名で認証する。v1 のトークンは使わない）
+  app.route("/v2", relayRoutes({ db, config, now }) as never);
 
   app.post("/v1/auth/redeem", async (c) => {
     if (!redeemLimiter.take(`redeem:${rateLimitKey(c.get("clientIp"))}`, now().getTime())) {

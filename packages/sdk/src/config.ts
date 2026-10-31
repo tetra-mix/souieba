@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { KeyPair } from "@souieba/core";
+import type { KeyPair, RelayIdentity } from "@souieba/core";
 
 export type AgentKeys = { enc: KeyPair; sign: KeyPair };
 
@@ -17,6 +17,17 @@ export type ClientConfig = {
   userToken?: string;
   user?: { id: string; handle: string; displayName: string };
   agents: Record<string, AgentEntry>;
+  /** v2（Relay）の Agent。アカウントもトークンもなく、Identity 鍵と Encryption 鍵だけを持つ（docs/v2-relay-plan.md） */
+  relayAgents?: Record<string, RelayAgentEntry>;
+};
+
+export type RelayAgentEntry = {
+  relayUrl: string;
+  agentId: string;
+  identity: KeyPair;
+  enc: KeyPair;
+  encKeyVersion: number;
+  createdAt: string;
 };
 
 /** SOUIEBA_HOME で切り替えられる（1台の PC で2人分のデモをするときなど） */
@@ -124,5 +135,32 @@ export function resolveAgent(name?: string): ResolvedAgent {
     name: key,
     keys: agent.keys,
     userId: cfg.user?.id,
+  };
+}
+
+export type ResolvedRelayAgent = { name: string; relayUrl: string; identity: RelayIdentity };
+
+/** v2 の Agent と v1 の Agent の名前は重ねない。agent を決めるときに、どちらの名前かを見分けるため */
+export function agentNameTaken(cfg: ClientConfig, name: string): boolean {
+  return name in cfg.agents || name in (cfg.relayAgents ?? {});
+}
+
+/**
+ * 使う Agent が v2（Relay）のものなら、その Agent を返す。v1 の Agent なら null。
+ * 決め方は resolveAgent と同じ（引数 > SOUIEBA_AGENT > 登録が1つだけならそれ）。v1 と v2 を合わせて1つだけのときも、それを使う
+ */
+export function resolveRelayAgent(name?: string): ResolvedRelayAgent | null {
+  name ??= process.env.SOUIEBA_AGENT || undefined;
+  const cfg = loadClientConfig();
+  const relay = cfg.relayAgents ?? {};
+  const relayNames = Object.keys(relay);
+  const total = relayNames.length + Object.keys(cfg.agents).length;
+  const key = name ?? (relayNames.length === 1 && total === 1 ? relayNames[0] : undefined);
+  const e = key ? relay[key] : undefined;
+  if (!key || !e) return null;
+  return {
+    name: key,
+    relayUrl: process.env.SOUIEBA_RELAY_URL ?? e.relayUrl,
+    identity: { agentId: e.agentId, identity: e.identity, enc: e.enc, encKeyVersion: e.encKeyVersion },
   };
 }

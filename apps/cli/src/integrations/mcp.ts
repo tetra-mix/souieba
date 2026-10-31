@@ -5,7 +5,8 @@
  * MCP にはフックがないので、tell と note を呼ぶかどうかはモデルの判断に任される（instructions とツールの説明で促す）。
  * 伝えそびれを減らすため、souieba_note の結果にも近況を1件添える。メモを遅くしないよう同期と予約だけをし、
  * 伝えたことの記録（TOLD）は、次に souieba_tell が呼ばれたときにする（モデルが読み飛ばしても、予約の期限が切れれば受信箱に戻る）。
- * ログイン・グループ・招待・Agent の登録などの主人の操作は出さない（届いた近況に命令が紛れ込んでも、エージェントに実行させないため）。
+ * v1 のログイン・グループ・招待・Agent の登録などの主人の操作は出さない（届いた近況に命令が紛れ込んでも、エージェントに実行させないため）。
+ * v2（Relay）の共有の設定は、CLI と同じ2段階（広げる操作は confirm: true が要る）で出す（mcp-relay.ts）。エージェントに範囲を任せる操作は出さない。
  *
  * 標準出力は MCP の通信に使うので、ここから呼ぶ処理では console.log を使わない。
  */
@@ -16,6 +17,7 @@ import { z } from "zod";
 import * as agentCmd from "../agent.ts";
 import { CLI_VERSION } from "../version.ts";
 import { MCP_GUIDE } from "./guide.ts";
+import { registerRelayTools } from "./mcp-relay.ts";
 
 function text(t: string, isError = false): CallToolResult {
   return { content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) };
@@ -59,12 +61,16 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
       title: "主人の近況をメモする",
       description:
         "主人から作業を頼まれたときや、主人がしていること・したこと・これからすることが話に出たときに、回答を書く前に呼ぶ。メモはこの PC にだけ保存され、1時間ごとの投稿の材料になる。認証情報・住所・金融情報・健康や家族の話題・他人の個人情報・主人が内緒と言ったことは書かない。",
-      inputSchema: { text: z.string().min(1).max(400).describe("「主人は……」で始まる三人称のメモ（〜100字）") },
+      inputSchema: {
+        text: z.string().min(1).max(400).describe("「主人は……」で始まる三人称のメモ（〜100字）"),
+        cwd: z.string().max(1000).optional().describe("v2 のみ: 主人と作業しているディレクトリ（分かるときだけ。共有先を決めるプロジェクトの判定に使う）"),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
-    ({ text: memo }) =>
+    ({ text: memo, cwd }) =>
       guarded(async () => {
-        const r = agentCmd.noteResult(f, memo);
+        // ディレクトリが分からない会話（Claude Desktop など）は既定のプロジェクト。サーバのカレントディレクトリは使わない
+        const r = agentCmd.noteResult(f, memo, cwd ?? null);
         if (!r.ok) return text(r.text, true);
         // 投稿待ちの時間帯も知らせる（手引きのとおり。手元のファイルを読むだけなので、メモは遅くならない）
         let pending: string | null = null;
@@ -102,12 +108,18 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
       inputSchema: {
         period: z.string().describe("souieba_compose が示した時間帯の開始時刻（ISO 8601）"),
         content: z.string().min(1).max(400).describe("「主人は……」で始まる近況"),
+        // v2（Relay）の Agent のときだけ使う。souieba_compose が案内する
+        project: z.string().max(80).optional().describe("v2 のみ: souieba_compose が示したプロジェクト（省略すると既定）"),
+        to: z.array(z.string().max(80)).max(20).optional().describe("v2 のみ: 宛先（相手の呼び名か group:<グループ>）。省略すると共有してよい全員"),
+        purpose: z.string().max(200).optional().describe("v2 のみ: なぜこの相手に伝えたいか（60字以内）"),
+        nuance: z.string().max(200).optional().describe("v2 のみ: どんな調子で伝えてほしいか（60字以内）"),
+        context: z.string().max(200).optional().describe("v2 のみ: どんな話題のときに出すとよいか（60字以内）"),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
-    ({ period, content }) =>
+    ({ period, content, project, to, purpose, nuance, context }) =>
       guarded(async () => {
-        const r = await agentCmd.publishResult(f, content, period);
+        const r = await agentCmd.publishResult(f, content, period, { to, purpose, nuance, context, project });
         return text(r.text, !r.ok);
       }),
   );
@@ -117,12 +129,16 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
     {
       title: "時間帯を投稿しないことにする",
       description: "souieba_compose で示された時間帯に伝える価値のある内容がなければ、投稿せずに済ませる。",
-      inputSchema: { period: z.string().describe("souieba_compose が示した時間帯の開始時刻（ISO 8601）") },
+      inputSchema: {
+        period: z.string().describe("souieba_compose が示した時間帯の開始時刻（ISO 8601）"),
+        project: z.string().max(80).optional().describe("v2 のみ: souieba_compose が示したプロジェクト（省略すると既定）"),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ period }) => guarded(() => text(agentCmd.skipResult(f, period).text)),
+    ({ period, project }) => guarded(() => text(agentCmd.skipResult(f, period, project).text)),
   );
 
+  registerRelayTools(server, f);
   return server;
 }
 

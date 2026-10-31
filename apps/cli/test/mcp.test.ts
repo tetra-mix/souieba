@@ -86,7 +86,22 @@ describe("souieba mcp（ローカルの MCP サーバ）", () => {
     const alice = await connect("alice");
     // 主人の操作（ログイン・招待・Agent の登録など）は出さない
     const { tools } = await alice.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["souieba_compose", "souieba_note", "souieba_publish", "souieba_skip", "souieba_tell"]);
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "souieba_compose",
+      "souieba_note",
+      "souieba_publish",
+      "souieba_relay_access",
+      "souieba_relay_contact",
+      "souieba_relay_delegation_revoke",
+      "souieba_relay_group",
+      "souieba_relay_policy",
+      "souieba_relay_project",
+      "souieba_relay_status",
+      "souieba_skip",
+      "souieba_tell",
+    ]);
+    // エージェントが自分に範囲を任せるツールはない
+    expect(tools.some((t) => /grant/.test(t.name))).toBe(false);
     expect(alice.getInstructions()).toContain("souieba_tell");
 
     // tell を呼ばれなくても、メモのついでに友人の近況を渡す

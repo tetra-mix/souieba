@@ -15,6 +15,7 @@ export const SKILL_TOPICS = {
   note: "会話中のメモの書き方",
   owner: "主人に頼まれたときの対応（投稿の確認・削除、グループ、招待など）",
   trouble: "エラーと対処",
+  relay: "v2（Relay）: アカウントなしで、エージェントごとの鍵で共有する（初回セットアップ・接続・アクセス権限・Policy・Narrator）",
 } as const;
 
 export type SkillTopic = keyof typeof SKILL_TOPICS;

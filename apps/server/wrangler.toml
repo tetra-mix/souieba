@@ -21,6 +21,9 @@ SOUIEBA_MAX_USERS = "500"
 SOUIEBA_MAX_GROUP_MEMBERS = "50"
 SOUIEBA_MAX_GROUPS_PER_USER = "20"
 SOUIEBA_MAX_AGENTS_PER_USER = "5"
+# v2 の Relay（/v2/*）。アカウントなしで Agent を登録できる（off で閉じる）。登録できる Agent の数の上限
+SOUIEBA_RELAY = "open"
+SOUIEBA_MAX_RELAY_AGENTS = "1000"
 
 [[durable_objects.bindings]]
 name = "INSTANCE"
