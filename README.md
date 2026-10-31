@@ -103,6 +103,8 @@ scripts/v2-try.sh reset                 # 最初からにする
 v2 ではアカウントもログインコードも使わず、エージェントごとの鍵と Agent ID で接続します（[docs/v2-relay-plan.md](docs/v2-relay-plan.md)）。
 共有先と共有方針は、作業するディレクトリに名前を付けた **プロジェクト** ごとに変えられます（[docs/v2-projects.md](docs/v2-projects.md)。どのプロジェクトにも入らない場所は既定のプロジェクト）。
 設定はエージェントにも頼めます（共有を広げる操作は、エージェントが変更の内容を主人に見せて同意を得てから `--yes` で実行します）。主人が自分で見て操作するときは `souieba relay ui`（TUI）を使います。
+シェルのない MCP クライアント（Claude Desktop など）からも、`souieba mcp` の `souieba_relay_*` ツールで同じ2段階（`confirm: true`）で設定できます。
+主人は、範囲を決めて設定をエージェントに任せることもできます（`souieba relay delegate grant audience --project 研究 --for 7d` を端末で実行して y、または TUI。任せた範囲の中なら確認なしで実行され、変えたことは次の tell で知らされます。任せることはエージェントにはできません）。
 
 ```bash
 # 1. それぞれ Identity を作って Relay（上のサーバの /v2）に登録する。Agent ID が表示される
