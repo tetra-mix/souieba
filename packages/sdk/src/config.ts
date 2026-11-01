@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { KeyPair, RelayIdentity } from "@souieba/core";
+import type { DeviceCert, DeviceIdentity, KeyPair } from "@souieba/core";
 
 export type AgentKeys = { enc: KeyPair; sign: KeyPair };
 
@@ -17,8 +17,38 @@ export type ClientConfig = {
   userToken?: string;
   user?: { id: string; handle: string; displayName: string };
   agents: Record<string, AgentEntry>;
-  /** v2（Relay）の Agent。アカウントもトークンもなく、Identity 鍵と Encryption 鍵だけを持つ（docs/v2-relay-plan.md） */
+  /**
+   * 2.0.0 の v2（Relay）の Agent（Agent ごとの ID）。2.1.0 では使わない（souieba init --from <名前> で、人ごとの ID に移す）。
+   * 自動では消さない
+   */
   relayAgents?: Record<string, RelayAgentEntry>;
+  /** 2.1.0 からの v2: この PC の主人（人ごとの ID）と、その端末（エージェント）。docs/v2-design.md */
+  person?: PersonEntry;
+};
+
+/**
+ * 人。Person 鍵の秘密鍵は、その人の最初の PC にだけある（ほかの PC の端末を足す device link は今後。そのときは priv のない形になる）
+ */
+export type PersonEntry = {
+  relayUrl: string;
+  personId: string;
+  person: { pub: string; priv?: string };
+  createdAt: string;
+  /** 端末。キーは手元だけの名前（「Claude Code」など。友人には見せない）。--agent・SOUIEBA_AGENT で選ぶ */
+  devices: Record<string, DeviceEntry>;
+  /** 2.0.0 の Agent から移したとき、その名前 */
+  migratedFrom?: string;
+};
+
+export type DeviceEntry = {
+  deviceId: string;
+  sign: KeyPair;
+  enc: KeyPair;
+  encKeyVersion: number;
+  createdAt: string;
+  cert: DeviceCert;
+  /** 取り消した日時（取り消した端末は使わない。記録のために残す） */
+  revokedAt?: string;
 };
 
 export type RelayAgentEntry = {
@@ -138,29 +168,68 @@ export function resolveAgent(name?: string): ResolvedAgent {
   };
 }
 
-export type ResolvedRelayAgent = { name: string; relayUrl: string; identity: RelayIdentity };
+/** v2 の端末（エージェント）として選ばれたもの */
+export type ResolvedRelayAgent = {
+  /** 端末の名前（手元だけ） */
+  name: string;
+  relayUrl: string;
+  personId: string;
+  personKey: string;
+  device: DeviceIdentity;
+};
 
-/** v2 の Agent と v1 の Agent の名前は重ねない。agent を決めるときに、どちらの名前かを見分けるため */
-export function agentNameTaken(cfg: ClientConfig, name: string): boolean {
-  return name in cfg.agents || name in (cfg.relayAgents ?? {});
+/** 人ごとの状態（連絡先・グループ・プロジェクト・メモ・受信箱）を置くディレクトリ。この PC のすべての端末で共有する */
+export function personDir(): string {
+  return join(souiebaHome(), "person");
 }
 
+/** 端末ごとの状態（Relay のセッション・会話の Session）を置くディレクトリ */
+export function deviceDir(deviceId: string): string {
+  return join(personDir(), "devices", deviceId);
+}
+
+/** v1 の Agent・v2 の端末・2.0.0 の v2 Agent の名前は重ねない。agent を決めるときに、どれの名前かを見分けるため */
+export function agentNameTaken(cfg: ClientConfig, name: string): boolean {
+  return name in cfg.agents || name in (cfg.relayAgents ?? {}) || name in (cfg.person?.devices ?? {});
+}
+
+/** 使っている（取り消していない）端末の名前 */
+export function activeDeviceNames(cfg: ClientConfig): string[] {
+  return Object.entries(cfg.person?.devices ?? {})
+    .filter(([, d]) => !d.revokedAt)
+    .map(([n]) => n);
+}
+
+/** 2.0.0 の v2 Agent を選んだとき（2.1.0 では使えない。移行を案内する） */
+export class LegacyRelayAgentError extends Error {}
+
 /**
- * 使う Agent が v2（Relay）のものなら、その Agent を返す。v1 の Agent なら null。
+ * 使う Agent が v2（Relay）の端末なら、その端末を返す。v1 の Agent なら null。
  * 決め方は resolveAgent と同じ（引数 > SOUIEBA_AGENT > 登録が1つだけならそれ）。v1 と v2 を合わせて1つだけのときも、それを使う
  */
 export function resolveRelayAgent(name?: string): ResolvedRelayAgent | null {
   name ??= process.env.SOUIEBA_AGENT || undefined;
   const cfg = loadClientConfig();
-  const relay = cfg.relayAgents ?? {};
-  const relayNames = Object.keys(relay);
-  const total = relayNames.length + Object.keys(cfg.agents).length;
-  const key = name ?? (relayNames.length === 1 && total === 1 ? relayNames[0] : undefined);
-  const e = key ? relay[key] : undefined;
-  if (!key || !e) return null;
+  const p = cfg.person;
+  const active = activeDeviceNames(cfg);
+  const total = active.length + Object.keys(cfg.agents).length;
+  const key = name ?? (active.length === 1 && total === 1 ? active[0] : undefined);
+  if (!key) return null;
+  const d = p?.devices[key];
+  if (!p || !d) {
+    if (cfg.relayAgents?.[key]) {
+      throw new LegacyRelayAgentError(
+        `「${key}」は souieba 2.0.0 の v2 Agent です。2.1.0 から ID は人ごとになりました。souieba init --from ${JSON.stringify(key)} で移してください（古いファイルは消しません）`,
+      );
+    }
+    return null;
+  }
+  if (d.revokedAt) throw new Error(`端末「${key}」は取り消してあります（souieba device list で確かめられます）`);
   return {
     name: key,
-    relayUrl: process.env.SOUIEBA_RELAY_URL ?? e.relayUrl,
-    identity: { agentId: e.agentId, identity: e.identity, enc: e.enc, encKeyVersion: e.encKeyVersion },
+    relayUrl: process.env.SOUIEBA_RELAY_URL ?? p.relayUrl,
+    personId: p.personId,
+    personKey: p.person.pub,
+    device: { personId: p.personId, deviceId: d.deviceId, sign: d.sign, enc: d.enc, encKeyVersion: d.encKeyVersion, createdAt: d.createdAt, cert: d.cert },
   };
 }

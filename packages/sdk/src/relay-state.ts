@@ -1,7 +1,8 @@
 /**
  * v2 で Client（この PC）が持つ状態。Relay には置かない（docs/v2-design.md §6.4・§7・§8・§13.4）。
- * - 連絡先: 接続済みの Agent と、主人が付けた呼び名、検証して固定した鍵
- * - グループ: Agent ID の集合。この PC だけのもので、他のメンバーとは共有しない
+ * 2.1.0 から人ごと: この PC のすべての端末（エージェント）が、~/.souieba/person/ の1組を共有する。
+ * - 連絡先: 接続済みの人と、主人が付けた呼び名、検証して固定した Person 鍵と、知っている端末
+ * - グループ: Person ID の集合。この PC だけのもので、他のメンバーとは共有しない
  * - プロジェクト: 作業するディレクトリに名前を付けたもの。プロジェクトごとに共有先（アクセス権限）と Policy を持つ（docs/v2-projects.md）
  *   - アクセス権限: 誰に共有してよいか（個人・グループ単位）。既定はすべて禁止
  *   - Policy: 主人が自然言語で書いた共有方針（意味の判断は Agent が行う）
@@ -10,36 +11,31 @@
  * どれも主人の判断で変えるもので、エージェントが自分の判断で変えないよう、変更は CLI で主人の確認を取る（apps/cli の relay コマンド）。
  */
 import { join } from "node:path";
-import {
-  type NarrativeMessage,
-  type RelayDirectoryEntry,
-  type RelayEnvelope,
-  isAgentId,
-  isValidDisplayName,
-  verifyDirectoryEntry,
-} from "@souieba/core";
+import { type NarrativeMessage, type RelayEnvelope, isPersonId, isValidDisplayName } from "@souieba/core";
 import { readStateJson, writeSecretJson } from "./config.ts";
 import { withFileLock } from "./notes.ts";
 
 export type Contact = {
-  agentId: string;
+  personId: string;
   /** 主人が付けた呼び名（Tell 文に入る） */
   name: string;
-  /** 初めて接続したときに検証して固定した鍵 */
-  identityKey: string;
-  encKey: string;
-  encKeyVersion: number;
-  encKeySig: string;
+  /** 初めて接続したときに Person ID から確かめて固定した Person 鍵 */
+  personKey: string;
+  /** 知っている端末（Device ID → 暗号化鍵の版）。版が戻ったら使わない */
+  devices: Record<string, number>;
+  /** 確かめた端末の取り消し（Relay が取り消しを隠しても、この端末には送らない） */
+  revoked: string[];
   addedAt: string;
-  /** Encryption 鍵が新しい版に替わった日時（まだ主人に知らせていなければ残す） */
-  keyChangedAt?: string;
+  /** 端末が増えた・鍵が替わった日時（まだ主人に知らせていなければ残す） */
+  devicesChangedAt?: string;
 };
 
 export type LocalGroup = { id: string; name: string; members: string[]; createdAt: string };
 
 export type AccessRule = "allow" | "deny";
 
-export type ProjectAccess = { agents: Record<string, AccessRule>; groups: Record<string, AccessRule> };
+/** people は Person ID ごとの設定 */
+export type ProjectAccess = { people: Record<string, AccessRule>; groups: Record<string, AccessRule> };
 
 export type SharingPolicy = { text: string; updatedAt: string };
 
@@ -54,13 +50,20 @@ export type Project = {
   access: ProjectAccess;
   policy: SharingPolicy | null;
   createdAt: string;
+  /** どんな作業のプロジェクトか（主人が書く。エージェントがメモのプロジェクトを推定するときに読む） */
+  description?: string;
+  /** エージェントの推定（note の project の推定）でこのプロジェクトに入れてよいか。既定は true（仕事などは false にする） */
+  acceptInference?: boolean;
 };
 
 /** どのプロジェクトにも入らないときに使う、既定のプロジェクト（消せない） */
 export const DEFAULT_PROJECT = "default";
 
+/** どのプロジェクトにも決まらなかったメモの扱い。default: 既定のプロジェクトに入れる（既定）/ hold: 主人が振り分けるまで送らない */
+export type UnresolvedMode = "default" | "hold";
+
 export type RelayState = {
-  v: 2;
+  v: 3;
   contacts: Record<string, Contact>;
   /** 接続要求を送った・承認したときに主人が付けた呼び名（相手が承認して連絡先になるまで覚えておく） */
   pendingNames: Record<string, string>;
@@ -81,6 +84,12 @@ export type RelayState = {
    * 任せる・広げるのは主人だけ（TUI か、端末での y/N）。取り消すのはどこからでもよい
    */
   delegations?: Delegation[];
+  /** MCP のクライアント（initialize の clientInfo.name）ごとに、メモを入れるプロジェクト（主人の規則） */
+  clients?: Record<string, string>;
+  /** どのプロジェクトにも決まらなかったメモの扱い（既定は default） */
+  unresolved?: UnresolvedMode;
+  /** 送った近況の、手元だけの記録（relay sent でプロジェクトと「推定」を出す。配送期限が過ぎたら消す） */
+  sent?: Record<string, { project: string; inferred: boolean; at: string; until: string }>;
 };
 
 /** 変えたのが、主人に任された範囲の中でのことなら delegated */
@@ -125,13 +134,13 @@ export const MAX_CHANGE_LOG = 50;
 export const emptyProject = (name: string, createdAt: string, dirs: string[] = []): Project => ({
   name,
   dirs,
-  access: { agents: {}, groups: {} },
+  access: { people: {}, groups: {} },
   policy: null,
   createdAt,
 });
 
 export const emptyState = (): RelayState => ({
-  v: 2,
+  v: 3,
   contacts: {},
   pendingNames: {},
   groups: {},
@@ -139,6 +148,8 @@ export const emptyState = (): RelayState => ({
   notifiedRequests: [],
   lastToldSender: null,
   changeLog: [],
+  clients: {},
+  unresolved: "default",
 });
 
 /** 共有してよい相手（今の設定で、そのプロジェクトの Publish の宛先になりうる連絡先） */
@@ -146,33 +157,77 @@ export function allowedSet(state: RelayState, project: string = DEFAULT_PROJECT)
   return new Set(Object.keys(state.contacts).filter((id) => accessFor(state, id, project).allowed));
 }
 
-/** v1 の状態（プロジェクトがなかったころ）。access・policy は default プロジェクトの設定にする */
-type RelayStateV1 = Omit<RelayState, "v" | "projects"> & {
-  v: 1;
-  access?: ProjectAccess;
-  policy?: SharingPolicy | null;
-};
-
-/** 古い版の状態を今の版にする。読めない版なら null */
+/** 今の版の状態にする。読めない版なら null（2.0.0 の Agent ごとの状態は migrateAgentState で移す） */
 export function migrateRelayState(raw: unknown): RelayState | null {
   if (!raw || typeof raw !== "object") return null;
-  const r = raw as { v?: unknown };
-  if (r.v === 1) {
-    const { access, policy, ...rest } = raw as RelayStateV1;
-    const def = emptyProject(DEFAULT_PROJECT, new Date(0).toISOString());
-    def.access = { agents: { ...(access?.agents ?? {}) }, groups: { ...(access?.groups ?? {}) } };
-    def.policy = policy ?? null;
-    return { ...emptyState(), ...rest, v: 2, projects: { [DEFAULT_PROJECT]: def } };
+  if ((raw as { v?: unknown }).v !== 3) return null;
+  const s = { ...emptyState(), ...(raw as RelayState) };
+  if (!s.projects[DEFAULT_PROJECT]) s.projects = { ...s.projects, [DEFAULT_PROJECT]: emptyState().projects[DEFAULT_PROJECT]! };
+  return s;
+}
+
+/** 2.0.0 までの、Agent ごとの状態（v1: プロジェクトなし / v2: プロジェクトあり） */
+type AgentStateV1 = { v: 1; contacts?: Record<string, { name?: string }>; pendingNames?: Record<string, string>; groups?: Record<string, LocalGroup>; access?: { agents?: Record<string, AccessRule>; groups?: Record<string, AccessRule> }; policy?: SharingPolicy | null; delegations?: Delegation[] };
+type AgentStateV2 = Omit<AgentStateV1, "v" | "access" | "policy"> & {
+  v: 2;
+  projects?: Record<string, { name: string; dirs?: string[]; access?: { agents?: Record<string, AccessRule>; groups?: Record<string, AccessRule> }; policy?: SharingPolicy | null; createdAt?: string }>;
+};
+
+export type AgentStateMigration = {
+  state: RelayState;
+  /** つなぎ直してもらう相手（ID が変わったので、連絡先は移せない） */
+  oldContacts: { name: string; agentId: string }[];
+  /** 移せなかった設定（個人ごとの共有の設定・グループのメンバー）の説明 */
+  dropped: string[];
+};
+
+/**
+ * 2.0.0 の Agent ごとの状態（relay-state.json）を、人ごとの状態に移す（souieba init --from）。
+ * プロジェクト（ディレクトリ・方針・グループごとの共有先）・グループ（名前だけ）・任せた範囲を移す。
+ * 連絡先・個人ごとの共有の設定・グループのメンバーは、相手の ID が変わるので移さない（一覧にして、つなぎ直してもらう）
+ */
+export function migrateAgentState(raw: unknown, now: Date): AgentStateMigration | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as AgentStateV1 | AgentStateV2;
+  if (r.v !== 1 && r.v !== 2) return null;
+  const state = emptyState();
+  const dropped: string[] = [];
+  const oldContacts = [
+    ...Object.entries(r.contacts ?? {}).map(([agentId, c]) => ({ agentId, name: typeof c?.name === "string" ? c.name : agentId })),
+    ...Object.entries(r.pendingNames ?? {}).map(([agentId, name]) => ({ agentId, name })),
+  ];
+  for (const g of Object.values(r.groups ?? {})) {
+    if (!g || !isGroupId(g.id)) continue;
+    state.groups[g.id] = { id: g.id, name: g.name, members: [], createdAt: g.createdAt ?? now.toISOString() };
+    if (g.members?.length) dropped.push(`グループ「${g.name}」のメンバー ${g.members.length} 人（つなぎ直したら、もう一度加えてください）`);
   }
-  if (r.v === 2) {
-    const s = { ...emptyState(), ...(raw as RelayState) };
-    if (!s.projects[DEFAULT_PROJECT]) s.projects = { ...s.projects, [DEFAULT_PROJECT]: emptyState().projects[DEFAULT_PROJECT]! };
-    return s;
+  const projects =
+    r.v === 1
+      ? { [DEFAULT_PROJECT]: { name: DEFAULT_PROJECT, dirs: [], access: r.access, policy: r.policy ?? null, createdAt: new Date(0).toISOString() } }
+      : (r.projects ?? {});
+  for (const [name, p] of Object.entries(projects)) {
+    if (!p) continue;
+    const pr = emptyProject(name, p.createdAt ?? now.toISOString(), name === DEFAULT_PROJECT ? [] : [...(p.dirs ?? [])]);
+    for (const [gid, rule] of Object.entries(p.access?.groups ?? {})) if (state.groups[gid] && (rule === "allow" || rule === "deny")) pr.access.groups[gid] = rule;
+    const people = Object.keys(p.access?.agents ?? {}).length;
+    if (people) dropped.push(`プロジェクト「${name === DEFAULT_PROJECT ? "既定" : name}」の個人ごとの共有の設定 ${people} 件`);
+    pr.policy = p.policy ?? null;
+    state.projects[name] = pr;
   }
-  return null;
+  if (!state.projects[DEFAULT_PROJECT]) state.projects[DEFAULT_PROJECT] = emptyState().projects[DEFAULT_PROJECT]!;
+  state.delegations = (r.delegations ?? []).filter((d) => {
+    const sc = d?.scope;
+    if (!sc) return false;
+    if (sc.kind === "members") return !!state.groups[sc.group];
+    if (sc.kind === "accept") return true;
+    return !!state.projects[sc.project];
+  });
+  return { state, oldContacts, dropped };
 }
 
 export const MAX_POLICY_LENGTH = 1000;
+/** プロジェクトの説明の上限（推定のためにエージェントへ渡すので、短くする） */
+export const MAX_PROJECT_DESCRIPTION = 200;
 export const MAX_LOCAL_GROUPS = 50;
 export const MAX_PROJECTS = 50;
 const GROUP_ID_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
@@ -183,7 +238,7 @@ export function isGroupId(id: string): boolean {
   return GROUP_ID_RE.test(id);
 }
 
-/** Agent の状態ディレクトリに置く、v2 の状態ファイル */
+/** 人の状態ディレクトリ（~/.souieba/person/）に置く、v2 の状態ファイル */
 export class RelayStateStore {
   readonly path: string;
 
@@ -216,41 +271,21 @@ export class RelayStateStore {
 
 // ---- 連絡先と鍵の固定 ----
 
-export type KeyCheck =
-  | { ok: true; changed: boolean }
-  | { ok: false; reason: "invalid_entry" | "key_rollback" | "key_conflict" };
-
-/**
- * Relay が返した鍵を、固定した鍵と照らし合わせる（§4.5・§15.1）。
- * Agent ID は Identity 鍵のハッシュなので、ID が合えば Identity 鍵は本物。Encryption 鍵は Identity 鍵の署名で確かめる。
- * 版が上がっていれば受け入れて知らせ、版が戻っている・同じ版で鍵が違うなら、Relay のすり替えを疑って使わない。
- */
-export function checkPinnedKey(contact: Contact | undefined, entry: RelayDirectoryEntry): KeyCheck {
-  if (!verifyDirectoryEntry(entry).ok) return { ok: false, reason: "invalid_entry" };
-  if (!contact) return { ok: true, changed: false };
-  if (contact.identityKey !== entry.identityKey) return { ok: false, reason: "invalid_entry" };
-  if (entry.encKeyVersion < contact.encKeyVersion) return { ok: false, reason: "key_rollback" };
-  if (entry.encKeyVersion === contact.encKeyVersion) {
-    return entry.encKey === contact.encKey ? { ok: true, changed: false } : { ok: false, reason: "key_conflict" };
-  }
-  return { ok: true, changed: true };
-}
-
-export function contactFrom(entry: RelayDirectoryEntry, name: string, now: Date): Contact {
+/** 確かめた1人分のディレクトリ（verifyPersonDirectory の結果）から、連絡先を作る */
+export function contactFrom(personId: string, personKey: string, devices: { deviceId: string; encKeyVersion: number }[], revoked: string[], name: string, now: Date): Contact {
   return {
-    agentId: entry.agentId,
+    personId,
     name,
-    identityKey: entry.identityKey,
-    encKey: entry.encKey,
-    encKeyVersion: entry.encKeyVersion,
-    encKeySig: entry.encKeySig,
+    personKey,
+    devices: Object.fromEntries(devices.map((d) => [d.deviceId, d.encKeyVersion])),
+    revoked: [...revoked],
     addedAt: now.toISOString(),
   };
 }
 
 /**
  * 呼び名を確かめる。Tell 文に入るので表示名と同じ規則にし、宛先の指定で見分けられるよう、
- * ほかの連絡先（承認待ちを含む）と重なる名前と、宛先の予約語（all）は断る。self はその名前を付け直す相手の Agent ID
+ * ほかの連絡先（承認待ちを含む）と重なる名前と、宛先の予約語（all）は断る。self はその名前を付け直す相手の Person ID
  */
 export function requireContactName(name: string, state?: RelayState, self?: string): string {
   const n = name.trim();
@@ -258,7 +293,7 @@ export function requireContactName(name: string, state?: RelayState, self?: stri
   if (n.toLowerCase() === "all") throw new RelayStateError("「all」は宛先の指定（全員）に使うので、呼び名にはできません");
   if (state) {
     const taken = [
-      ...Object.values(state.contacts).map((c) => [c.agentId, c.name] as const),
+      ...Object.values(state.contacts).map((c) => [c.personId, c.name] as const),
       ...Object.entries(state.pendingNames),
     ].some(([id, other]) => id !== self && other === n);
     if (taken) throw new RelayStateError(`「${n}」という呼び名の相手がすでにいます。別の呼び名にしてください`);
@@ -269,7 +304,7 @@ export function requireContactName(name: string, state?: RelayState, self?: stri
   return n;
 }
 
-/** 呼び名・Agent ID のどちらでも連絡先を引く */
+/** 呼び名・ID のどちらでも連絡先を引く */
 export function findContact(state: RelayState, ref: string): Contact | undefined {
   if (state.contacts[ref]) return state.contacts[ref];
   const byName = Object.values(state.contacts).filter((c) => c.name === ref);
@@ -303,24 +338,24 @@ export function findGroup(state: RelayState, ref: string): LocalGroup | undefine
 
 // ---- アクセス権限 ----
 
-export type AccessDecision = { allowed: boolean; why: "agent_allow" | "agent_deny" | "group_allow" | "group_deny" | "default_deny" };
+export type AccessDecision = { allowed: boolean; why: "person_allow" | "person_deny" | "group_allow" | "group_deny" | "default_deny" };
 
 /**
- * その Agent に共有してよいか（§7）。優先順位は次のとおり（docs/v2-relay-plan.md「未決定事項の決定」）:
+ * その人に共有してよいか（§7）。優先順位は次のとおり（docs/v2-relay-plan.md「未決定事項の決定」）:
  * 1. 個人の設定があればそれに従う（グループの設定より優先）
  * 2. 入っているグループの設定のうち、1つでも deny があれば禁止
  * 3. 入っているグループのどれかが allow なら許可
  * 4. どれもなければ禁止（既定）
  */
-export function accessFor(state: RelayState, agentId: string, project: string = DEFAULT_PROJECT): AccessDecision {
+export function accessFor(state: RelayState, personId: string, project: string = DEFAULT_PROJECT): AccessDecision {
   const p = state.projects[project];
   // 知らないプロジェクトには誰にも共有しない
   if (!p) return { allowed: false, why: "default_deny" };
-  const own = p.access.agents[agentId];
-  if (own === "allow") return { allowed: true, why: "agent_allow" };
-  if (own === "deny") return { allowed: false, why: "agent_deny" };
+  const own = p.access.people[personId];
+  if (own === "allow") return { allowed: true, why: "person_allow" };
+  if (own === "deny") return { allowed: false, why: "person_deny" };
   const rules = Object.values(state.groups)
-    .filter((g) => g.members.includes(agentId))
+    .filter((g) => g.members.includes(personId))
     .map((g) => p.access.groups[g.id])
     .filter((r): r is AccessRule => r !== undefined);
   if (rules.includes("deny")) return { allowed: false, why: "group_deny" };
@@ -338,9 +373,9 @@ export type ResolvedTargets = {
 };
 
 /**
- * Publish の宛先を決める。targets は "all"（既定。接続済みの全員）・"group:<ID か名前>"・Agent ID・呼び名。
+ * Publish の宛先を決める。targets は "all"（既定。接続済みの全員）・"group:<ID か名前>"・Person ID・呼び名。
  * 送信時点の連絡先とグループのメンバーだけを使う（あとから加わった人に過去のメッセージは届かない。§6.3）。
- * connected は Relay が接続済みと返した Agent（接続が切れた相手には送らない）。アクセス権限は project の設定だけで決める
+ * connected は Relay が接続済みと返した人（接続が切れた相手には送らない）。アクセス権限は project の設定だけで決める
  */
 export function resolveTargets(state: RelayState, targets: string[], connected: Set<string>, project: string = DEFAULT_PROJECT): ResolvedTargets {
   if (!state.projects[project]) throw new RelayStateError(`プロジェクト「${project}」はありません`);
@@ -349,15 +384,15 @@ export function resolveTargets(state: RelayState, targets: string[], connected: 
   for (const t of targets.length ? targets : ["all"]) {
     if (t === "all") {
       for (const id of Object.keys(state.contacts)) wanted.add(id);
-    } else if (t.startsWith("group:") || (!isAgentId(t) && findGroup(state, t) && !findContact(state, t))) {
+    } else if (t.startsWith("group:") || (!isPersonId(t) && findGroup(state, t) && !findContact(state, t))) {
       const g = findGroup(state, t);
       if (!g) throw new RelayStateError(`グループ「${t.replace(/^group:/, "")}」はありません`);
       for (const id of g.members) wanted.add(id);
     } else {
       const c = findContact(state, t);
-      if (c) wanted.add(c.agentId);
-      else if (isAgentId(t)) unknown.push(t);
-      else throw new RelayStateError(`宛先「${t}」が見つかりません（呼び名・Agent ID・group:<グループ> のどれか）`);
+      if (c) wanted.add(c.personId);
+      else if (isPersonId(t)) unknown.push(t);
+      else throw new RelayStateError(`宛先「${t}」が見つかりません（呼び名・ID・group:<グループ> のどれか）`);
     }
   }
   const recipients: Contact[] = [];
