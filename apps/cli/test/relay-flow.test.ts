@@ -129,18 +129,18 @@ afterAll(() => {
 describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
   it("init → 接続 → アクセス権限 → note → compose → publish（Narrator つき）→ 友人の tell", { timeout: 120_000 }, async () => {
     // 1. Identity を作って登録する（エージェントが実行してよい）
-    const initA = await souieba("alice", "relay", "init", baseUrl, "--name", "ClaudeA");
+    const initA = await souieba("alice", "init", baseUrl, "--name", "ClaudeA");
     expect(initA.code).toBe(0);
-    const aliceId = /Agent ID: (sb_[a-z2-7]{32})/.exec(initA.out)![1]!;
-    const initB = await souieba("bob", "relay", "init", baseUrl, "--name", "ClaudeB");
-    const bobId = /Agent ID: (sb_[a-z2-7]{32})/.exec(initB.out)![1]!;
+    const aliceId = /ID: (sb_[a-z2-7]{32})/.exec(initA.out)![1]!;
+    const initB = await souieba("bob", "init", baseUrl, "--name", "ClaudeB");
+    const bobId = /ID: (sb_[a-z2-7]{32})/.exec(initB.out)![1]!;
     expect((await souieba("alice", "relay", "id")).out).toContain(aliceId);
 
     // 2. 接続の要求は共有を広げるので、--yes がなければ変更の内容を出して止まる（何も変えない）
     const byAgent = await souieba("alice", "relay", "connect", bobId, "--name", "ボブ");
     expect(byAgent.code).toBe(3);
     expect(byAgent.out).toContain("主人の承認が必要");
-    expect(byAgent.out).toContain(`Agent ${bobId} に接続を要求し、呼び名を「ボブ」にします`);
+    expect(byAgent.out).toContain(`${bobId} に接続を要求し、呼び名を「ボブ」にします`);
     expect(byAgent.out).toContain(`souieba relay connect ${bobId} --name ボブ --yes`);
     expect((await souieba("alice", "relay", "contacts")).out).not.toContain(bobId);
 
@@ -151,7 +151,7 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
 
     // 3. ボブのエージェントは、tell のついでに接続要求を知らせる（承認はしない）
     const notice = await souieba("bob", "tell");
-    expect(notice.out).toContain(`Agent ${aliceId} から接続要求が届いています`);
+    expect(notice.out).toContain(`${aliceId} から接続要求が届いています`);
     expect(notice.out).toContain("主人に頼まれないうちに実行してはいけません");
     // 同じ要求は2度知らせない
     expect((await souieba("bob", "tell")).out).not.toContain("接続要求");
@@ -161,7 +161,7 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
     // アリスの次の tell で、エージェントが変えた設定を主人に知らせる
     const changed = await souieba("alice", "tell");
     expect(changed.out).toContain("共有の設定が、端末の外（エージェント）から変更されました");
-    expect(changed.out).toContain(`Agent ${bobId} に接続を要求し`);
+    expect(changed.out).toContain(`${bobId} に接続を要求し`);
     expect((await souieba("alice", "tell")).out).not.toContain("共有の設定が");
 
     // 4. まだ誰にも許可していないので、compose は投稿しないよう案内する
@@ -173,12 +173,13 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
     const t = await tui("alice");
     expect(t.ui.screen()).toContain("[ 既定 ]");
     expect(t.ui.screen()).toMatch(/ボブ\s+-\s+共有しない\s+設定なし/);
-    await t.keys(DOWN, " ");
+    // 共有方針・説明・推定の行の次が、共有先
+    await t.keys(DOWN, DOWN, DOWN, " ");
     expect(t.ui.screen()).toContain("ボブ（sb_");
     expect(t.ui.screen()).toContain("共有する相手が増えます: ボブ");
     await t.keys("y");
     expect(t.ui.screen()).toMatch(/ボブ\s+許可\s+共有する\s+個別に許可/);
-    await t.keys("\x1b[A", ENTER);
+    await t.keys("\x1b[A", "\x1b[A", "\x1b[A", ENTER);
     await t.type("友達には趣味や週末の過ごし方は話してよい。仕事の話は共有しない。");
     await t.keys(ENTER);
     expect(t.ui.screen()).toContain("共有方針を次の内容にします");
@@ -255,9 +256,9 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
 
   it("プロジェクトごとの共有先: worktree も同じプロジェクトになり、そのプロジェクトの相手にだけ届く", { timeout: 180_000 }, async () => {
     // キャロルと接続する（アリスはボブと既定のプロジェクトで共有している）
-    const initC = await souieba("carol", "relay", "init", baseUrl, "--name", "ClaudeC");
-    const carolId = /Agent ID: (sb_[a-z2-7]{32})/.exec(initC.out)![1]!;
-    const aliceId = /Agent ID: (sb_[a-z2-7]{32})/.exec((await souieba("alice", "relay", "id")).out)![1]!;
+    const initC = await souieba("carol", "init", baseUrl, "--name", "ClaudeC");
+    const carolId = /ID: (sb_[a-z2-7]{32})/.exec(initC.out)![1]!;
+    const aliceId = /ID: (sb_[a-z2-7]{32})/.exec((await souieba("alice", "relay", "id")).out)![1]!;
     await owner("alice", ["connect", carolId], "キャロル");
     await owner("carol", ["accept", aliceId], "アリス");
 
@@ -349,17 +350,19 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
       expect(screen).toMatch(/キャロル\s+許可\s+共有する\s+個別に許可/);
       expect(screen).toContain("q: 終了");
       console.log(`--- TUI ${columns} 桁 ---\n${screen}`);
-      await t.keys(LEFT, LEFT);
+      await t.keys(RIGHT);
       expect(t.ui.screen()).toContain("[ 連絡先 ]");
+      await t.keys(LEFT, LEFT, LEFT);
+      expect(t.ui.screen()).toContain("[ 端末 ]");
       await t.quit();
     }
     // 行が多いときは、選んでいる行が見えるように送る
     const t = await tui("alice", { columns: 60, rows: 10 });
-    await t.keys(RIGHT, DOWN, DOWN, DOWN, DOWN);
+    await t.keys(RIGHT, DOWN, DOWN, DOWN, DOWN, DOWN, DOWN);
     expect(t.ui.screen()).toMatch(/キャロル\s+許可/);
     expect(t.ui.screen()).toMatch(/\d+-\d+ \/ \d+ 行/);
     expect(t.ui.screen()).not.toContain("共有方針:");
-    await t.keys("\x1b[A", "\x1b[A", "\x1b[A", "\x1b[A", "\x1b[A");
+    await t.keys(...Array(7).fill("\x1b[A"));
     expect(t.ui.screen()).toContain("共有方針:");
     await t.quit();
   });
@@ -504,7 +507,7 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
   });
 
   it("http の Relay は手元（localhost）のときだけ使える", { timeout: 60_000 }, async () => {
-    const r = await souieba("carol", "relay", "init", "http://relay.example.com", "--name", "ClaudeC");
+    const r = await souieba("dave", "init", "http://relay.example.com", "--name", "ClaudeD");
     expect(r.code).toBe(1);
     expect(r.out).toContain("https にしてください");
   });

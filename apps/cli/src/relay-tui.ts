@@ -3,6 +3,8 @@
  * エージェント（LLM）を通さない、決定論的な入口（docs/v2-relay-plan.md §5）。
  * 上にタブを並べる。プロジェクトのタブ（← → で切り替え）では、そのプロジェクトのディレクトリ・共有先・Policy を出し、
  * 「連絡先」のタブには、全体のもの（届いた接続要求・連絡先の呼び名・グループ・ブロック）をまとめる（docs/v2-projects.md §6）。
+ * 「保留と推定」のタブには、どのプロジェクトにも決まらず保留にしたメモと、エージェントの推定で決めたメモ、メモの振り分けの規則
+ * （MCP クライアントごとの規則・決まらないときの扱い）を、「端末」のタブには、この PC のエージェント（端末）を出す。
  * 操作の中身は CLI と同じ relay-ops.ts を使う。共有を広げる操作と、取り消しにくい操作は、画面の中で y/n を聞く。
  * エージェントに範囲を任せる（delegation）のは主人だけなので、ここ（と端末での y/N）が入口になる。
  * プロジェクトのタブに、そのプロジェクトの範囲（共有先・共有方針・ディレクトリ）を、「連絡先」のタブに全体の範囲（接続要求の承認・グループのメンバー）を出す。
@@ -14,8 +16,9 @@
  * - 画面を消してから描き直すとちらつくので、行ごとに上書きして行末を消す
  */
 import { emitKeypressEvents } from "node:readline";
-import type { DelegationScope, RelayConnection, RelayState, ResolvedRelayAgent } from "@souieba/sdk";
-import { DEFAULT_PROJECT, accessFor, activeDelegations, scopeKey } from "@souieba/sdk";
+import type { DelegationScope, Note, RelayConnection, RelayState, ResolvedRelayAgent } from "@souieba/sdk";
+import { DEFAULT_PROJECT, accessFor, activeDelegations, loadClientConfig, scopeKey } from "@souieba/sdk";
+import { addDevice, revokeDeviceNamed } from "./person.ts";
 import { type Change, describeScope, parseTerm, projectLabel, relayOps } from "./relay-ops.ts";
 import type { relayParts } from "./relay.ts";
 
@@ -47,7 +50,15 @@ type Row =
   | { kind: "group"; id: string }
   | { kind: "blocked"; id: string }
   | { kind: "member"; id: string }
-  | { kind: "delegation"; scope: DelegationScope };
+  | { kind: "delegation"; scope: DelegationScope }
+  | { kind: "description" }
+  | { kind: "inference" }
+  | { kind: "reviewNote"; ts: string; held: boolean }
+  | { kind: "unresolved" }
+  | { kind: "client"; client: string }
+  | { kind: "addClient" }
+  | { kind: "device"; name: string; revoked: boolean }
+  | { kind: "addDevice" };
 
 type Style = "bold" | "dim" | "green" | "red" | "section";
 
@@ -152,7 +163,7 @@ function renderLine(l: Line, width: number, selected: boolean): { plain: string;
 
 export function createRelayTui(opts: TuiOptions) {
   const { parts: p, agent } = opts;
-  const ops = relayOps({ parts: p, selfId: agent.identity.agentId, now: opts.now });
+  const ops = relayOps({ parts: p, selfId: agent.personId, now: opts.now });
   const out = opts.output ?? process.stdout;
   const input = opts.input ?? process.stdin;
 
@@ -184,8 +195,8 @@ export function createRelayTui(opts: TuiOptions) {
     tab = Math.min(tab, tabs().length - 1);
   }
 
-  /** タブ: 既定のプロジェクト・ほかのプロジェクト（名前順）・連絡先 */
-  function tabs(): { label: string; project: string | null }[] {
+  /** タブ: 既定のプロジェクト・ほかのプロジェクト（名前順）・連絡先・保留・推定・端末 */
+  function tabs(): { label: string; project: string | null; special?: "review" | "devices" }[] {
     const names = Object.keys(state.projects)
       .filter((n) => n !== DEFAULT_PROJECT)
       .sort((a, b) => a.localeCompare(b));
@@ -193,7 +204,64 @@ export function createRelayTui(opts: TuiOptions) {
       { label: projectLabel(DEFAULT_PROJECT), project: DEFAULT_PROJECT },
       ...names.map((n) => ({ label: n, project: n })),
       { label: "連絡先", project: null },
+      { label: "保留と推定", project: null, special: "review" },
+      { label: "端末", project: null, special: "devices" },
     ];
+  }
+
+  const currentSpecial = () => tabs()[tab]?.special ?? null;
+
+  function reviewLines(): Line[] {
+    const s = state;
+    const L: Line[] = [];
+    const notes: Note[] = p.notes.review(opts.now());
+    L.push(text(`保留のメモ・推定で決めたメモ（${notes.length}）  Enter でプロジェクトを決めると、主人が振り分けたことになります`, "section"));
+    if (notes.length === 0) L.push(text("  （ありません）", "dim"));
+    for (const n of notes) {
+      const held = n.via === "hold";
+      const pr = n.project ?? DEFAULT_PROJECT;
+      L.push({
+        cells: [
+          { t: `  ${n.ts.slice(5, 16).replace("T", " ")}`, w: 14, style: "dim" },
+          held ? { t: "保留", w: 16, style: "red" } : { t: `推定: ${plain(projectLabel(s.projects[pr] ? pr : DEFAULT_PROJECT))}`, w: 16 },
+          { t: plain(n.text) },
+        ],
+        row: { kind: "reviewNote", ts: n.ts, held },
+      });
+    }
+    L.push(text(""), text("メモの振り分けの規則", "section"));
+    L.push({
+      cells: [
+        { t: "  どのプロジェクトにも決まらないメモ: ", w: 40 },
+        s.unresolved === "hold" ? { t: "保留（主人が振り分けるまで送らない）", style: "bold" } : { t: "既定のプロジェクトに入れる" },
+      ],
+      row: { kind: "unresolved" },
+    });
+    L.push(text("  MCP クライアントごとのプロジェクト（Claude Desktop などから書いたメモ）", "dim"));
+    for (const [c, pr] of Object.entries(s.clients ?? {})) {
+      L.push({ cells: [{ t: `  ${plain(c)}`, w: 24 }, { t: `→ ${plain(projectLabel(pr))}` }], row: { kind: "client", client: c } });
+    }
+    L.push({ cells: [{ t: "  + クライアントの規則を足す", style: "dim" }], row: { kind: "addClient" } });
+    return L;
+  }
+
+  function devicesLines(): Line[] {
+    const cfg = loadClientConfig();
+    const L: Line[] = [text("この PC の端末（エージェント）。名前は手元だけのもので、友人には見えません", "section")];
+    L.push(text(`  ID: ${agent.personId}（どの端末でも同じ）`, "dim"));
+    for (const [n, d] of Object.entries(cfg.person?.devices ?? {})) {
+      L.push({
+        cells: [
+          { t: `  ${plain(n)}${n === agent.name ? "（この端末）" : ""}`, w: 28 },
+          { t: short(d.deviceId), w: 16, style: "dim" },
+          d.revokedAt ? { t: `取り消し済み（${d.revokedAt.slice(0, 10)}）`, style: "dim" } : { t: `${d.createdAt.slice(0, 10)} に追加` },
+        ],
+        row: { kind: "device", name: n, revoked: !!d.revokedAt },
+      });
+    }
+    L.push({ cells: [{ t: "  + 端末を足す", style: "dim" }], row: { kind: "addDevice" } });
+    L.push(text(""), text("  ほかの PC の端末を足す（device link）は、今後の予定です", "dim"));
+    return L;
   }
 
   const currentProject = () => tabs()[tab]?.project ?? null;
@@ -219,6 +287,14 @@ export function createRelayTui(opts: TuiOptions) {
     const pr = s.projects[name]!;
     const L: Line[] = [];
     L.push({ cells: [{ t: "共有方針: ", style: "bold" }, { t: pr.policy ? plain(pr.policy.text).replace(/\s+/g, " ") : "（未設定。Enter で書く）" }], row: { kind: "policy" } });
+    L.push({ cells: [{ t: "説明: ", style: "bold" }, { t: pr.description ? plain(pr.description) : "（未設定。エージェントがメモのプロジェクトを推定するときに読みます）", style: pr.description ? undefined : "dim" }], row: { kind: "description" } });
+    L.push({
+      cells: [
+        { t: "推定: ", style: "bold" },
+        pr.acceptInference === false ? { t: "エージェントの推定では、このプロジェクトに入れない", style: "bold" } : { t: "エージェントの推定で、このプロジェクトに入れてよい" },
+      ],
+      row: { kind: "inference" },
+    });
     L.push(text(""));
     if (name === DEFAULT_PROJECT) {
       L.push(text("ディレクトリ: ほかのどのプロジェクトにも入らない場所と、ディレクトリのない会話", "dim"));
@@ -235,17 +311,17 @@ export function createRelayTui(opts: TuiOptions) {
       L.push({ cells: [{ t: "  呼び名", w: 20 }, { t: "個別", w: 6 }, { t: "結果", w: 12 }, { t: "理由" }].map((c) => ({ ...c, style: "dim" as const })) });
     }
     for (const c of contacts) {
-      const own = pr.access.agents[c.agentId];
-      const d = accessFor(s, c.agentId, name);
+      const own = pr.access.people[c.personId];
+      const d = accessFor(s, c.personId, name);
       const ruleGroups = (rule: "allow" | "deny") =>
         Object.values(s.groups)
-          .filter((g) => g.members.includes(c.agentId) && pr.access.groups[g.id] === rule)
+          .filter((g) => g.members.includes(c.personId) && pr.access.groups[g.id] === rule)
           .map((g) => `「${plain(g.name)}」`)
           .join("");
       const reason =
-        d.why === "agent_allow"
+        d.why === "person_allow"
           ? "個別に許可"
-          : d.why === "agent_deny"
+          : d.why === "person_deny"
             ? "個別に禁止"
             : d.why === "group_allow"
               ? `グループ${ruleGroups("allow")}で許可`
@@ -259,7 +335,7 @@ export function createRelayTui(opts: TuiOptions) {
           d.allowed ? { t: "共有する", w: 12, style: "green" } : { t: "共有しない", w: 12, style: "dim" },
           { t: reason, style: d.why === "default_deny" ? "dim" : undefined },
         ],
-        row: { kind: "share", id: c.agentId },
+        row: { kind: "share", id: c.personId },
       });
     }
     const groups = Object.values(s.groups);
@@ -299,16 +375,16 @@ export function createRelayTui(opts: TuiOptions) {
     L.push(text(`連絡先（${contacts.length}）`, "section"));
     if (contacts.length === 0) L.push(text("  （まだいません。c で接続を要求できます）", "dim"));
     for (const c of contacts) {
-      const groups = Object.values(s.groups).filter((g) => g.members.includes(c.agentId)).map((g) => plain(g.name));
-      const shared = Object.keys(s.projects).filter((pr) => accessFor(s, c.agentId, pr).allowed).map(projectLabel);
+      const groups = Object.values(s.groups).filter((g) => g.members.includes(c.personId)).map((g) => plain(g.name));
+      const shared = Object.keys(s.projects).filter((pr) => accessFor(s, c.personId, pr).allowed).map(projectLabel);
       L.push({
         cells: [
           { t: `  ${plain(c.name)}`, w: 20 },
-          { t: short(c.agentId), w: 16, style: "dim" },
+          { t: short(c.personId), w: 16, style: "dim" },
           { t: shared.length ? `共有: ${shared.join("、")}` : "共有なし", w: 24, style: shared.length ? "green" : "dim" },
           { t: groups.length ? `グループ: ${groups.join("、")}` : "" },
         ],
-        row: { kind: "contact", id: c.agentId },
+        row: { kind: "contact", id: c.personId },
       });
     }
 
@@ -348,8 +424,8 @@ export function createRelayTui(opts: TuiOptions) {
     if (contacts.length === 0) L.push(text("  （連絡先がありません）", "dim"));
     for (const c of contacts) {
       L.push({
-        cells: [{ t: `  [${m.selected.has(c.agentId) ? "x" : " "}] ` }, { t: plain(c.name), w: 20 }, { t: short(c.agentId), style: "dim" }],
-        row: { kind: "member", id: c.agentId },
+        cells: [{ t: `  [${m.selected.has(c.personId) ? "x" : " "}] ` }, { t: plain(c.name), w: 20 }, { t: short(c.personId), style: "dim" }],
+        row: { kind: "member", id: c.personId },
       });
     }
     return L;
@@ -357,6 +433,9 @@ export function createRelayTui(opts: TuiOptions) {
 
   function bodyLines(): Line[] {
     if (mode.kind === "members") return membersLines(mode);
+    const sp = currentSpecial();
+    if (sp === "review") return reviewLines();
+    if (sp === "devices") return devicesLines();
     const pr = currentProject();
     return pr ? projectLines(pr) : contactsLines();
   }
@@ -388,6 +467,22 @@ export function createRelayTui(opts: TuiOptions) {
         return "u: ブロックを解除";
       case "delegation":
         return "Enter: 任せる / 取り消す";
+      case "description":
+        return "Enter: 説明を編集";
+      case "inference":
+        return "Space: 推定で入れてよい / 入れない を切り替え";
+      case "reviewNote":
+        return "Enter: プロジェクトを決める";
+      case "unresolved":
+        return "Space: 既定に入れる / 保留 を切り替え";
+      case "client":
+        return "x: この規則を外す";
+      case "addClient":
+        return "Enter: クライアントの規則を足す";
+      case "device":
+        return "x: この端末を取り消す";
+      case "addDevice":
+        return "Enter: 端末を足す";
       default:
         return "";
     }
@@ -397,7 +492,9 @@ export function createRelayTui(opts: TuiOptions) {
     if (mode.kind === "members") return "上下: 選ぶ  Space: 入れる / 外す  Enter: 決める  q: やめる";
     const pr = currentProject();
     const global =
-      pr === null
+      currentSpecial() !== null
+        ? ""
+        : pr === null
         ? "c: 接続を要求  g: グループを作る"
         : `p: プロジェクトを作る${pr !== DEFAULT_PROJECT ? "  N: 名前を変える  D: このプロジェクトを消す" : ""}`;
     return [keysFor(row), "左右: タブ  上下: 選ぶ", global, "R: 再読み込み  q: 終了"].filter(Boolean).join("  ");
@@ -409,7 +506,7 @@ export function createRelayTui(opts: TuiOptions) {
 
     // 上: 題・Relay・タブ
     const head: { plain: string; ansi: string }[] = [];
-    head.push(renderLine({ cells: [{ t: "Souieba v2 の設定  ", style: "bold" }, { t: `${plain(agent.name)}  ${agent.identity.agentId}` }] }, width, false));
+    head.push(renderLine({ cells: [{ t: "Souieba v2 の設定  ", style: "bold" }, { t: `${plain(agent.name)}  ${agent.personId}` }] }, width, false));
     head.push(renderLine(text(`Relay: ${agent.relayUrl}`, "dim"), width, false));
     const ts = tabs();
     let tp = "";
@@ -514,6 +611,37 @@ export function createRelayTui(opts: TuiOptions) {
       // 取り消すのは狭める操作なのでそのまま。任せるときは期限を選んでから y/n を聞く
       if (activeDelegations(state, opts.now()).some((d) => scopeKey(d.scope) === scopeKey(sc))) await attempt(async () => perform(ops.delegateRevoke(sc)));
       else prompt("任せる期限（24h / 7d / forever）", "24h", (t) => attempt(async () => perform(ops.delegateGrant(sc, parseTerm(t)))));
+    } else if (currentSpecial() === "review") {
+      if (row?.kind === "reviewNote" && name === "return") {
+        prompt("このメモのプロジェクト（既定は「既定」）", "", (t) =>
+          attempt(async () => perform(ops.noteMove(t.trim() || DEFAULT_PROJECT, { held: row.held, ts: row.ts }))),
+        );
+      } else if (row?.kind === "unresolved" && (name === "space" || name === "return")) {
+        await attempt(async () => perform(ops.unresolvedMode(state.unresolved === "hold" ? "default" : "hold")));
+      } else if (row?.kind === "client" && str === "x") {
+        await attempt(async () => perform(ops.clientRule(row.client, null)));
+      } else if (row?.kind === "addClient" && name === "return") {
+        prompt("MCP クライアントの名前（clientInfo.name。例: claude-ai）", "", (c) =>
+          prompt("そのクライアントのメモを入れるプロジェクト", "", (t) => attempt(async () => perform(ops.clientRule(c, t.trim())))),
+        );
+      }
+    } else if (currentSpecial() === "devices") {
+      if (row?.kind === "addDevice" && name === "return") {
+        prompt("新しい端末の名前（手元だけの名前）", "", (n) =>
+          attempt(async () => {
+            message = (await addDevice(n, opts.now)).join("\n");
+          }),
+        );
+      } else if (row?.kind === "device" && str === "x" && !row.revoked) {
+        mode = {
+          kind: "confirm",
+          summary: `端末「${row.name}」を取り消します（その端末の鍵では、もう近況を受け取れません。元に戻せません）`,
+          onYes: () =>
+            attempt(async () => {
+              message = (await revokeDeviceNamed(row.name, opts.now)).join("\n");
+            }),
+        };
+      }
     } else if (pr !== null) {
       // プロジェクトのタブ
       if (str === "p") {
@@ -540,17 +668,21 @@ export function createRelayTui(opts: TuiOptions) {
         prompt("共有方針（空にすると消します）", state.projects[pr]?.policy?.text ?? "", (t) =>
           attempt(async () => perform(t.trim() ? ops.policySet(t, pr) : ops.policyClear(pr))),
         );
+      } else if (row?.kind === "description" && (name === "return" || str === "e")) {
+        prompt("プロジェクトの説明（空にすると消します）", state.projects[pr]?.description ?? "", (t) => attempt(async () => perform(ops.projectDescribe(pr, t))));
+      } else if (row?.kind === "inference" && (name === "space" || name === "return")) {
+        await attempt(async () => perform(ops.projectInference(pr, state.projects[pr]?.acceptInference === false)));
       } else if (row?.kind === "addDir" && (name === "return" || str === "a")) {
         prompt("足すディレクトリ", opts.cwd ?? process.cwd(), (d) => attempt(async () => perform(ops.projectDirs(pr, [d.trim()], []))));
       } else if (row?.kind === "dir" && str === "x") {
         await attempt(async () => perform(ops.projectDirs(pr, [], [row.dir])));
       } else if (row?.kind === "share" && (name === "space" || name === "return")) {
-        await attempt(async () => perform(ops.setAccess(row.id, nextRule(state.projects[pr]?.access.agents[row.id]), pr)));
+        await attempt(async () => perform(ops.setAccess(row.id, nextRule(state.projects[pr]?.access.people[row.id]), pr)));
       } else if (row?.kind === "shareGroup" && (name === "space" || name === "return")) {
         await attempt(async () => perform(ops.setAccess(`group:${row.id}`, nextRule(state.projects[pr]?.access.groups[row.id]), pr)));
       }
     } else if (str === "c") {
-      prompt("接続する相手の Agent ID", "", (id) => prompt("この人の呼び名", "", (n) => attempt(async () => perform(ops.connect(id.trim(), n)))));
+      prompt("接続する相手の ID", "", (id) => prompt("この人の呼び名", "", (n) => attempt(async () => perform(ops.connect(id.trim(), n)))));
     } else if (str === "g") {
       prompt("新しいグループの名前", "", (n) => attempt(async () => perform(ops.groupCreate(freeGroupId(), n))));
     } else if (row?.kind === "request") {
@@ -600,7 +732,7 @@ export function createRelayTui(opts: TuiOptions) {
       if (key.name === "up" || str === "k") m.cursor = Math.max(0, m.cursor - 1);
       else if (key.name === "down" || str === "j") m.cursor = Math.min(contacts.length - 1, m.cursor + 1);
       else if (key.name === "space") {
-        const id = contacts[m.cursor]?.agentId;
+        const id = contacts[m.cursor]?.personId;
         if (id) m.selected.has(id) ? m.selected.delete(id) : m.selected.add(id);
       } else if (str === "q" || key.name === "escape") {
         mode = { kind: "list" };

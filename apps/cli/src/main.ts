@@ -32,6 +32,7 @@ import {
   sealForMembers,
 } from "@souieba/sdk";
 import { HOOK_TARGETS, hookOutput, isHookTarget } from "./integrations/hook.ts";
+import { deviceCommand, initCommand } from "./person.ts";
 import { SKILL_TOPICS, installedSkills, isSkillTopic, skillText, skillVersionAdvice } from "./skill.ts";
 import { latestVersion, newerThanCurrent, updateAdvice } from "./update-check.ts";
 import { CLI_VERSION } from "./version.ts";
@@ -62,15 +63,20 @@ const USAGE = `使い方: souieba <command>
   hook <${HOOK_TARGETS.join("|")}>   エージェントのフックから呼ぶ。tell の結果とメモの手引きを、そのエージェントの形式で出力する
   mcp                              MCP サーバ（stdio）として動く。シェルを使えない MCP クライアント（Claude Desktop など）用
   told <postId> | release <postId> --reserve で予約したものを確定・解除する
-  note <メモ> [--cwd <ディレクトリ>]  主人について知ったことをローカルに書き溜める（v2 では作業ディレクトリからプロジェクトを決める）
-  note move <プロジェクト> [--from <プロジェクト>] [--period <開始時刻>]   v2: まだ送っていないメモを別のプロジェクトに移す
+  note <メモ> [--cwd <ディレクトリ>] [--session <会話の ID>] [--project-guess <プロジェクト>]
+                                   主人について知ったことをローカルに書き溜める（v2 では規則・会話の指定・作業場所・推定の順にプロジェクトを決める）
+  note move <プロジェクト> [--from <プロジェクト>] [--period <開始時刻>] [--held] [--note <メモの時刻>]
+                                   v2: まだ送っていないメモを別のプロジェクトに移す（主人が振り分けたことになる）
   compose [--skip <periodStart> [--project <名前>]]   投稿待ちの時間帯とメモを表示する
   publish [--period previous|current|<ISO>] <本文>   1時間分の投稿をする
     v2 の Agent では: [--project <名前>] [--to <相手|group:<グループ>>]... [--purpose <理由>] [--nuance <調子>] [--context <合う話題>]
                       [--expires-in <時間>] [--allow-reshare]
 
-v2（Relay。エージェントごとの鍵で、アカウントなしで共有する）:
-  relay ...                        souieba relay help で一覧（init / id / contacts / connect / accept / allow / policy など）
+v2（Relay。人ごとの ID と、エージェントごとの端末の鍵で、アカウントなしで共有する）:
+  init <Relay の URL> [--name <端末名>]   ID（Person 鍵）と最初の端末を作って Relay に登録する
+  init --from <2.0.0 の Agent 名>          2.0.0 の v2 Agent の設定を移して作る（古いファイルは消さない）
+  device list | add <名前> | revoke <名前>  この PC のエージェント（端末）を足す・取り消す
+  relay ...                        souieba relay help で一覧（id / contacts / connect / accept / allow / policy / project など）
 
 <グループ> は名前か ID。設定ファイル: ${configPath()}（環境変数 SOUIEBA_HOME で場所を変更できます）`;
 
@@ -186,6 +192,11 @@ async function main(argv: string[]) {
       // souieba relay delegate grant の期限
       for: { type: "string" },
       cwd: { type: "string" },
+      // v2 の note: 会話の ID（フックが知らせる）と、エージェントの推定
+      session: { type: "string" },
+      "project-guess": { type: "string" },
+      held: { type: "boolean", default: false },
+      note: { type: "string" },
       json: { type: "boolean", default: false },
       debug: { type: "boolean", default: false },
       version: { type: "boolean", short: "v", default: false },
@@ -270,6 +281,8 @@ async function main(argv: string[]) {
         const name = rest.join(" ");
         if (!name) throw new Error("souieba agent add <名前>");
         const cfg = loadClientConfig();
+        // v2 の端末と同じ名前にすると、--agent でどちらか分からなくなる
+        if (name in (cfg.person?.devices ?? {}) || name in (cfg.relayAgents ?? {})) throw new Error(`「${name}」は v2 の端末の名前です。別の名前にしてください`);
         const enc = generateEncryptionKey();
         const sign = generateSigningKey();
         const r = await client.request<{ agent: { id: string; name: string }; token: string }>("POST", "/v1/agents", {
@@ -339,7 +352,12 @@ async function main(argv: string[]) {
     case "hook": {
       if (!isHookTarget(sub)) throw new Error(`souieba hook <${HOOK_TARGETS.join("|")}>`);
       const stdin = process.stdin.isTTY ? "" : await readStdin();
-      const output = await hookOutput(sub, stdin, async () => (await agentCmd.tellResult({ ...flags, json: false }, false)).text).catch(() => null);
+      const output = await hookOutput(
+        sub,
+        stdin,
+        async () => (await agentCmd.tellResult({ ...flags, json: false }, false)).text,
+        (sess) => agentCmd.hookSession(flags, sess),
+      ).catch(() => null);
       if (output) console.log(output);
       break;
     }
@@ -359,7 +377,7 @@ async function main(argv: string[]) {
         const to = rest[0];
         if (!to) throw new Error("souieba note move <移す先のプロジェクト> [--from <プロジェクト>] [--period <開始時刻>]");
         try {
-          await agentCmd.noteMove(flags, to, { from: values.from, periodStart: values.period, yes: values.yes });
+          await agentCmd.noteMove(flags, to, { from: values.from, periodStart: values.period, yes: values.yes, held: values.held, ts: values.note });
         } catch (err) {
           if (!(err instanceof NeedsApprovalError)) throw err;
           console.log(err.message);
@@ -369,7 +387,11 @@ async function main(argv: string[]) {
       }
       const text = [sub, ...rest].filter(Boolean).join(" ");
       if (!text) throw new Error("souieba note <メモ>");
-      agentCmd.note(flags, text, values.cwd ?? process.cwd());
+      agentCmd.note(flags, text, {
+        cwd: values.cwd ?? process.cwd(),
+        session: values.session ?? process.env.SOUIEBA_SESSION ?? null,
+        guess: values["project-guess"] ?? null,
+      });
       break;
     }
     case "compose":
@@ -391,6 +413,12 @@ async function main(argv: string[]) {
       });
       break;
     }
+    case "init":
+      await initCommand({ url: sub, name: values.name, from: values.from }, { log: (l) => console.log(l), now: testableNow });
+      break;
+    case "device":
+      await deviceCommand({ sub, rest }, { log: (l) => console.log(l), now: testableNow });
+      break;
     case "relay": {
       try {
         await relayCommand(
@@ -403,12 +431,14 @@ async function main(argv: string[]) {
             project: values.project,
             copyDefault: values["copy-default"],
             term: values.for,
+            session: values.session,
             // 承認のあとに実行するコマンドは、読み取った値から組み立て直す（--agent=x のような書き方も1つにまとめる）
             raw: [
               ...positionals.slice(1),
               ...(values.name !== undefined ? ["--name", values.name] : []),
               ...(values.project !== undefined ? ["--project", values.project] : []),
               ...(values["copy-default"] ? ["--copy-default"] : []),
+              ...(values.session !== undefined ? ["--session", values.session] : []),
             ],
           },
           { log: (l) => console.log(l), interactive: isInteractive(), ask: ttyAsk, now: testableNow },

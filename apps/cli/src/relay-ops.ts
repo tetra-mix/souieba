@@ -11,7 +11,7 @@
  * どの操作がどの範囲に入るかは、操作ごとに scopes で示す（scopes がない広げる操作は、任せられない）。
  * 任せる操作（delegateGrant）は ownerOnly で、主人が直接（TUI か端末での y/N）しか実行できない。
  */
-import { isAgentId, isValidDisplayName } from "@souieba/core";
+import { findInstructionLike, isPersonId, isValidDisplayName, sanitizeContent } from "@souieba/core";
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import {
@@ -24,6 +24,7 @@ import {
   MAX_LOCAL_GROUPS,
   MAX_POLICY_LENGTH,
   MAX_PROJECTS,
+  MAX_PROJECT_DESCRIPTION,
   NotesStore,
   type Project,
   type RelayState,
@@ -84,7 +85,7 @@ export function who(state: RelayState, id: string): string {
 }
 
 export function requireContact(state: RelayState, ref: string | undefined): Contact {
-  if (!ref) throw new OpError("相手（呼び名か Agent ID）を指定してください");
+  if (!ref) throw new OpError("相手（呼び名か ID）を指定してください");
   const c = findContact(state, ref);
   if (!c) throw new OpError(`連絡先に「${ref}」がありません（souieba relay contacts で確認できます）`);
   return c;
@@ -148,11 +149,14 @@ export function requireGroup(state: RelayState, ref: string | undefined): LocalG
   return g;
 }
 
+/** 保留（どのプロジェクトにも入らない）を比べるときの名前。プロジェクトの名前にはならない */
+export const HOLD = "\u0000hold";
+
 /** 接続を解除・ブロックした相手を、連絡先・グループ・アクセス権限から外す */
 function forget(s: RelayState, id: string): void {
   delete s.contacts[id];
   delete s.pendingNames[id];
-  for (const p of Object.values(s.projects)) delete p.access.agents[id];
+  for (const p of Object.values(s.projects)) delete p.access.people[id];
   for (const g of Object.values(s.groups)) g.members = g.members.filter((m) => m !== id);
 }
 
@@ -240,11 +244,11 @@ export function relayOps(ctx: OpsContext) {
 
   return {
     connect(id: string, rawName: string): Change {
-      if (!isAgentId(id)) throw new OpError("Agent ID の形式が不正です（sb_ で始まる文字列）");
+      if (!isPersonId(id)) throw new OpError("ID の形式が不正です（sb_ で始まる文字列）");
       if (id === ctx.selfId) throw new OpError("自分自身には接続できません");
       const name = requireContactName(rawName, load(), id);
       return {
-        summary: `Agent ${id} に接続を要求し、呼び名を「${name}」にします（相手が承認すると接続になります。共有するには、別に許可が要ります）`,
+        summary: `${id} に接続を要求し、呼び名を「${name}」にします（相手が承認すると接続になります。共有するには、別に許可が要ります）`,
         widens: true,
         apply: async () => {
           const [e] = await p.http.lookup([id]);
@@ -258,10 +262,10 @@ export function relayOps(ctx: OpsContext) {
     },
 
     accept(id: string, rawName: string): Change {
-      if (!isAgentId(id)) throw new OpError("Agent ID の形式が不正です（sb_ で始まる文字列）");
+      if (!isPersonId(id)) throw new OpError("ID の形式が不正です（sb_ で始まる文字列）");
       const name = requireContactName(rawName, load(), id);
       return {
-        summary: `Agent ${id} からの接続要求を承認し、呼び名を「${name}」にします（相手からの近況が届くようになります。こちらから共有するには、別に許可が要ります）`,
+        summary: `${id} からの接続要求を承認し、呼び名を「${name}」にします（相手からの近況が届くようになります。こちらから共有するには、別に許可が要ります）`,
         widens: true,
         scopes: [{ kind: "accept" }],
         apply: async () => {
@@ -274,9 +278,9 @@ export function relayOps(ctx: OpsContext) {
     },
 
     reject(id: string): Change {
-      if (!isAgentId(id)) throw new OpError("Agent ID の形式が不正です（sb_ で始まる文字列）");
+      if (!isPersonId(id)) throw new OpError("ID の形式が不正です（sb_ で始まる文字列）");
       return {
-        summary: `Agent ${id} からの接続要求を断ります（相手には知らせません）`,
+        summary: `${id} からの接続要求を断ります（相手には知らせません）`,
         widens: false,
         apply: async () => {
           await p.http.reject(id);
@@ -288,8 +292,8 @@ export function relayOps(ctx: OpsContext) {
     rename(ref: string, rawName: string): Change {
       const s = load();
       const c = findContact(s, ref);
-      if (!c && !isAgentId(ref)) throw new OpError(`連絡先に「${ref}」がありません`);
-      const id = c?.agentId ?? ref;
+      if (!c && !isPersonId(ref)) throw new OpError(`連絡先に「${ref}」がありません`);
+      const id = c?.personId ?? ref;
       const name = requireContactName(rawName, s, id);
       return {
         summary: `${who(s, id)} の呼び名を「${name}」にします`,
@@ -307,7 +311,7 @@ export function relayOps(ctx: OpsContext) {
 
     disconnect(ref: string, opts: { block?: boolean } = {}): Change {
       const s = load();
-      const id = isAgentId(ref) ? ref : requireContact(s, ref).agentId;
+      const id = isPersonId(ref) ? ref : requireContact(s, ref).personId;
       return {
         summary: opts.block
           ? `${who(s, id)} をブロックします（接続を解除し、この相手からの接続要求も届かなくなります）`
@@ -323,7 +327,7 @@ export function relayOps(ctx: OpsContext) {
     },
 
     unblock(id: string): Change {
-      if (!isAgentId(id)) throw new OpError("Agent ID の形式が不正です（sb_ で始まる文字列）");
+      if (!isPersonId(id)) throw new OpError("ID の形式が不正です（sb_ で始まる文字列）");
       return {
         summary: `${id} のブロックを解除します（この相手から、また接続要求が届くようになります）`,
         widens: true,
@@ -339,14 +343,14 @@ export function relayOps(ctx: OpsContext) {
       const s = load();
       const pr = requireProject(s, project).name;
       const g = ref.startsWith("group:") || (!findContact(s, ref) && findGroup(s, ref)) ? requireGroup(s, ref) : undefined;
-      const id = g ? g.id : requireContact(s, ref).agentId;
+      const id = g ? g.id : requireContact(s, ref).personId;
       const target = g ? `グループ「${g.name}」（${g.members.length}人）` : who(s, id);
       const verb = rule === "allow" ? "に近況を共有してよいことにします" : rule === "deny" ? "には近況を共有しないことにします" : "の個別の設定を消します";
       return mutation(
         `${scope(s, pr)}${target}${verb}`,
         (st) => {
           const acc = st.projects[pr]!.access;
-          const table = g ? acc.groups : acc.agents;
+          const table = g ? acc.groups : acc.people;
           if (rule === null) delete table[id];
           else table[id] = rule;
         },
@@ -375,8 +379,8 @@ export function relayOps(ctx: OpsContext) {
     groupMembers(ref: string, add: string[], remove: string[]): Change {
       const s = load();
       const g = requireGroup(s, ref);
-      const addIds = add.map((r) => requireContact(s, r).agentId);
-      const removeIds = remove.map((r) => requireContact(s, r).agentId);
+      const addIds = add.map((r) => requireContact(s, r).personId);
+      const removeIds = remove.map((r) => requireContact(s, r).personId);
       if (addIds.length + removeIds.length === 0) throw new OpError("加える・外す相手を指定してください");
       const names = (ids: string[]) => ids.map((id) => s.contacts[id]!.name).join("、");
       const what =
@@ -547,6 +551,142 @@ export function relayOps(ctx: OpsContext) {
       };
     },
 
+    /** プロジェクトの説明（エージェントがメモのプロジェクトを推定するときに読む）。推定を受け付けるプロジェクトで、届く相手がいれば広げる操作 */
+    projectDescribe(ref: string, text: string): Change {
+      const s = load();
+      const pr = requireProject(s, ref);
+      const t = sanitizeContent(text).trim().replace(/\s+/g, " ");
+      // 説明はエージェントへの手引きに入るので、指示に見える文は断る
+      if (findInstructionLike(t).length > 0) throw new OpError("説明に、エージェントへの指示に見える表現が含まれています。どんな作業かだけを短く書いてください");
+      if (t.length > MAX_PROJECT_DESCRIPTION) throw new OpError(`説明は ${MAX_PROJECT_DESCRIPTION} 文字までにしてください`);
+      const reach = pr.acceptInference !== false && allowedSet(s, pr.name).size > 0;
+      return {
+        summary: t
+          ? `プロジェクト「${projectLabel(pr.name)}」の説明を「${t}」にします${reach ? "（エージェントの推定で、このプロジェクトに入るメモが変わることがあります）" : ""}`
+          : `プロジェクト「${projectLabel(pr.name)}」の説明を消します`,
+        widens: !!t && reach,
+        scopes: [{ kind: "dirs", project: pr.name }],
+        apply: async () => {
+          p.state.update((st) => {
+            const x = st.projects[pr.name];
+            if (!x) throw new OpError(`プロジェクト「${pr.name}」はありません`);
+            if (t) x.description = t;
+            else delete x.description;
+          });
+          return t ? "説明を設定しました" : "説明を消しました";
+        },
+      };
+    },
+
+    /** エージェントの推定でこのプロジェクトに入れてよいか。入れてよいことにするのは、届く相手がいれば広げる操作（既定や保留より広いことがある） */
+    projectInference(ref: string, on: boolean): Change {
+      const s = load();
+      const pr = requireProject(s, ref);
+      const fallback = s.unresolved === "hold" ? HOLD : DEFAULT_PROJECT;
+      const diff = on ? describeDiff(s, s, [{ before: fallback, after: pr.name, label: "推定で入るメモ" }]) : { widens: false, note: "" };
+      return {
+        summary: on
+          ? `エージェントの推定で、メモをプロジェクト「${projectLabel(pr.name)}」に入れてよいことにします${diff.note}`
+          : `エージェントの推定では、メモをプロジェクト「${projectLabel(pr.name)}」に入れないことにします（ディレクトリなどの規則や、会話ごとの指定では入ります）`,
+        widens: on && (diff.widens || allowedSet(s, pr.name).size > 0),
+        scopes: [{ kind: "dirs", project: pr.name }],
+        apply: async () => {
+          p.state.update((st) => {
+            const x = st.projects[pr.name];
+            if (!x) throw new OpError(`プロジェクト「${pr.name}」はありません`);
+            if (on) delete x.acceptInference;
+            else x.acceptInference = false;
+          });
+          return on ? "推定で入れてよいことにしました" : "推定では入れないことにしました";
+        },
+      };
+    },
+
+    /** MCP のクライアントごとの規則。project が null なら外す。決まらないときより届く相手が増えるなら広げる操作 */
+    clientRule(rawClient: string, project: string | null): Change {
+      const s = load();
+      const client = rawClient.trim();
+      if (!client || client.length > 80 || !isValidDisplayName(client)) throw new OpError("クライアント名は1〜80文字の名前にしてください（MCP の clientInfo.name。例: claude-ai）");
+      const fallback = s.unresolved === "hold" ? HOLD : DEFAULT_PROJECT;
+      const cur = s.clients?.[client];
+      if (project === null) {
+        if (!cur) throw new OpError(`クライアント「${client}」の規則はありません`);
+        const diff = describeDiff(s, s, [{ before: cur, after: fallback, label: `${client} のメモ` }]);
+        return {
+          summary: `MCP クライアント「${client}」の規則（→ ${projectLabel(cur)}）を外します${diff.note}`,
+          widens: diff.widens,
+          scopes: [{ kind: "dirs", project: fallback === HOLD ? DEFAULT_PROJECT : fallback }],
+          apply: async () => {
+            p.state.update((st) => {
+              if (st.clients) delete st.clients[client];
+            });
+            return "規則を外しました";
+          },
+        };
+      }
+      const pr = requireProject(s, project).name;
+      const diff = describeDiff(s, s, [{ before: cur ?? fallback, after: pr, label: `${client} のメモ` }]);
+      return {
+        summary: `MCP クライアント「${client}」からのメモを、プロジェクト「${projectLabel(pr)}」に入れます${diff.note}`,
+        widens: diff.widens,
+        scopes: [{ kind: "dirs", project: pr }],
+        apply: async () => {
+          p.state.update((st) => {
+            if (!st.projects[pr]) throw new OpError(`プロジェクト「${pr}」はありません`);
+            st.clients = { ...(st.clients ?? {}), [client]: pr };
+          });
+          return `「${client}」のメモを「${projectLabel(pr)}」に入れることにしました`;
+        },
+      };
+    },
+
+    /** どのプロジェクトにも決まらないメモの扱い。保留から既定に戻すのは、既定の共有先がいれば広げる操作 */
+    unresolvedMode(mode: "default" | "hold"): Change {
+      const s = load();
+      const cur = s.unresolved === "hold" ? "hold" : "default";
+      const diff = mode === "default" && cur === "hold" ? describeDiff(s, s, [{ before: HOLD, after: DEFAULT_PROJECT, label: "決まらないメモ" }]) : { widens: false, note: "" };
+      return {
+        summary:
+          mode === "hold"
+            ? "どのプロジェクトにも決まらないメモは、主人が振り分けるまで保留にします（送りません）"
+            : `どのプロジェクトにも決まらないメモは、既定のプロジェクトに入れます${diff.note}`,
+        widens: diff.widens,
+        apply: async () => {
+          p.state.update((st) => void (st.unresolved = mode));
+          return mode === "hold" ? "保留にすることにしました" : "既定に入れることにしました";
+        },
+      };
+    },
+
+    /**
+     * 会話ごとの指定（pin）。主人が「この会話は仕事」と言ったときだけ使う。project が null なら外す。
+     * baseline は、指定がなければこの会話のメモが入るプロジェクト（null なら保留）。それより届く相手が増えるなら広げる操作（任せることはできない）
+     */
+    pin(project: string | null, baseline: string | null, set: (project: string | null) => void): Change {
+      const s = load();
+      const base = baseline && s.projects[baseline] ? baseline : baseline === null ? HOLD : DEFAULT_PROJECT;
+      if (project === null) {
+        return {
+          summary: "この会話のプロジェクトの指定を外します",
+          widens: false,
+          apply: async () => {
+            set(null);
+            return "この会話のプロジェクトの指定を外しました";
+          },
+        };
+      }
+      const pr = requireProject(s, project).name;
+      const diff = describeDiff(s, s, [{ before: base, after: pr, label: "この会話のメモ" }]);
+      return {
+        summary: `この会話のメモを、プロジェクト「${projectLabel(pr)}」に入れます（ディレクトリや MCP クライアントの規則が当てはまるときは、そちらが優先）${diff.note}`,
+        widens: diff.widens,
+        apply: async () => {
+          set(pr);
+          return `この会話のメモを「${projectLabel(pr)}」に入れることにしました`;
+        },
+      };
+    },
+
     /** エージェントに範囲を任せる（期限を延ばすのも同じ）。主人が直接するときだけ実行できる */
     delegateGrant(sc: DelegationScope, term: DelegationTerm): Change {
       const s = load();
@@ -593,23 +733,23 @@ export function relayOps(ctx: OpsContext) {
     },
 
     /** まだ送っていないメモを別のプロジェクトに付け替える（souieba note move）。届く相手が増えるなら広げる操作 */
-    noteMove(to: string, opts: { from?: string; periodStart?: string }): Change {
+    noteMove(to: string, opts: { from?: string; periodStart?: string; held?: boolean; ts?: string }): Change {
       const s = load();
       const target = requireProject(s, to).name;
       const from = opts.from !== undefined ? requireProject(s, opts.from).name : undefined;
-      const sources = from !== undefined ? [from] : Object.keys(s.projects).filter((n) => n !== target);
+      const sources = opts.held ? [HOLD] : from !== undefined ? [from] : Object.keys(s.projects).filter((n) => n !== target);
       const label = (n: string) => (n === DEFAULT_PROJECT ? "既定" : `「${n}」`);
       const diff = describeDiff(
         s,
         s,
-        sources.map((n) => ({ before: n, after: target, label: `${label(n)}のメモ` })),
+        sources.map((n) => ({ before: n, after: target, label: n === HOLD ? "保留のメモ" : `${label(n)}のメモ` })),
       );
-      const what = `${from !== undefined ? `プロジェクト${label(from)}の` : ""}${opts.periodStart ? `${opts.periodStart} からの1時間の` : ""}まだ送っていないメモを、プロジェクト${label(target)}に移します`;
+      const what = `${opts.held ? "保留の" : from !== undefined ? `プロジェクト${label(from)}の` : ""}${opts.ts ? `${opts.ts} の` : opts.periodStart ? `${opts.periodStart} からの1時間の` : ""}まだ送っていないメモを、プロジェクト${label(target)}に移します`;
       return {
         summary: `${what}${diff.note}`,
         widens: diff.widens,
         apply: async () => {
-          const n = new NotesStore("", p.dir).move(target, { from, periodStart: opts.periodStart }, ctx.now());
+          const n = new NotesStore("", p.dir).move(target, { from, periodStart: opts.periodStart, held: opts.held, ts: opts.ts }, ctx.now());
           return n > 0 ? `${n} 件のメモをプロジェクト${label(target)}に移しました` : "移すメモはありませんでした";
         },
       };

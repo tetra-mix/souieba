@@ -89,6 +89,7 @@ describe("souieba mcp（ローカルの MCP サーバ）", () => {
     expect(tools.map((t) => t.name).sort()).toEqual([
       "souieba_compose",
       "souieba_note",
+      "souieba_project_pin",
       "souieba_publish",
       "souieba_relay_access",
       "souieba_relay_contact",
