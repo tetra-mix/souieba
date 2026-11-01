@@ -6,11 +6,13 @@
 import { fileURLToPath } from "node:url";
 import {
   CLIENT_VERSION_HEADER,
+  type DeviceIdentity,
   type KeyPair,
-  type RelayIdentity,
-  directoryEntry,
+  type PersonKeys,
+  certifyDevice,
+  generateDevice,
   generateEncryptionKey,
-  generateRelayIdentity,
+  generatePerson,
   generateSigningKey,
   openPost,
   openRelayMessage,
@@ -173,38 +175,57 @@ describe("Workers 版（workerd + Durable Object）", () => {
     expect((await call("GET", "/v1/admin/groups", adminToken)).body.groups).toMatchObject([{ id: groupId, memberCount: 1 }]);
   }, 60_000);
 
-  it("v2: 登録 → チャレンジ認証 → 接続 → 受信者別の暗号化メッセージの配送", async () => {
-    const ids = [generateRelayIdentity(), generateRelayIdentity()];
-    const tokens: string[] = [];
-    for (const id of ids) {
-      expect((await call("POST", "/v2/agents", undefined, { entry: directoryEntry(id) })).status).toBe(201);
-      const ch = await call("POST", "/v2/auth/challenge", undefined, { agentId: id.agentId });
-      // wrangler.toml の SOUIEBA_PUBLIC_URL が、署名に含める Relay の origin になる
-      const s = await call("POST", "/v2/auth/session", undefined, {
-        agentId: id.agentId,
-        challenge: ch.body.challenge,
-        sig: signChallenge(id, new URL(PUBLIC_URL).origin, ch.body.challenge),
-      });
-      expect(s.status).toBe(201);
-      tokens.push(s.body.token);
+  it("v2: 人と端末の登録 → 端末のチャレンジ認証 → 人と人の接続 → 端末ごとの暗号化メッセージの配送", async () => {
+    const at = new Date().toISOString();
+    const people = [generatePerson(), generatePerson()];
+    const devs: DeviceIdentity[][] = [];
+    const tokens: string[][] = [];
+    for (const [i, p] of people.entries()) {
+      devs.push([]);
+      tokens.push([]);
+      // 2人目は端末を2台にする（両方に配送される）。入口の AUTH_RATE_LIMITER（10回/分）に収まるよう、2台目はログインしない
+      for (let k = 0; k < (i === 1 ? 2 : 1); k++) {
+        const d0 = generateDevice(p.personId, at);
+        const d = { ...d0, cert: certifyDevice(p, d0) };
+        expect((await call("POST", "/v2/devices", undefined, { personKey: p.person.pub, cert: d.cert })).status).toBe(201);
+        if (k === 1) {
+          devs[i]!.push(d);
+          continue;
+        }
+        const ch = await call("POST", "/v2/auth/challenge", undefined, { deviceId: d.deviceId });
+        // wrangler.toml の SOUIEBA_PUBLIC_URL が、署名に含める Relay の origin になる
+        const s = await call("POST", "/v2/auth/session", undefined, {
+          personId: p.personId,
+          deviceId: d.deviceId,
+          challenge: ch.body.challenge,
+          sig: signChallenge(d, new URL(PUBLIC_URL).origin, ch.body.challenge),
+        });
+        expect(s.status).toBe(201);
+        devs[i]!.push(d);
+        tokens[i]!.push(s.body.token);
+      }
     }
-    const [a, b] = ids as [RelayIdentity, RelayIdentity];
-    const [ta, tb] = tokens as [string, string];
-    await call("POST", "/v2/connections", ta, { to: b.agentId });
-    expect((await call("POST", `/v2/connections/${a.agentId}/accept`, tb)).body.connection.status).toBe("accepted");
+    const [a, b] = people as [PersonKeys, PersonKeys];
+    const ta = tokens[0]![0]!;
+    await call("POST", "/v2/connections", ta, { to: b.personId });
+    expect((await call("POST", `/v2/connections/${a.personId}/accept`, tokens[1]![0]!)).body.connection.status).toBe("accepted");
     const now = Date.now();
     const env = sealRelayMessage(
       { v: 1, content: "主人は今日はじめて自分でパンを焼いたらしい", useExpiresAt: new Date(now + 86_400_000).toISOString(), reshare: "deny" },
-      a,
-      [{ agentId: b.agentId, encKey: b.enc.pub, encKeyVersion: 1 }],
+      devs[0]![0]!,
+      [{ personId: b.personId, devices: devs[1]!.map((d) => ({ deviceId: d.deviceId, encKey: d.enc.pub, encKeyVersion: 1 })) }],
       { createdAt: new Date(now).toISOString(), deliveryExpiresAt: new Date(now + 86_400_000).toISOString() },
     );
     const sent = await call("POST", "/v2/messages", ta, { envelope: env });
     expect(sent.status).toBe(201);
+    const tb = tokens[1]![0]!;
     const got = await call("GET", "/v2/messages", tb);
     expect(got.body.messages).toHaveLength(1);
-    expect(openRelayMessage(got.body.messages[0].envelope, b)).toMatchObject({ content: "主人は今日はじめて自分でパンを焼いたらしい" });
+    // 届いた箱は2台分（どちらの端末の鍵でも開ける）
+    for (const d of devs[1]!) expect(openRelayMessage(got.body.messages[0].envelope, d)).toMatchObject({ content: "主人は今日はじめて自分でパンを焼いたらしい" });
     expect((await call("POST", "/v2/messages/ack", tb, { messageIds: [env.messageId] })).body.acked).toBe(1);
+    const sentView = await call("GET", "/v2/messages/sent", ta);
+    expect(sentView.body.messages[0].recipients).toEqual([{ personId: b.personId, status: "delivered", deliveredAt: expect.any(String), devices: 2 }]);
   });
 
   // 送信元 IP ごとの回数を使い切るので最後に置く

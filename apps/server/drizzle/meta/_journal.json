@@ -29,6 +29,13 @@
       "when": 1793290267020,
       "tag": "0003_relay",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1793532184438,
+      "tag": "0004_relay_persons",
+      "breakpoints": true
     }
   ]
 }
