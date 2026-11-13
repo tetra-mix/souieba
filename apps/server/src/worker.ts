@@ -1,7 +1,7 @@
 /**
  * Cloudflare Workers の入口。1つのインスタンス = Durable Object 1個（SQLite）。
  * Worker は検査とレート制限だけを行い、Durable Object の中で app.ts（セルフホストと同じアプリ）を動かす。
- * 設計: docs/cloudflare-workers-plan.md
+ * 設計: docs/architecture.md
  */
 import { DurableObject } from "cloudflare:workers";
 import { createApp } from "./app.ts";

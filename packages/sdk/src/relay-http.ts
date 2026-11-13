@@ -1,20 +1,20 @@
 /**
- * v2 の Relay の API を呼ぶ通信層。認証は Identity 鍵でチャレンジに署名して得る、短命のセッショントークン。
- * トークンは Agent の状態ディレクトリに 600 で保存し、期限が切れたら（401 なら）署名し直す。
+ * v2 の Relay の API を呼ぶ通信層。認証は端末の署名鍵でチャレンジに署名して得る、短命のセッショントークン。
+ * トークンは端末の状態ディレクトリに 600 で保存し、期限が切れたら（401 なら）署名し直す。
  */
 import {
   CLIENT_VERSION_HEADER,
+  type DeviceCert,
+  type DeviceIdentity,
+  type DeviceRevocation,
   MESSAGE_ID_RE,
-  type RelayDirectoryEntry,
+  type PersonDirectory,
   type RelayEnvelope,
-  type RelayIdentity,
-  directoryEntry,
   findInstructionLike,
-  isAgentId,
   isCanonicalIso,
+  isPersonId,
   sanitizeContent,
   signChallenge,
-  verifyDirectoryEntry,
 } from "@souieba/core";
 import { readStateJson, writeSecretJson } from "./config.ts";
 import { SouiebaApiError } from "./http.ts";
@@ -25,7 +25,7 @@ export type RelaySendResult = {
   messageId: string;
   visibleAt: string;
   accepted: string[];
-  skipped: { agentId: string; reason: "not_connected" | "stale_key" }[];
+  skipped: { personId: string; reason: "not_connected" | "stale_key" }[];
 };
 
 export type RelaySentView = {
@@ -33,12 +33,12 @@ export type RelaySentView = {
   createdAt: string;
   visibleAt: string;
   deliveryExpiresAt: string;
-  recipients: { agentId: string; status: "pending" | "delivered"; deliveredAt: string | null }[];
+  recipients: { personId: string; status: "pending" | "delivered"; deliveredAt: string | null; devices: number }[];
 };
 
 export type RelayHttpOptions = {
   relayUrl: string;
-  identity: RelayIdentity;
+  device: DeviceIdentity;
   /** セッショントークンの保存先（省略時は保存しない） */
   sessionPath?: string;
   clientVersion?: string;
@@ -49,7 +49,7 @@ export type RelayHttpOptions = {
   now?: () => Date;
 };
 
-type Session = { token: string; expiresAt: string; agentId: string; relay: string };
+type Session = { token: string; expiresAt: string; deviceId: string; relay: string };
 
 /**
  * Relay は信頼しない（鍵をすり替えたり、文字列にエージェントへの指示を混ぜたりしうる）。
@@ -63,7 +63,7 @@ function relayErrorMessage(status: number, message: string | undefined): string 
 const isStatus = (s: unknown): s is RelayConnection["status"] => s === "accepted" || s === "incoming" || s === "outgoing";
 
 function validConnection(c: RelayConnection): boolean {
-  return isAgentId(c?.peer) && isStatus(c.status) && isCanonicalIso(c.createdAt) && isCanonicalIso(c.updatedAt);
+  return isPersonId(c?.peer) && isStatus(c.status) && isCanonicalIso(c.createdAt) && isCanonicalIso(c.updatedAt);
 }
 
 function validSent(m: RelaySentView): boolean {
@@ -74,7 +74,7 @@ function validSent(m: RelaySentView): boolean {
     isCanonicalIso(m.visibleAt) &&
     isCanonicalIso(m.deliveryExpiresAt) &&
     Array.isArray(m.recipients) &&
-    m.recipients.every((r) => isAgentId(r?.agentId) && (r.status === "pending" || r.status === "delivered") && (r.deliveredAt === null || isCanonicalIso(r.deliveredAt)))
+    m.recipients.every((r) => isPersonId(r?.personId) && Number.isInteger(r.devices) && (r.status === "pending" || r.status === "delivered") && (r.deliveredAt === null || isCanonicalIso(r.deliveredAt)))
   );
 }
 
@@ -89,11 +89,11 @@ export class RelayHttp {
     this.fetchImpl = opts.fetch ?? fetch;
     this.now = opts.now ?? (() => new Date());
     const saved = opts.sessionPath ? readStateJson<Session>(opts.sessionPath) : null;
-    this.session = saved && saved.agentId === opts.identity.agentId && saved.relay === this.origin ? saved : null;
+    this.session = saved && saved.deviceId === opts.device.deviceId && saved.relay === this.origin ? saved : null;
   }
 
-  get agentId(): string {
-    return this.opts.identity.agentId;
+  get personId(): string {
+    return this.opts.device.personId;
   }
 
   private async raw<T>(method: string, path: string, body: unknown, token: string | null, timeoutMs: number): Promise<T> {
@@ -127,25 +127,29 @@ export class RelayHttp {
     return interactive ? (this.opts.interactiveTimeoutMs ?? 2500) : (this.opts.timeoutMs ?? 10_000);
   }
 
-  /** 公開鍵を登録する（初回セットアップ。同じ鍵の再登録はそのまま通る） */
-  async register(): Promise<RelayDirectoryEntry> {
-    return (await this.raw<{ entry: RelayDirectoryEntry }>("POST", "/v2/agents", { entry: directoryEntry(this.opts.identity) }, null, this.timeout(false)))
-      .entry;
+  /** 人と端末を登録する（初回は人も作られる。同じ端末の再登録はそのまま通る）。Person 鍵の秘密鍵は要らない（証明書は署名済み） */
+  async register(personKey: string, cert: DeviceCert = this.opts.device.cert): Promise<PersonDirectory> {
+    return (await this.raw<{ directory: PersonDirectory }>("POST", "/v2/devices", { personKey, cert }, null, this.timeout(false))).directory;
+  }
+
+  /** 端末を取り消す（Person 鍵で署名した取り消し） */
+  async revoke(revocation: DeviceRevocation): Promise<PersonDirectory> {
+    return (await this.raw<{ directory: PersonDirectory }>("POST", "/v2/devices/revoke", { revocation }, null, this.timeout(false))).directory;
   }
 
   /** チャレンジに署名してセッションを得る */
   private async login(interactive: boolean): Promise<string> {
     const t = this.timeout(interactive);
-    const { agentId } = this.opts.identity;
-    const ch = await this.raw<{ challenge: string }>("POST", "/v2/auth/challenge", { agentId }, null, t);
+    const { personId, deviceId } = this.opts.device;
+    const ch = await this.raw<{ challenge: string }>("POST", "/v2/auth/challenge", { deviceId }, null, t);
     const s = await this.raw<{ token: string; expiresAt: string }>(
       "POST",
       "/v2/auth/session",
-      { agentId, challenge: ch.challenge, sig: signChallenge(this.opts.identity, this.origin, ch.challenge) },
+      { personId, deviceId, challenge: ch.challenge, sig: signChallenge(this.opts.device, this.origin, ch.challenge) },
       null,
       t,
     );
-    this.session = { token: s.token, expiresAt: s.expiresAt, agentId, relay: this.origin };
+    this.session = { token: s.token, expiresAt: s.expiresAt, deviceId, relay: this.origin };
     if (this.opts.sessionPath) writeSecretJson(this.opts.sessionPath, this.session);
     return s.token;
   }
@@ -163,18 +167,23 @@ export class RelayHttp {
     }
   }
 
-  /** 頼んだ Agent の分だけを、検証を通ったものだけ返す（固定した鍵との照合は呼び出し側で行う） */
-  async lookup(agentIds: string[], interactive = false): Promise<RelayDirectoryEntry[]> {
-    if (agentIds.length === 0) return [];
-    const wanted = new Set(agentIds);
-    const { entries } = await this.request<{ entries: RelayDirectoryEntry[] }>("POST", "/v2/agents/lookup", { agentIds }, interactive);
-    return (Array.isArray(entries) ? entries : []).filter((e) => wanted.has(e?.agentId) && verifyDirectoryEntry(e).ok);
+  /** 頼んだ人の分だけを返す（中身の検証と、固定した鍵との照合は呼び出し側で verifyPersonDirectory を使って行う） */
+  async lookup(personIds: string[], interactive = false): Promise<PersonDirectory[]> {
+    if (personIds.length === 0) return [];
+    const wanted = new Set(personIds);
+    const { directories } = await this.request<{ directories: PersonDirectory[] }>("POST", "/v2/persons/lookup", { personIds }, interactive);
+    const seen = new Set<string>();
+    return (Array.isArray(directories) ? directories : []).filter((d) => {
+      if (!d || !wanted.has(d.personId) || seen.has(d.personId)) return false;
+      seen.add(d.personId);
+      return true;
+    });
   }
   async connections(interactive = false): Promise<{ connections: RelayConnection[]; blocked: string[] }> {
     const r = await this.request<{ connections: RelayConnection[]; blocked: string[] }>("GET", "/v2/connections", undefined, interactive);
     return {
       connections: (Array.isArray(r.connections) ? r.connections : []).filter(validConnection),
-      blocked: (Array.isArray(r.blocked) ? r.blocked : []).filter(isAgentId),
+      blocked: (Array.isArray(r.blocked) ? r.blocked : []).filter(isPersonId),
     };
   }
   private async connection(method: string, path: string, body?: unknown): Promise<RelayConnection> {
@@ -202,14 +211,14 @@ export class RelayHttp {
   }
   async send(envelope: RelayEnvelope): Promise<RelaySendResult> {
     const r = await this.request<RelaySendResult>("POST", "/v2/messages", { envelope });
-    const mine = new Set(envelope.recipients.map((b) => b.agentId));
+    const mine = new Set(envelope.recipients.map((g) => g.person));
     return {
       messageId: envelope.messageId,
       visibleAt: isCanonicalIso(r.visibleAt) ? r.visibleAt : envelope.createdAt,
       accepted: (Array.isArray(r.accepted) ? r.accepted : []).filter((id) => mine.has(id)),
       skipped: (Array.isArray(r.skipped) ? r.skipped : [])
-        .filter((x) => mine.has(x?.agentId))
-        .map((x) => ({ agentId: x.agentId, reason: x.reason === "stale_key" ? "stale_key" : "not_connected" })),
+        .filter((x) => mine.has(x?.personId))
+        .map((x) => ({ personId: x.personId, reason: x.reason === "stale_key" ? "stale_key" : "not_connected" })),
     };
   }
   /** 中身の検証は受け取る側（RelayTransport）で行う */

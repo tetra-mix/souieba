@@ -34,7 +34,8 @@ describe("Workers の入口での検査", () => {
   });
 
   it("v2（Relay）の公開エンドポイントと、セッショントークン（sou_r_）を通す", () => {
-    expect(edgeGuard(req("/v2/agents", { method: "POST" }))).toBeNull();
+    expect(edgeGuard(req("/v2/devices", { method: "POST" }))).toBeNull();
+    expect(edgeGuard(req("/v2/devices/revoke", { method: "POST" }))).toBeNull();
     expect(edgeGuard(req("/v2/auth/challenge", { method: "POST" }))).toBeNull();
     expect(edgeGuard(req("/v2/auth/session", { method: "POST" }))).toBeNull();
     expect(isPublicPost(req("/v2/auth/session", { method: "POST" }))).toBe(true);

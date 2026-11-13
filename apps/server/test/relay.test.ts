@@ -1,16 +1,17 @@
 import {
+  type DeviceIdentity,
   type NarrativeMessage,
-  type RelayIdentity,
-  directoryEntry,
+  type PersonKeys,
+  certifyDevice,
+  generateDevice,
   generateEncryptionKey,
-  generateRelayIdentity,
+  generatePerson,
   normalizeNarrative,
   openRelayMessage,
+  revokeDevice,
   sealRelayMessage,
   signChallenge,
-  signText,
-  encKeySigningText,
-  verifyRecipientBox,
+  verifyRecipientGroup,
 } from "@souieba/core";
 import { sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -20,42 +21,60 @@ import { harness } from "./harness.ts";
 const ORIGIN = "https://souieba.test";
 const HOUR = 3_600_000;
 
-type Member = { id: RelayIdentity; token: string };
+type Member = { person: PersonKeys; devices: DeviceIdentity[]; id: DeviceIdentity; personId: string; token: string; tokens: string[] };
+
+function newDevice(p: PersonKeys, at = "2026-10-30T00:00:00.000Z"): DeviceIdentity {
+  const d = generateDevice(p.personId, at);
+  return { ...d, cert: certifyDevice(p, d) };
+}
 
 function relayHarness(opts: Parameters<typeof harness>[0] = {}) {
   const h = harness({ ...opts, config: { postGraceMs: 0, ...opts.config } });
 
-  async function register(id = generateRelayIdentity()) {
-    const r = await h.call("POST", "/v2/agents", undefined, { entry: directoryEntry(id) });
-    expect(r.status).toBe(201);
-    return id;
+  async function register(person = generatePerson(), d = newDevice(person), status = 201) {
+    const r = await h.call("POST", "/v2/devices", undefined, { personKey: person.person.pub, cert: d.cert });
+    expect(r.status).toBe(status);
+    return { person, d };
   }
 
-  async function login(id: RelayIdentity): Promise<string> {
-    const ch = await h.call("POST", "/v2/auth/challenge", undefined, { agentId: id.agentId });
+  async function login(d: DeviceIdentity): Promise<string> {
+    const ch = await h.call("POST", "/v2/auth/challenge", undefined, { deviceId: d.deviceId });
     expect(ch.status).toBe(201);
     const s = await h.call("POST", "/v2/auth/session", undefined, {
-      agentId: id.agentId,
+      personId: d.personId,
+      deviceId: d.deviceId,
       challenge: ch.body.challenge,
-      sig: signChallenge(id, ORIGIN, ch.body.challenge),
+      sig: signChallenge(d, ORIGIN, ch.body.challenge),
     });
     expect(s.status).toBe(201);
     return s.body.token;
   }
 
-  async function member(): Promise<Member> {
-    const id = await register();
-    return { id, token: await login(id) };
+  async function member(nDevices = 1): Promise<Member> {
+    const person = generatePerson();
+    const devices: DeviceIdentity[] = [];
+    const tokens: string[] = [];
+    for (let i = 0; i < nDevices; i++) {
+      const { d } = await register(person, newDevice(person));
+      devices.push(d);
+      tokens.push(await login(d));
+    }
+    return { person, devices, id: devices[0]!, personId: person.personId, token: tokens[0]!, tokens };
   }
 
   async function connect(a: Member, b: Member) {
-    expect((await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId })).status).toBe(201);
-    const r = await h.call("POST", `/v2/connections/${a.id.agentId}/accept`, b.token);
+    expect((await h.call("POST", "/v2/connections", a.token, { to: b.personId })).status).toBe(201);
+    const r = await h.call("POST", `/v2/connections/${a.personId}/accept`, b.token);
     expect(r.status).toBe(200);
     expect(r.body.connection.status).toBe("accepted");
   }
 
-  function seal(from: Member, to: Member[], msg: Partial<NarrativeMessage> = {}, overrides: { createdAt?: Date; ttlMs?: number } = {}) {
+  function seal(
+    from: Member,
+    to: Member[],
+    msg: Partial<NarrativeMessage> = {},
+    overrides: { createdAt?: Date; ttlMs?: number; sender?: DeviceIdentity; devices?: (m: Member) => DeviceIdentity[] } = {},
+  ) {
     const created = overrides.createdAt ?? h.clock.now;
     const message: NarrativeMessage = {
       v: 1,
@@ -66,8 +85,11 @@ function relayHarness(opts: Parameters<typeof harness>[0] = {}) {
     };
     return sealRelayMessage(
       message,
-      from.id,
-      to.map((m) => ({ agentId: m.id.agentId, encKey: m.id.enc.pub, encKeyVersion: m.id.encKeyVersion })),
+      overrides.sender ?? from.id,
+      to.map((m) => ({
+        personId: m.personId,
+        devices: (overrides.devices?.(m) ?? m.devices).map((d) => ({ deviceId: d.deviceId, encKey: d.enc.pub, encKeyVersion: d.encKeyVersion })),
+      })),
       { createdAt: created.toISOString(), deliveryExpiresAt: new Date(created.getTime() + (overrides.ttlMs ?? 72 * HOUR)).toISOString() },
     );
   }
@@ -76,8 +98,8 @@ function relayHarness(opts: Parameters<typeof harness>[0] = {}) {
     return h.call("POST", "/v2/messages", from.token, { envelope: seal(from, to, msg) });
   }
 
-  async function inbox(m: Member) {
-    const r = await h.call("GET", "/v2/messages", m.token);
+  async function inbox(m: Member, token = m.token) {
+    const r = await h.call("GET", "/v2/messages", token);
     expect(r.status).toBe(200);
     return r.body.messages as { envelope: ReturnType<typeof seal> }[];
   }
@@ -85,68 +107,98 @@ function relayHarness(opts: Parameters<typeof harness>[0] = {}) {
   return { h, register, login, member, connect, seal, send, inbox };
 }
 
-describe("v2 Relay: 登録と認証", () => {
-  it("鍵を登録し、チャレンジに署名してセッションを得る", async () => {
+describe("v2 Relay: 登録と認証（人と端末）", () => {
+  it("人と端末を登録し、端末の鍵でチャレンジに署名してセッションを得る", async () => {
     const { h, register, login } = relayHarness();
-    const id = await register();
-    // 同じ Identity の再登録はそのまま返す
-    const again = await h.call("POST", "/v2/agents", undefined, { entry: directoryEntry(id) });
+    const { person, d } = await register();
+    // 同じ端末の再登録はそのまま返す
+    const again = await h.call("POST", "/v2/devices", undefined, { personKey: person.person.pub, cert: d.cert });
     expect(again.status).toBe(200);
-    const token = await login(id);
+    const token = await login(d);
     expect(token).toMatch(/^sou_r_/);
     const me = await h.call("GET", "/v2/me", token);
-    expect(me.body.entry).toEqual(directoryEntry(id));
+    expect(me.body.directory).toEqual({ personId: person.personId, personKey: person.person.pub, devices: [d.cert], revocations: [] });
+    expect(me.body.deviceId).toBe(d.deviceId);
   });
 
-  it("Encryption 鍵の署名が合わない登録は断る", async () => {
-    const { h } = relayHarness();
-    const id = generateRelayIdentity();
-    const r = await h.call("POST", "/v2/agents", undefined, { entry: { ...directoryEntry(id), encKey: generateEncryptionKey().pub } });
-    expect(r.status).toBe(400);
-    expect(r.body.error.code).toBe("invalid_bad_enc_key_sig");
+  it("2台目の端末を足せる。Person 鍵で署名されていない端末証明書は断る", async () => {
+    const { h, register } = relayHarness();
+    const { person } = await register();
+    const d2 = newDevice(person);
+    const r = await h.call("POST", "/v2/devices", undefined, { personKey: person.person.pub, cert: d2.cert });
+    expect(r.status).toBe(201);
+    expect(r.body.directory.devices).toHaveLength(2);
+    // 別の人の鍵で署名した端末を、この人の端末として足そうとする
+    const mallory = generatePerson();
+    const fake = generateDevice(person.personId, "2026-10-30T00:00:00.000Z");
+    const forged = { ...certifyDevice(mallory, fake), personId: person.personId };
+    expect((await h.call("POST", "/v2/devices", undefined, { personKey: person.person.pub, cert: forged })).body.error.code).toBe("invalid_device_cert");
+    // 鍵を差し替えた証明書
+    const tampered = { ...d2.cert, encKey: generateEncryptionKey().pub, deviceId: d2.deviceId };
+    expect((await h.call("POST", "/v2/devices", undefined, { personKey: person.person.pub, cert: tampered })).status).toBe(400);
+  });
+
+  it("取り消した端末はログインもできず、セッションも使えない。偽の取り消しは断る", async () => {
+    const { h, member, login } = relayHarness();
+    const a = await member(2);
+    const [, d2] = a.devices;
+    const forged = revokeDevice(generatePerson(), d2!.deviceId, h.clock.now.toISOString());
+    expect((await h.call("POST", "/v2/devices/revoke", undefined, { revocation: { ...forged, personId: a.personId } })).status).toBe(400);
+    const rev = revokeDevice(a.person, d2!.deviceId, h.clock.now.toISOString());
+    const r = await h.call("POST", "/v2/devices/revoke", undefined, { revocation: rev });
+    expect(r.status).toBe(200);
+    expect(r.body.directory.devices.map((c: { deviceId: string }) => c.deviceId)).toEqual([a.devices[0]!.deviceId]);
+    expect(r.body.directory.revocations).toEqual([rev]);
+    expect((await h.call("GET", "/v2/connections", a.tokens[1])).status).toBe(401);
+    expect((await h.call("POST", "/v2/auth/challenge", undefined, { deviceId: d2!.deviceId })).status).toBe(404);
+    // 取り消した端末を登録し直すことはできない
+    expect((await h.call("POST", "/v2/devices", undefined, { personKey: a.person.person.pub, cert: d2!.cert })).status).toBe(409);
+    expect((await h.call("GET", "/v2/connections", a.tokens[0])).status).toBe(200);
+    void login;
   });
 
   it("チャレンジは1回しか使えず、別の鍵や別の Relay 向けの署名では通らない", async () => {
     const { h, register } = relayHarness();
-    const id = await register();
-    const other = generateRelayIdentity();
-    const ch1 = await h.call("POST", "/v2/auth/challenge", undefined, { agentId: id.agentId });
-    // 別の鍵で署名
+    const { person, d } = await register();
+    const other = newDevice(person);
+    const ch1 = await h.call("POST", "/v2/auth/challenge", undefined, { deviceId: d.deviceId });
     const bad = await h.call("POST", "/v2/auth/session", undefined, {
-      agentId: id.agentId,
+      personId: d.personId,
+      deviceId: d.deviceId,
       challenge: ch1.body.challenge,
-      sig: signChallenge({ agentId: id.agentId, identity: other.identity }, ORIGIN, ch1.body.challenge),
+      sig: signChallenge({ ...d, sign: other.sign }, ORIGIN, ch1.body.challenge),
     });
     expect(bad.status).toBe(401);
-    // 失敗したチャレンジは使い切っている
     const retry = await h.call("POST", "/v2/auth/session", undefined, {
-      agentId: id.agentId,
+      personId: d.personId,
+      deviceId: d.deviceId,
       challenge: ch1.body.challenge,
-      sig: signChallenge(id, ORIGIN, ch1.body.challenge),
+      sig: signChallenge(d, ORIGIN, ch1.body.challenge),
     });
     expect(retry.status).toBe(401);
-    // 別の Relay 向けの署名
-    const ch2 = await h.call("POST", "/v2/auth/challenge", undefined, { agentId: id.agentId });
+    const ch2 = await h.call("POST", "/v2/auth/challenge", undefined, { deviceId: d.deviceId });
     const wrongOrigin = await h.call("POST", "/v2/auth/session", undefined, {
-      agentId: id.agentId,
+      personId: d.personId,
+      deviceId: d.deviceId,
       challenge: ch2.body.challenge,
-      sig: signChallenge(id, "https://evil.test", ch2.body.challenge),
+      sig: signChallenge(d, "https://evil.test", ch2.body.challenge),
     });
     expect(wrongOrigin.status).toBe(401);
   });
 
   it("期限切れのチャレンジとセッションは使えない", async () => {
     const { h, register, login } = relayHarness();
-    const id = await register();
-    const ch = await h.call("POST", "/v2/auth/challenge", undefined, { agentId: id.agentId });
+    const { d } = await register();
+    const ch = await h.call("POST", "/v2/auth/challenge", undefined, { deviceId: d.deviceId });
     h.clock.advance(3 * 60_000);
     const late = await h.call("POST", "/v2/auth/session", undefined, {
-      agentId: id.agentId,
+      personId: d.personId,
+      deviceId: d.deviceId,
       challenge: ch.body.challenge,
-      sig: signChallenge(id, ORIGIN, ch.body.challenge),
+      sig: signChallenge(d, ORIGIN, ch.body.challenge),
     });
     expect(late.status).toBe(401);
-    const token = await login(id);
+    const token = await login(d);
     h.clock.advance(HOUR + 1);
     expect((await h.call("GET", "/v2/me", token)).status).toBe(401);
   });
@@ -157,44 +209,43 @@ describe("v2 Relay: 登録と認証", () => {
     expect((await h.call("GET", "/v2/connections", alice.agentToken)).status).toBe(401);
   });
 
-  it("Encryption 鍵を新しい版に替えられる。版を戻すことや署名のない鍵はだめ", async () => {
+  it("鍵の版を上げた端末証明書で、暗号化鍵を替えられる", async () => {
     const { h, member } = relayHarness();
     const a = await member();
     const enc = generateEncryptionKey();
-    const sig = signText(a.id.identity, encKeySigningText(a.id.agentId, enc.pub, 2));
-    const r = await h.call("PUT", "/v2/me/enc-key", a.token, { encKey: enc.pub, encKeyVersion: 2, encKeySig: sig });
+    const next = { ...a.id, enc, encKeyVersion: 2 };
+    const r = await h.call("POST", "/v2/devices", undefined, { personKey: a.person.person.pub, cert: certifyDevice(a.person, next) });
     expect(r.status).toBe(200);
-    expect(r.body.entry.encKeyVersion).toBe(2);
-    const back = await h.call("PUT", "/v2/me/enc-key", a.token, { encKey: enc.pub, encKeyVersion: 2, encKeySig: sig });
-    expect(back.status).toBe(409);
-    const forged = await h.call("PUT", "/v2/me/enc-key", a.token, { encKey: generateEncryptionKey().pub, encKeyVersion: 3, encKeySig: sig });
-    expect(forged.status).toBe(400);
+    expect(r.body.directory.devices[0].encKeyVersion).toBe(2);
   });
 
-  it("登録数の上限を超えると断る", async () => {
+  it("登録できる人数の上限を超えると断る（同じ人の端末は数えない）", async () => {
     const { h, register } = relayHarness({ config: { relay: { enabled: true, maxAgents: 1 } } });
-    await register();
-    const r = await h.call("POST", "/v2/agents", undefined, { entry: directoryEntry(generateRelayIdentity()) });
+    const { person } = await register();
+    await register(person, newDevice(person));
+    const other = generatePerson();
+    const r = await h.call("POST", "/v2/devices", undefined, { personKey: other.person.pub, cert: newDevice(other).cert });
     expect(r.status).toBe(403);
   });
 
   it("Relay を閉じたサーバでは /v2 が 404 になる", async () => {
     const { h } = relayHarness({ config: { relay: { enabled: false, maxAgents: 10 } } });
-    const r = await h.call("POST", "/v2/agents", undefined, { entry: directoryEntry(generateRelayIdentity()) });
+    const p = generatePerson();
+    const r = await h.call("POST", "/v2/devices", undefined, { personKey: p.person.pub, cert: newDevice(p).cert });
     expect(r.status).toBe(404);
     expect(r.body.error.code).toBe("relay_disabled");
   });
 });
 
 describe("v2 Relay: 検索と接続", () => {
-  it("Agent ID で検索でき、返すのは鍵情報だけ", async () => {
+  it("Person ID で検索でき、返すのは鍵と端末証明書だけ", async () => {
     const { h, member } = relayHarness();
     const a = await member();
-    const b = await member();
-    const r = await h.call("GET", `/v2/agents/${b.id.agentId}`, a.token);
-    expect(r.body.entry).toEqual(directoryEntry(b.id));
-    const many = await h.call("POST", "/v2/agents/lookup", a.token, { agentIds: [b.id.agentId, a.id.agentId, "sb_nope"] });
-    expect(many.body.entries).toHaveLength(2);
+    const b = await member(2);
+    const r = await h.call("GET", `/v2/persons/${b.personId}`, a.token);
+    expect(r.body.directory).toEqual({ personId: b.personId, personKey: b.person.person.pub, devices: b.devices.map((d) => d.cert), revocations: [] });
+    const many = await h.call("POST", "/v2/persons/lookup", a.token, { personIds: [b.personId, a.personId, "sb_nope"] });
+    expect(many.body.directories).toHaveLength(2);
   });
 
   it("要求して承認されると接続になる。双方から要求しても1つの接続になる", async () => {
@@ -202,14 +253,14 @@ describe("v2 Relay: 検索と接続", () => {
     const a = await member();
     const b = await member();
     const c = await member();
-    await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId });
-    expect((await h.call("GET", "/v2/connections", b.token)).body.connections).toMatchObject([{ peer: a.id.agentId, status: "incoming" }]);
-    expect((await h.call("GET", "/v2/connections", a.token)).body.connections).toMatchObject([{ peer: b.id.agentId, status: "outgoing" }]);
-    await h.call("POST", `/v2/connections/${a.id.agentId}/accept`, b.token);
-    expect((await h.call("GET", "/v2/connections", a.token)).body.connections).toMatchObject([{ peer: b.id.agentId, status: "accepted" }]);
+    await h.call("POST", "/v2/connections", a.token, { to: b.personId });
+    expect((await h.call("GET", "/v2/connections", b.token)).body.connections).toMatchObject([{ peer: a.personId, status: "incoming" }]);
+    expect((await h.call("GET", "/v2/connections", a.token)).body.connections).toMatchObject([{ peer: b.personId, status: "outgoing" }]);
+    await h.call("POST", `/v2/connections/${a.personId}/accept`, b.token);
+    expect((await h.call("GET", "/v2/connections", a.token)).body.connections).toMatchObject([{ peer: b.personId, status: "accepted" }]);
     // c → a、a → c と両方から要求したら接続になる
-    await h.call("POST", "/v2/connections", c.token, { to: a.id.agentId });
-    const mutual = await h.call("POST", "/v2/connections", a.token, { to: c.id.agentId });
+    await h.call("POST", "/v2/connections", c.token, { to: a.personId });
+    const mutual = await h.call("POST", "/v2/connections", a.token, { to: c.personId });
     expect(mutual.body.connection.status).toBe("accepted");
   });
 
@@ -217,10 +268,10 @@ describe("v2 Relay: 検索と接続", () => {
     const { h, member } = relayHarness();
     const a = await member();
     const b = await member();
-    await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId });
-    expect((await h.call("POST", `/v2/connections/${a.id.agentId}/reject`, b.token)).status).toBe(204);
+    await h.call("POST", "/v2/connections", a.token, { to: b.personId });
+    expect((await h.call("POST", `/v2/connections/${a.personId}/reject`, b.token)).status).toBe(204);
     expect((await h.call("GET", "/v2/connections", b.token)).body.connections).toEqual([]);
-    expect((await h.call("POST", `/v2/connections/${a.id.agentId}/accept`, b.token)).status).toBe(404);
+    expect((await h.call("POST", `/v2/connections/${a.personId}/accept`, b.token)).status).toBe(404);
   });
 
   it("ブロックすると接続が切れ、ブロックされた側からの要求は相手に届かない（ブロックは知られない）", async () => {
@@ -228,15 +279,15 @@ describe("v2 Relay: 検索と接続", () => {
     const a = await member();
     const b = await member();
     await connect(a, b);
-    expect((await h.call("PUT", `/v2/blocks/${a.id.agentId}`, b.token)).status).toBe(204);
+    expect((await h.call("PUT", `/v2/blocks/${a.personId}`, b.token)).status).toBe(204);
     expect((await h.call("GET", "/v2/connections", a.token)).body.connections).toEqual([]);
-    const again = await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId });
+    const again = await h.call("POST", "/v2/connections", a.token, { to: b.personId });
     expect(again.status).toBe(201);
     expect(again.body.connection.status).toBe("outgoing");
-    expect((await h.call("GET", "/v2/connections", b.token)).body).toEqual({ connections: [], blocked: [a.id.agentId] });
+    expect((await h.call("GET", "/v2/connections", b.token)).body).toEqual({ connections: [], blocked: [a.personId] });
     // ブロックした側からは、解除するまで要求できない
-    expect((await h.call("POST", "/v2/connections", b.token, { to: a.id.agentId })).status).toBe(409);
-    await h.call("DELETE", `/v2/blocks/${a.id.agentId}`, b.token);
+    expect((await h.call("POST", "/v2/connections", b.token, { to: a.personId })).status).toBe(409);
+    await h.call("DELETE", `/v2/blocks/${a.personId}`, b.token);
     expect((await h.call("GET", "/v2/connections", b.token)).body.blocked).toEqual([]);
   });
 
@@ -244,14 +295,14 @@ describe("v2 Relay: 検索と接続", () => {
     const { h, member } = relayHarness();
     const a = await member();
     const b = await member();
-    await h.call("PUT", `/v2/blocks/${a.id.agentId}`, b.token);
-    const first = await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId });
+    await h.call("PUT", `/v2/blocks/${a.personId}`, b.token);
+    const first = await h.call("POST", "/v2/connections", a.token, { to: b.personId });
     h.clock.advance(60_000);
-    const second = await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId });
+    const second = await h.call("POST", "/v2/connections", a.token, { to: b.personId });
     expect(second.body.connection).toEqual(first.body.connection);
-    expect((await h.call("GET", "/v2/connections", a.token)).body.connections).toMatchObject([{ peer: b.id.agentId, status: "outgoing" }]);
-    expect((await h.call("POST", `/v2/connections/${a.id.agentId}/accept`, b.token)).status).toBe(404);
-    await h.call("DELETE", `/v2/blocks/${a.id.agentId}`, b.token);
+    expect((await h.call("GET", "/v2/connections", a.token)).body.connections).toMatchObject([{ peer: b.personId, status: "outgoing" }]);
+    expect((await h.call("POST", `/v2/connections/${a.personId}/accept`, b.token)).status).toBe(404);
+    await h.call("DELETE", `/v2/blocks/${a.personId}`, b.token);
     expect((await h.call("GET", "/v2/connections", b.token)).body.connections).toEqual([]);
   });
 
@@ -259,9 +310,9 @@ describe("v2 Relay: 検索と接続", () => {
     const { h, member } = relayHarness();
     const a = await member();
     // 登録されていない相手はブロックできない（表を際限なく大きくしないため）
-    expect((await h.call("PUT", `/v2/blocks/${generateRelayIdentity().agentId}`, a.token)).status).toBe(404);
+    expect((await h.call("PUT", `/v2/blocks/${generatePerson().personId}`, a.token)).status).toBe(404);
     const b = await member();
-    await h.call("POST", "/v2/connections", a.token, { to: b.id.agentId });
+    await h.call("POST", "/v2/connections", a.token, { to: b.personId });
     h.clock.advance(15 * 86_400_000);
     expect(runRetention(h.db, h.clock.now, 30 * 86_400_000).relay.requests).toBe(1);
   });
@@ -269,8 +320,8 @@ describe("v2 Relay: 検索と接続", () => {
   it("自分自身や、登録されていない Agent には要求できない", async () => {
     const { h, member } = relayHarness();
     const a = await member();
-    expect((await h.call("POST", "/v2/connections", a.token, { to: a.id.agentId })).status).toBe(400);
-    expect((await h.call("POST", "/v2/connections", a.token, { to: generateRelayIdentity().agentId })).status).toBe(404);
+    expect((await h.call("POST", "/v2/connections", a.token, { to: a.personId })).status).toBe(400);
+    expect((await h.call("POST", "/v2/connections", a.token, { to: generatePerson().personId })).status).toBe(404);
   });
 });
 
@@ -285,14 +336,14 @@ describe("v2 Relay: メッセージの配送", () => {
     await connect(a, c);
     const r = await send(a, [b, c, stranger]);
     expect(r.status).toBe(201);
-    expect(r.body.accepted.sort()).toEqual([b.id.agentId, c.id.agentId].sort());
-    expect(r.body.skipped).toEqual([{ agentId: stranger.id.agentId, reason: "not_connected" }]);
+    expect(r.body.accepted.sort()).toEqual([b.personId, c.personId].sort());
+    expect(r.body.skipped).toEqual([{ personId: stranger.personId, reason: "not_connected" }]);
 
     const got = await inbox(b);
     expect(got).toHaveLength(1);
     const env = got[0]!.envelope;
-    expect(env.recipients.map((x) => x.agentId)).toEqual([b.id.agentId]);
-    expect(verifyRecipientBox(env, env.recipients[0]!, a.id.identity.pub)).toBe(true);
+    expect(env.recipients.map((x) => x.person)).toEqual([b.personId]);
+    expect(verifyRecipientGroup(env, env.recipients[0]!, a.id.sign.pub)).toBe(true);
     const plain = normalizeNarrative(openRelayMessage(env, b.id), { createdAt: env.createdAt });
     expect(plain.ok && plain.message.content).toBe("主人は週末に初めてソロキャンプに行ったらしい");
     expect(await inbox(stranger)).toEqual([]);
@@ -311,12 +362,12 @@ describe("v2 Relay: メッセージの配送", () => {
     const sent = await h.call("GET", "/v2/messages/sent", a.token);
     expect(sent.body.messages[0].recipients).toEqual(
       expect.arrayContaining([
-        { agentId: b.id.agentId, status: "delivered", deliveredAt: expect.any(String) },
-        { agentId: c.id.agentId, status: "pending", deliveredAt: null },
+        { personId: b.personId, status: "delivered", deliveredAt: expect.any(String), devices: 1 },
+        { personId: c.personId, status: "pending", deliveredAt: null, devices: 1 },
       ]),
     );
     await h.call("POST", "/v2/messages/ack", c.token, { messageIds: [body.messageId] });
-    expect(h.db.get<{ body: string | null }>(sql`SELECT body FROM relay_messages WHERE id = ${body.messageId}`)?.body).toBeNull();
+    expect(h.db.get<{ body: string | null }>(sql`SELECT body FROM relay_person_messages WHERE id = ${body.messageId}`)?.body).toBeNull();
   });
 
   it("猶予期間中は届かず、そのあいだに送信者が取り消せる", async () => {
@@ -353,7 +404,7 @@ describe("v2 Relay: メッセージの配送", () => {
     const b = await member();
     await connect(a, b);
     await send(a, [b]);
-    await h.call("DELETE", `/v2/connections/${a.id.agentId}`, b.token);
+    await h.call("DELETE", `/v2/connections/${a.personId}`, b.token);
     await connect(a, b);
     expect(await inbox(b)).toEqual([]);
   });
@@ -378,19 +429,76 @@ describe("v2 Relay: メッセージの配送", () => {
     expect((await post(env)).status).toBe(409);
   });
 
-  it("古い Encryption 鍵で包んだ宛先は受け付けない", async () => {
+  it("古い暗号化鍵で包んだ端末には届けない（使える箱がない人は stale_key）", async () => {
     const { h, member, connect, seal } = relayHarness();
     const a = await member();
     const b = await member();
     await connect(a, b);
-    const enc = generateEncryptionKey();
-    await h.call("PUT", "/v2/me/enc-key", b.token, {
-      encKey: enc.pub,
-      encKeyVersion: 2,
-      encKeySig: signText(b.id.identity, encKeySigningText(b.id.agentId, enc.pub, 2)),
-    });
+    const next = { ...b.id, enc: generateEncryptionKey(), encKeyVersion: 2 };
+    await h.call("POST", "/v2/devices", undefined, { personKey: b.person.person.pub, cert: certifyDevice(b.person, next) });
     const r = await h.call("POST", "/v2/messages", a.token, { envelope: seal(a, [b]) });
     expect(r.status).toBe(200);
-    expect(r.body.skipped).toEqual([{ agentId: b.id.agentId, reason: "stale_key" }]);
+    expect(r.body.skipped).toEqual([{ personId: b.personId, reason: "stale_key" }]);
+  });
+});
+
+describe("v2 Relay: 複数の端末", () => {
+  it("相手の人の端末すべてに届き、どの端末でも開ける。全端末が受け取ると暗号文が消える", async () => {
+    const { h, member, connect, send, inbox } = relayHarness();
+    const a = await member(2);
+    const b = await member(2);
+    await connect(a, b);
+    // a の2台目からも送れる（接続は人と人なので、1回だけでよい）
+    const { body } = await send(a, [b]);
+    expect(body.accepted).toEqual([b.personId]);
+    for (const [i, dev] of b.devices.entries()) {
+      const got = await inbox(b, b.tokens[i]);
+      expect(got).toHaveLength(1);
+      const env = got[0]!.envelope;
+      expect(env.senderCert).toEqual(a.id.cert);
+      expect(verifyRecipientGroup(env, env.recipients[0]!, env.senderCert.signKey)).toBe(true);
+      const plain = normalizeNarrative(openRelayMessage(env, dev), { createdAt: env.createdAt });
+      expect(plain.ok).toBe(true);
+    }
+    await h.call("POST", "/v2/messages/ack", b.tokens[0], { messageIds: [body.messageId] });
+    expect(await inbox(b, b.tokens[0])).toEqual([]);
+    expect(await inbox(b, b.tokens[1])).toHaveLength(1);
+    expect(h.db.get<{ body: string | null }>(sql`SELECT body FROM relay_person_messages WHERE id = ${body.messageId}`)?.body).not.toBeNull();
+    await h.call("POST", "/v2/messages/ack", b.tokens[1], { messageIds: [body.messageId] });
+    expect(h.db.get<{ body: string | null }>(sql`SELECT body FROM relay_person_messages WHERE id = ${body.messageId}`)?.body).toBeNull();
+    const sent = await h.call("GET", "/v2/messages/sent", a.tokens[1]);
+    expect(sent.body.messages[0].recipients).toEqual([{ personId: b.personId, status: "delivered", deliveredAt: expect.any(String), devices: 2 }]);
+  });
+
+  it("2台目の端末から、その端末の証明書で送れる。別の端末の証明書を名乗ると断る", async () => {
+    const { h, member, connect, seal, inbox } = relayHarness();
+    const a = await member(2);
+    const b = await member();
+    await connect(a, b);
+    const env = seal(a, [b], {}, { sender: a.devices[1] });
+    expect((await h.call("POST", "/v2/messages", a.tokens[1], { envelope: env })).status).toBe(201);
+    expect((await inbox(b))[0]!.envelope.senderDevice).toBe(a.devices[1]!.deviceId);
+    const spoof = { ...seal(a, [b], {}, { sender: a.devices[1] }), senderCert: a.devices[0]!.cert };
+    expect((await h.call("POST", "/v2/messages", a.tokens[1], { envelope: spoof })).body.error.code).toBe("invalid_sender_cert");
+    // 1台目のセッションで2台目の名前のメッセージ
+    expect((await h.call("POST", "/v2/messages", a.tokens[0], { envelope: seal(a, [b], {}, { sender: a.devices[1] }) })).status).toBe(403);
+  });
+
+  it("取り消した端末には届かない。取り消す前の未配送の分も消える", async () => {
+    const { h, member, connect, send, inbox } = relayHarness();
+    const a = await member();
+    const b = await member(2);
+    await connect(a, b);
+    const first = await send(a, [b]);
+    await h.call("POST", "/v2/devices/revoke", undefined, { revocation: revokeDevice(b.person, b.devices[1]!.deviceId, h.clock.now.toISOString()) });
+    const n = h.db.get<{ n: number }>(sql`SELECT count(*) AS n FROM relay_device_deliveries WHERE device_id = ${b.devices[1]!.deviceId} AND delivered_at IS NULL`);
+    expect(n?.n).toBe(0);
+    // 古いディレクトリのまま、取り消した端末の箱も入れて送っても、その端末への配送は作らない
+    const second = await send(a, [b]);
+    expect(second.body.accepted).toEqual([b.personId]);
+    const rows = h.db.all<{ device_id: string }>(sql`SELECT device_id FROM relay_device_deliveries WHERE message_id = ${second.body.messageId}`);
+    expect(rows.map((r) => r.device_id)).toEqual([b.devices[0]!.deviceId]);
+    expect(await inbox(b)).toHaveLength(2);
+    void first;
   });
 });

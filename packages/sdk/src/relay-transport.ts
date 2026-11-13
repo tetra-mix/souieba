@@ -2,7 +2,9 @@
  * SouiebaTransport の v2 実装。Note → Publish → Tell の流れはそのままに、送受信を Relay 経由の E2EE にする。
  * - Publish: 宛先の解決 → アクセス権限の確認 → 鍵の検証 → Narrative Message を受信者ごとに暗号化 → Relay へ
  * - Tell: Relay から受け取る → 送信者の認証（署名）→ 復号 → 中身の検査 → 手元の受信箱へ（利用期限まで）
- * 受信箱・予約・TOLD は手元（Agent の状態ディレクトリ）で管理する。Relay は受け取ったら鍵を消す。
+ * 受信箱・予約・TOLD は手元（人の状態ディレクトリ。この PC の端末で共有）で管理する。Relay は受け取ったら鍵を消す。
+ * 2.1.0 から、宛先は人。その人の取り消されていない端末すべてに鍵を包む。同じ PC のほかの端末が同じメッセージを受け取っても、
+ * 受信箱は1つなので、伝えるのは1回だけ（先に tell した会話）。
  */
 import {
   type CreatePostInput,
@@ -15,18 +17,23 @@ import {
   type NarrativeIssue,
   type NarrativeMessage,
   type PublishResult,
+  type DeviceIdentity,
+  type PersonDirectory,
   RelayDecryptError,
   type RelayEnvelope,
-  type RelayIdentity,
+  type RelayRecipient,
   type Reshare,
   type SyncResult,
   type TellCandidate,
-  isAgentId,
   isCanonicalIso,
+  isDeviceId,
+  isPersonId,
   normalizeNarrative,
   openRelayMessage,
   sealRelayMessage,
-  verifyRecipientBox,
+  verifyDeviceCert,
+  verifyPersonDirectory,
+  verifyRecipientGroup,
 } from "@souieba/core";
 import { checkPostContent } from "./e2ee.ts";
 import type { RelayConnection, RelayHttp } from "./relay-http.ts";
@@ -38,7 +45,6 @@ import {
   type RelayState,
   type RelayStateStore,
   type ResolvedTargets,
-  checkPinnedKey,
   contactFrom,
   resolveTargets,
 } from "./relay-state.ts";
@@ -52,6 +58,7 @@ const DEFAULT_LEASE_SEC = 600;
 export type RelayRejectReason =
   | "not_for_me"
   | "unknown_sender"
+  | "bad_sender_device"
   | "stale_key"
   | "bad_signature"
   | "replay"
@@ -62,7 +69,7 @@ export type RelayRejectReason =
   | NarrativeIssue;
 
 export type RelayPublishOptions = {
-  /** 宛先。"all"（既定）・"group:<グループ>"・呼び名・Agent ID */
+  /** 宛先。"all"（既定）・"group:<グループ>"・呼び名・Person ID */
   to?: string[];
   purpose?: string;
   nuance?: string;
@@ -84,9 +91,9 @@ export type RelayPublishResult = PublishResult & {
   /** 宛先に含めたが、接続していない相手 */
   notConnected: string[];
   /** 鍵を確かめられなかったので送らなかった相手（Relay による鍵のすり替えの疑い） */
-  keyProblems: { agentId: string; reason: string }[];
+  keyProblems: { personId: string; reason: string }[];
   /** Relay が受け付けなかった相手 */
-  skipped: { agentId: string; reason: string }[];
+  skipped: { personId: string; reason: string }[];
 };
 
 /** Narrator の項目などが規則に合わない（書き直しを求める） */
@@ -112,15 +119,15 @@ export type RelayNotices = {
   incomingRequests: string[];
   /** 接続済みだが、呼び名がまだない相手（呼び名を付けるまで、この人からの近況は受け取らない） */
   unnamedPeers: string[];
-  /** Encryption 鍵が新しい版に替わった連絡先 */
-  keyChanges: { agentId: string; name: string; at: string }[];
+  /** 端末が増えた・暗号化鍵が替わった連絡先 */
+  keyChanges: { personId: string; name: string; at: string }[];
   /** 端末の外（エージェント）から変えた共有の設定で、まだ主人に知らせていないもの */
   settingsChanges: { at: string; summary: string; widens: boolean; delegated: boolean }[];
 };
 
 export type RelayTransportOptions = {
   http: RelayHttp;
-  identity: RelayIdentity;
+  device: DeviceIdentity;
   state: RelayStateStore;
   inbox: RelayInboxStore;
   now?: () => Date;
@@ -138,11 +145,11 @@ export class RelayTransport implements SouiebaTransport {
     this.random = opts.random ?? Math.random;
   }
 
-  get agentId(): string {
-    return this.opts.identity.agentId;
+  get personId(): string {
+    return this.opts.device.personId;
   }
 
-  /** この Agent の手元の状態（連絡先・グループ・アクセス権限・Policy） */
+  /** この人の手元の状態（連絡先・グループ・アクセス権限・Policy。この PC の端末で共有） */
   localState(): RelayState {
     return this.opts.state.load();
   }
@@ -153,7 +160,7 @@ export class RelayTransport implements SouiebaTransport {
   }
 
   /**
-   * Relay の接続一覧を取り、新しく接続した相手を連絡先に加える（鍵を検証して固定する）。
+   * Relay の接続一覧を取り、新しく接続した相手を連絡先に加える（Person ID から Person 鍵を確かめて固定する）。
    * 呼び名は、接続要求を送った・承認したときに主人が付けたもの。なければ連絡先に加えず、知らせる
    */
   async syncContacts(interactive = false): Promise<{ connections: RelayConnection[]; connected: Set<string>; blocked: string[] }> {
@@ -163,18 +170,63 @@ export class RelayTransport implements SouiebaTransport {
     const state = this.opts.state.load();
     const missing = accepted.filter((id) => !state.contacts[id] && state.pendingNames[id]);
     if (missing.length > 0) {
-      const entries = await this.opts.http.lookup(missing, interactive);
+      const dirs = await this.opts.http.lookup(missing, interactive);
       const now = this.now();
       this.opts.state.update((s) => {
-        for (const e of entries) {
-          const name = s.pendingNames[e.agentId];
-          if (!name || s.contacts[e.agentId] || !checkPinnedKey(undefined, e).ok) continue;
-          s.contacts[e.agentId] = contactFrom(e, name, now);
-          delete s.pendingNames[e.agentId];
+        for (const d of dirs) {
+          const name = s.pendingNames[d.personId];
+          if (!name || s.contacts[d.personId]) continue;
+          const v = verifyPersonDirectory(d);
+          if (!v.ok) continue;
+          s.contacts[d.personId] = contactFrom(d.personId, v.personKey, v.devices, v.revoked, name, now);
+          delete s.pendingNames[d.personId];
         }
       });
     }
     return { connections, connected: new Set(accepted), blocked };
+  }
+
+  /**
+   * 宛先の人の、今使ってよい端末を決める。Relay が返したディレクトリを、固定した Person 鍵と、覚えている取り消しで確かめる。
+   * 鍵の版が戻った端末（Relay が古い証明書を返した）は使わない。端末が増えた・鍵が替わったら、連絡先を更新して主人に知らせる
+   */
+  private checkRecipients(
+    contacts: Contact[],
+    dirs: PersonDirectory[],
+    at: string,
+  ): { ready: RelayRecipient[]; problems: RelayPublishResult["keyProblems"]; updated: Contact[] } {
+    const byId = new Map(dirs.map((d) => [d.personId, d]));
+    const ready: RelayRecipient[] = [];
+    const problems: RelayPublishResult["keyProblems"] = [];
+    const updated: Contact[] = [];
+    for (const c of contacts) {
+      const d = byId.get(c.personId);
+      if (!d) {
+        problems.push({ personId: c.personId, reason: "not_found" });
+        continue;
+      }
+      const v = verifyPersonDirectory(d, { pinnedKey: c.personKey, knownRevoked: c.revoked });
+      if (!v.ok) {
+        problems.push({ personId: c.personId, reason: v.reason });
+        continue;
+      }
+      const devices = v.devices.filter((x) => (c.devices[x.deviceId] ?? 0) <= x.encKeyVersion);
+      if (devices.length === 0) {
+        problems.push({ personId: c.personId, reason: v.devices.length ? "key_rollback" : "no_devices" });
+        continue;
+      }
+      const changed = devices.some((x) => c.devices[x.deviceId] !== x.encKeyVersion);
+      const revoked = [...new Set([...c.revoked, ...v.revoked])].sort();
+      const next: Contact = {
+        ...c,
+        devices: { ...Object.fromEntries(Object.entries(c.devices).filter(([id]) => !revoked.includes(id))), ...Object.fromEntries(devices.map((x) => [x.deviceId, x.encKeyVersion])) },
+        revoked,
+        ...(changed ? { devicesChangedAt: at } : {}),
+      };
+      if (changed || revoked.length !== c.revoked.length) updated.push(next);
+      ready.push({ personId: c.personId, devices: devices.map((x) => ({ deviceId: x.deviceId, encKey: x.encKey, encKeyVersion: x.encKeyVersion })) });
+    }
+    return { ready, problems, updated };
   }
 
   // ---- Publish ----
@@ -210,47 +262,30 @@ export class RelayTransport implements SouiebaTransport {
     const targets = resolveTargets(state, o.to ?? [], connected, o.project);
     if (targets.recipients.length === 0) throw new NoRecipientsError(targets);
 
-    // 宛先の今の鍵を Relay から取り、固定した鍵と照らし合わせる
-    const entries = new Map((await this.opts.http.lookup(targets.recipients.map((c) => c.agentId))).map((e) => [e.agentId, e]));
-    const keyProblems: RelayPublishResult["keyProblems"] = [];
-    const ready: Contact[] = [];
-    const rotated: Contact[] = [];
-    for (const c of targets.recipients) {
-      const e = entries.get(c.agentId);
-      if (!e) {
-        keyProblems.push({ agentId: c.agentId, reason: "not_found" });
-        continue;
-      }
-      const k = checkPinnedKey(c, e);
-      if (!k.ok) {
-        keyProblems.push({ agentId: c.agentId, reason: k.reason });
-        continue;
-      }
-      const next = k.changed
-        ? { ...c, encKey: e.encKey, encKeyVersion: e.encKeyVersion, encKeySig: e.encKeySig, keyChangedAt: createdAt }
-        : c;
-      if (k.changed) rotated.push(next);
-      ready.push(next);
-    }
-    if (rotated.length > 0) {
+    // 宛先の人の、今の端末を Relay から取り、固定した Person 鍵で確かめる
+    const dirs = await this.opts.http.lookup(targets.recipients.map((c) => c.personId));
+    const { ready, problems: keyProblems, updated } = this.checkRecipients(targets.recipients, dirs, createdAt);
+    if (updated.length > 0) {
       this.opts.state.update((s) => {
-        for (const c of rotated) if (s.contacts[c.agentId]) s.contacts[c.agentId] = c;
+        for (const c of updated) {
+          const cur = s.contacts[c.personId];
+          // 端末が増えたことは、主人に知らせるまで覚えておく（前の知らせがまだなら、その日時のまま）
+          if (cur) s.contacts[c.personId] = { ...c, ...(cur.devicesChangedAt && c.devicesChangedAt ? { devicesChangedAt: cur.devicesChangedAt } : {}) };
+        }
       });
     }
     if (ready.length === 0) throw new NoRecipientsError({ ...targets, recipients: [] });
 
-    const envelope = sealRelayMessage(
-      message,
-      this.opts.identity,
-      ready.map((c) => ({ agentId: c.agentId, encKey: c.encKey, encKeyVersion: c.encKeyVersion })),
-      { createdAt, deliveryExpiresAt: new Date(now.getTime() + ttl(o.deliveryTtlMs, DEFAULT_DELIVERY_TTL_MS)).toISOString() },
-    );
+    const envelope = sealRelayMessage(message, this.opts.device, ready, {
+      createdAt,
+      deliveryExpiresAt: new Date(now.getTime() + ttl(o.deliveryTtlMs, DEFAULT_DELIVERY_TTL_MS)).toISOString(),
+    });
     const r = await this.opts.http.send(envelope);
     // Relay が誰も受け付けなかった（接続が切れた・鍵が替わった直後など）
     if (r.accepted.length === 0) {
-      throw new NoRecipientsError({ recipients: [], denied: targets.denied, notConnected: [...targets.notConnected, ...r.skipped.map((x) => x.agentId)] });
+      throw new NoRecipientsError({ recipients: [], denied: targets.denied, notConnected: [...targets.notConnected, ...r.skipped.map((x) => x.personId)] });
     }
-    const names = new Map(ready.map((c) => [c.agentId, c.name]));
+    const names = new Map(targets.recipients.map((c) => [c.personId, c.name]));
     return {
       postId: r.messageId,
       visibleAt: r.visibleAt,
@@ -324,26 +359,34 @@ export class RelayTransport implements SouiebaTransport {
     seen: Record<string, string>,
     now: Date,
   ): "hold" | { ok: true; message: NarrativeMessage } | { ok: false; reason: RelayRejectReason } {
-    const me = this.opts.identity;
+    const me = this.opts.device;
     // ヘッダの文字列は、署名つきでも Tell の出力（post_id）などに入るので、形を確かめる
     if (
-      env.v !== 2 ||
+      env.v !== 3 ||
       env.suite !== HPKE_SUITE ||
       typeof env.messageId !== "string" ||
       !MESSAGE_ID_RE.test(env.messageId) ||
-      !isAgentId(env.sender) ||
+      !isPersonId(env.sender) ||
+      !isDeviceId(env.senderDevice) ||
       !isCanonicalIso(env.createdAt) ||
       !isCanonicalIso(env.deliveryExpiresAt) ||
       !Array.isArray(env.recipients)
     ) {
       return { ok: false, reason: "bad_header" };
     }
-    const box = env.recipients[0];
-    if (env.recipients.length !== 1 || !box || box.agentId !== me.agentId) return { ok: false, reason: "not_for_me" };
+    const group = env.recipients[0];
+    if (env.recipients.length !== 1 || !group || group.person !== me.personId || !Array.isArray(group.boxes)) return { ok: false, reason: "not_for_me" };
+    const box = group.boxes.find((b) => b?.device === me.deviceId);
+    if (!box) return { ok: false, reason: "not_for_me" };
     const contact = state.contacts[env.sender];
     if (!contact) return connected.has(env.sender) ? "hold" : { ok: false, reason: "unknown_sender" };
+    // 送った端末が、その人の（固定した Person 鍵で署名された、取り消していない）端末か
+    const cert = env.senderCert;
+    if (!cert || cert.personId !== env.sender || cert.deviceId !== env.senderDevice || contact.revoked.includes(cert.deviceId) || !verifyDeviceCert(cert, contact.personKey)) {
+      return { ok: false, reason: "bad_sender_device" };
+    }
     if (box.keyVersion !== me.encKeyVersion) return { ok: false, reason: "stale_key" };
-    if (!verifyRecipientBox(env, box, contact.identityKey)) return { ok: false, reason: "bad_signature" };
+    if (!verifyRecipientGroup(env, group, cert.signKey)) return { ok: false, reason: "bad_signature" };
     if (seen[env.messageId]) return { ok: false, reason: "replay" };
     const t = now.getTime();
     if (Date.parse(env.deliveryExpiresAt) <= t) return { ok: false, reason: "expired" };
@@ -366,9 +409,9 @@ export class RelayTransport implements SouiebaTransport {
     const conns = this.lastConnections;
     return this.opts.state.update((s) => {
       const keyChanges = Object.values(s.contacts)
-        .filter((c) => c.keyChangedAt)
-        .map((c) => ({ agentId: c.agentId, name: c.name, at: c.keyChangedAt! }));
-      for (const c of Object.values(s.contacts)) delete c.keyChangedAt;
+        .filter((c) => c.devicesChangedAt)
+        .map((c) => ({ personId: c.personId, name: c.name, at: c.devicesChangedAt! }));
+      for (const c of Object.values(s.contacts)) delete c.devicesChangedAt;
       const settingsChanges = (s.changeLog ?? []).filter((c) => !c.notified).map(({ at, summary, widens, delegated }) => ({ at, summary, widens, delegated: !!delegated }));
       for (const c of s.changeLog ?? []) c.notified = true;
       // 接続の一覧をまだ取っていなければ、接続要求については何も言わない（知らせ済みの記録も変えない）

@@ -20,5 +20,5 @@ souieba compose
   souieba compose --skip <periodStart>
   ```
 - メモと同じく「絶対に書かない」もの（`souieba skill get note`）は投稿にも含めません。秘密情報らしき投稿は CLI が送る前に拒否します（サーバは暗号化された本文を見られないため、ここが最後の砦です）
-- 投稿は、主人が入っているすべてのグループのメンバーに、10分後に公開されます。主人に頼まれたら `souieba posts mine` で一覧を見せ、`souieba posts delete <id>` で削除できます
+- 投稿は、主人が入っているすべてのグループのメンバーに、既定では10分後に公開されます。主人に頼まれたら `souieba posts mine` で一覧を見せ、`souieba posts delete <id>` で削除できます
 

@@ -113,7 +113,7 @@ export type WireGroup = {
 };
 
 // ---- 公開鍵ディレクトリ（GET /v1/keys） ----
-// サーバを信頼する前提で、クライアントはここにある鍵をそのまま使う（docs/public-deployment-plan.md §5）
+// サーバを信頼する前提で、クライアントはここにある鍵をそのまま使う（docs/architecture.md）。
 
 export type DirectoryAgent = { id: string; name: string; encKey: string; signKey: string; createdAt: string };
 
