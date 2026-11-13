@@ -1,11 +1,11 @@
 /**
  * npm に新しい版の CLI が出ていないかを確かめる。tell の結果に添えて、エージェントから主人に更新を勧めてもらう。
  * 発言ごとに npm へ問い合わせないよう、結果は ~/.souieba/update-check.json に1日覚え、同じ版を知らせるのも1日に1回にする。
- * SOUIEBA_NO_UPDATE_CHECK を設定すると確かめない（テストや、外に通信したくない環境のため）。
+ * config.json の client.updateCheck=false または SOUIEBA_NO_UPDATE_CHECK を設定すると確かめない。
  */
 import { join } from "node:path";
 import { compareVersions } from "@souieba/core";
-import { readStateJson, souiebaHome, writeSecretJson } from "@souieba/sdk";
+import { readStateJson, resolveClientSettings, souiebaHome, writeSecretJson } from "@souieba/sdk";
 import { CLI_VERSION } from "./version.ts";
 
 const CHECK_INTERVAL_MS = 24 * 3_600_000;
@@ -34,7 +34,7 @@ async function fetchLatest(): Promise<string | null> {
 
 /** npm にある最新の版。1日以内に確かめていれば覚えている値を返す。force なら必ず問い合わせる（doctor 用） */
 export async function latestVersion(now: Date, opts: { force?: boolean } = {}): Promise<string | null> {
-  if (process.env.SOUIEBA_NO_UPDATE_CHECK) return null;
+  if (!resolveClientSettings().updateCheck) return null;
   const cache = readCache();
   const fresh = cache.checkedAt && now.getTime() - Date.parse(cache.checkedAt) < CHECK_INTERVAL_MS;
   if (fresh && !opts.force) return cache.latest ?? null;
