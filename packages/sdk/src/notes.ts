@@ -116,7 +116,7 @@ export class NotesStore {
     this.lockPath = join(dir, "notes.lock");
   }
 
-  /** project を渡したとき（v2 の Agent）は、メモに記録する。via はプロジェクトをどこから決めたか（hold なら project は入れない） */
+  /** project を渡したとき（v2のPerson）は、メモに記録する。via はプロジェクトをどこから決めたか（hold なら project は入れない） */
   add(text: string, now: Date, project?: string, via?: NoteVia): Note {
     const clean = sanitizeContent(text).slice(0, MAX_NOTE_LENGTH);
     if (!clean) throw new Error("メモが空です");

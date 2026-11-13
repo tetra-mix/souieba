@@ -1,5 +1,5 @@
 /**
- * Souieba v2（Relay）の Identity・署名・メッセージ形式。設計: docs/v2-design.md、実装の決めごと: docs/v2-relay-plan.md
+ * Souieba v2（Relay）のPerson・署名・メッセージ形式。設計: docs/architecture.md
  *
  * 2.1.0 から、ID は人ごと（2026-11-01 主人の決定）。
  * - 人ごとに Person 鍵（Ed25519）を1つ持つ。Person ID（sb_…）は Person 公開鍵のハッシュから作る（自己証明的）
@@ -65,7 +65,7 @@ export function isDeviceId(id: unknown): id is string {
   return typeof id === "string" && DEVICE_ID_RE.test(id);
 }
 
-/** 人の鍵。priv は、その人の最初の PC にだけある（ほかの PC の端末を足すのは今後。docs/v2-design.md） */
+/** 人の鍵。priv は、その人の最初のPCにだけある（docs/architecture.md） */
 export type PersonKeys = { personId: string; person: KeyPair };
 
 /** 端末の鍵 */
@@ -220,7 +220,7 @@ export const MAX_RELAY_RECIPIENTS = 50;
 
 export type Reshare = "deny" | "allow";
 
-/** 送信側 Agent が書く共有内容と、どう伝えてほしいかの意図（docs/v2-design.md §9） */
+/** 送信側が書く共有内容と、どう伝えてほしいかの意図（docs/architecture.md） */
 export type NarrativeMessage = {
   v: 1;
   /** 共有内容（「主人は〜」の三人称） */
@@ -366,7 +366,7 @@ const cekAad = (h: Header, person: string, device: string) => `${headerText(h)}\
 /** 宛先の1人。devices は、確かめて使ってよいと分かった端末（取り消されていないもの） */
 export type RelayRecipient = { personId: string; devices: { deviceId: string; encKey: string; encKeyVersion: number }[] };
 
-/** Narrative Message を宛先の人の端末ごとに暗号化し、人ごとに署名する（docs/v2-design.md §10.3） */
+/** Narrative Message を宛先の人の端末ごとに暗号化し、人ごとに署名する（docs/architecture.md） */
 export function sealRelayMessage(
   message: NarrativeMessage,
   sender: Pick<DeviceIdentity, "personId" | "deviceId" | "sign" | "cert">,

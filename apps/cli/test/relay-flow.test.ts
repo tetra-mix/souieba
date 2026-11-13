@@ -352,8 +352,8 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
       console.log(`--- TUI ${columns} 桁 ---\n${screen}`);
       await t.keys(RIGHT);
       expect(t.ui.screen()).toContain("[ 連絡先 ]");
-      await t.keys(LEFT, LEFT, LEFT);
-      expect(t.ui.screen()).toContain("[ 端末 ]");
+      await t.keys(LEFT);
+      expect(t.ui.screen()).toContain("[ 研究 ]");
       await t.quit();
     }
     // 行が多いときは、選んでいる行が見えるように送る

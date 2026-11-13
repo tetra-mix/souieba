@@ -1,12 +1,12 @@
 /**
  * souieba relay ui: v2 の設定を、主人が自分の目で見て直接操作する画面（TUI）。
- * エージェント（LLM）を通さない、決定論的な入口（docs/v2-relay-plan.md §5）。
+ * エージェント（LLM）を通さない、決定論的な入口（docs/architecture.md）。
  * 上にタブを並べる。プロジェクトのタブ（← → で切り替え）では、そのプロジェクトのディレクトリ・共有先・Policy を出し、
  * 「連絡先」のタブには、全体のもの（届いた接続要求・連絡先の呼び名・グループ・ブロック）をまとめる（docs/v2-projects.md §6）。
  * 「保留と推定」のタブには、どのプロジェクトにも決まらず保留にしたメモと、エージェントの推定で決めたメモ、メモの振り分けの規則
- * （MCP クライアントごとの規則・決まらないときの扱い）を、「端末」のタブには、この PC のエージェント（端末）を出す。
+ * （MCP クライアントごとの規則・決まらないときの扱い）を表示する。
  * 操作の中身は CLI と同じ relay-ops.ts を使う。共有を広げる操作と、取り消しにくい操作は、画面の中で y/n を聞く。
- * エージェントに範囲を任せる（delegation）のは主人だけなので、ここ（と端末での y/N）が入口になる。
+ * エージェントに範囲を任せる（delegation）のは主人だけなので、ここ（とTTYでの y/N）が入口になる。
  * プロジェクトのタブに、そのプロジェクトの範囲（共有先・共有方針・ディレクトリ）を、「連絡先」のタブに全体の範囲（接続要求の承認・グループのメンバー）を出す。
  * 外部のライブラリは使わない（CLI を依存なしで配るため）。
  *
@@ -17,8 +17,7 @@
  */
 import { emitKeypressEvents } from "node:readline";
 import type { DelegationScope, Note, RelayConnection, RelayState, ResolvedRelayAgent } from "@souieba/sdk";
-import { DEFAULT_PROJECT, accessFor, activeDelegations, loadClientConfig, scopeKey } from "@souieba/sdk";
-import { addDevice, revokeDeviceNamed } from "./person.ts";
+import { DEFAULT_PROJECT, accessFor, activeDelegations, scopeKey } from "@souieba/sdk";
 import { type Change, describeScope, parseTerm, projectLabel, relayOps } from "./relay-ops.ts";
 import type { relayParts } from "./relay.ts";
 
@@ -57,8 +56,6 @@ type Row =
   | { kind: "unresolved" }
   | { kind: "client"; client: string }
   | { kind: "addClient" }
-  | { kind: "device"; name: string; revoked: boolean }
-  | { kind: "addDevice" };
 
 type Style = "bold" | "dim" | "green" | "red" | "section";
 
@@ -195,8 +192,8 @@ export function createRelayTui(opts: TuiOptions) {
     tab = Math.min(tab, tabs().length - 1);
   }
 
-  /** タブ: 既定のプロジェクト・ほかのプロジェクト（名前順）・連絡先・保留・推定・端末 */
-  function tabs(): { label: string; project: string | null; special?: "review" | "devices" }[] {
+  /** タブ: 既定のプロジェクト・ほかのプロジェクト（名前順）・連絡先・保留・推定 */
+  function tabs(): { label: string; project: string | null; special?: "review" }[] {
     const names = Object.keys(state.projects)
       .filter((n) => n !== DEFAULT_PROJECT)
       .sort((a, b) => a.localeCompare(b));
@@ -205,7 +202,6 @@ export function createRelayTui(opts: TuiOptions) {
       ...names.map((n) => ({ label: n, project: n })),
       { label: "連絡先", project: null },
       { label: "保留と推定", project: null, special: "review" },
-      { label: "端末", project: null, special: "devices" },
     ];
   }
 
@@ -242,25 +238,6 @@ export function createRelayTui(opts: TuiOptions) {
       L.push({ cells: [{ t: `  ${plain(c)}`, w: 24 }, { t: `→ ${plain(projectLabel(pr))}` }], row: { kind: "client", client: c } });
     }
     L.push({ cells: [{ t: "  + クライアントの規則を足す", style: "dim" }], row: { kind: "addClient" } });
-    return L;
-  }
-
-  function devicesLines(): Line[] {
-    const cfg = loadClientConfig();
-    const L: Line[] = [text("この PC の端末（エージェント）。名前は手元だけのもので、友人には見えません", "section")];
-    L.push(text(`  ID: ${agent.personId}（どの端末でも同じ）`, "dim"));
-    for (const [n, d] of Object.entries(cfg.person?.devices ?? {})) {
-      L.push({
-        cells: [
-          { t: `  ${plain(n)}${n === agent.name ? "（この端末）" : ""}`, w: 28 },
-          { t: short(d.deviceId), w: 16, style: "dim" },
-          d.revokedAt ? { t: `取り消し済み（${d.revokedAt.slice(0, 10)}）`, style: "dim" } : { t: `${d.createdAt.slice(0, 10)} に追加` },
-        ],
-        row: { kind: "device", name: n, revoked: !!d.revokedAt },
-      });
-    }
-    L.push({ cells: [{ t: "  + 端末を足す", style: "dim" }], row: { kind: "addDevice" } });
-    L.push(text(""), text("  ほかの PC の端末を足す（device link）は、今後の予定です", "dim"));
     return L;
   }
 
@@ -435,7 +412,6 @@ export function createRelayTui(opts: TuiOptions) {
     if (mode.kind === "members") return membersLines(mode);
     const sp = currentSpecial();
     if (sp === "review") return reviewLines();
-    if (sp === "devices") return devicesLines();
     const pr = currentProject();
     return pr ? projectLines(pr) : contactsLines();
   }
@@ -479,10 +455,6 @@ export function createRelayTui(opts: TuiOptions) {
         return "x: この規則を外す";
       case "addClient":
         return "Enter: クライアントの規則を足す";
-      case "device":
-        return "x: この端末を取り消す";
-      case "addDevice":
-        return "Enter: 端末を足す";
       default:
         return "";
     }
@@ -506,7 +478,7 @@ export function createRelayTui(opts: TuiOptions) {
 
     // 上: 題・Relay・タブ
     const head: { plain: string; ansi: string }[] = [];
-    head.push(renderLine({ cells: [{ t: "Souieba v2 の設定  ", style: "bold" }, { t: `${plain(agent.name)}  ${agent.personId}` }] }, width, false));
+    head.push(renderLine({ cells: [{ t: "Souieba v2 の設定  ", style: "bold" }, { t: `Person  ${agent.personId}` }] }, width, false));
     head.push(renderLine(text(`Relay: ${agent.relayUrl}`, "dim"), width, false));
     const ts = tabs();
     let tp = "";
@@ -624,23 +596,6 @@ export function createRelayTui(opts: TuiOptions) {
         prompt("MCP クライアントの名前（clientInfo.name。例: claude-ai）", "", (c) =>
           prompt("そのクライアントのメモを入れるプロジェクト", "", (t) => attempt(async () => perform(ops.clientRule(c, t.trim())))),
         );
-      }
-    } else if (currentSpecial() === "devices") {
-      if (row?.kind === "addDevice" && name === "return") {
-        prompt("新しい端末の名前（手元だけの名前）", "", (n) =>
-          attempt(async () => {
-            message = (await addDevice(n, opts.now)).join("\n");
-          }),
-        );
-      } else if (row?.kind === "device" && str === "x" && !row.revoked) {
-        mode = {
-          kind: "confirm",
-          summary: `端末「${row.name}」を取り消します（その端末の鍵では、もう近況を受け取れません。元に戻せません）`,
-          onYes: () =>
-            attempt(async () => {
-              message = (await revokeDeviceNamed(row.name, opts.now)).join("\n");
-            }),
-        };
       }
     } else if (pr !== null) {
       // プロジェクトのタブ

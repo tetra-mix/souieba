@@ -1,8 +1,8 @@
 /**
- * 2.1.0 の v2: 人ごとの ID と端末（エージェント）・メモのプロジェクトの決め方・2.0.0 からの移行を、CLI をサブプロセスで実行して確かめる。
+ * v2: 人ごとの ID・内部転送端末・メモのプロジェクトの決め方を、CLI をサブプロセスで実行して確かめる。
  */
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -17,7 +17,6 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { type CallToolResult, ListRootsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { pathToFileURL } from "node:url";
-import { AGENT_STATE_200 } from "../../../packages/sdk/test/fixtures/agent-state-2.0.0.ts";
 import { relayCommand } from "../src/relay.ts";
 
 const run = promisify(execFile);
@@ -44,7 +43,6 @@ async function souieba(home: string, agent: string, args: string[], opts: { stdi
     return { code: e.code, out: `${e.stdout}${e.stderr}`.trim() };
   }
 }
-
 /** 主人がターミナルで「y」と答えたことにして、relay のコマンドを実行する */
 async function owner(home: string, agent: string, args: string[], name?: string) {
   const saved = { home: process.env.SOUIEBA_HOME, agent: process.env.SOUIEBA_AGENT };
@@ -78,66 +76,37 @@ afterAll(() => {
   server.close();
 });
 
-describe("v2.1: 人ごとの ID と端末", () => {
-  it("アリス（端末2台）→ ボブ（端末2台）: 接続は1回、どちらの端末から送っても届き、ボブの PC では1回だけ伝える。取り消した端末は受け取れない", { timeout: 180_000 }, async () => {
-    const a1 = await souieba("alice", "", ["init", baseUrl, "--name", "ClaudeA1"]);
-    expect(a1.code).toBe(0);
-    const aliceId = idOf(a1.out);
-    expect((await souieba("alice", "", ["device", "add", "ClaudeA2"])).out).toContain("端末「ClaudeA2」を足しました");
-    // 同じ名前の端末は足せない。Personの操作は内部端末を明示しなくても使える
-    expect((await souieba("alice", "", ["device", "add", "ClaudeA2"])).code).toBe(1);
+describe("v2: Person単位のIDと共有", () => {
+  it("同じPersonの設定を共有し、Agent指定なしで接続・投稿・Tellできる", { timeout: 180_000 }, async () => {
+    const a = await souieba("alice", "", ["init", baseUrl, "--name", "alice"]);
+    expect(a.code).toBe(0);
+    const aliceId = idOf(a.out);
     expect((await souieba("alice", "", ["relay", "id"])).out).toContain(aliceId);
-    // どちらの内部端末でも同じPerson ID
-    expect((await souieba("alice", "ClaudeA2", ["relay", "id"])).out).toContain(aliceId);
-    const list = (await souieba("alice", "ClaudeA1", ["device", "list"])).out;
-    expect(list).toContain("ClaudeA1（この端末）");
-    expect(list).toContain("ClaudeA2");
 
-    const bobId = idOf((await souieba("bob", "", ["init", baseUrl, "--name", "ClaudeB1"])).out);
-    await souieba("bob", "", ["device", "add", "ClaudeB2"]);
-
-    // 接続は人と人。アリスの1台目から要求し、ボブの2台目で承認する
-    await owner("alice", "ClaudeA1", ["connect", bobId], "ボブ");
-    await owner("bob", "ClaudeB2", ["accept", aliceId], "アリス");
-    await owner("alice", "ClaudeA2", ["allow", "ボブ"]);
-    const contacts = (await souieba("alice", "ClaudeA2", ["relay", "contacts"])).out;
+    const bobId = idOf((await souieba("bob", "", ["init", baseUrl, "--name", "bob"])).out);
+    await owner("alice", "", ["connect", bobId], "ボブ");
+    await owner("bob", "", ["accept", aliceId], "アリス");
+    await owner("alice", "", ["allow", "ボブ"]);
+    const contacts = (await souieba("alice", "", ["relay", "contacts"])).out;
     expect(contacts.split("\n").filter((l) => l.includes(bobId))).toHaveLength(1);
 
-    // アリスの2台目のエージェントがメモし、投稿する
-    expect((await souieba("alice", "ClaudeA2", ["note", "主人は週末に初めてソロキャンプに行った"])).code).toBe(0);
+    expect((await souieba("alice", "", ["note", "主人は週末に初めてソロキャンプに行った"])).code).toBe(0);
     now = new Date("2026-11-01T11:05:00Z");
-    // メモはこの PC の端末で共有しているので、1台目の compose にも出る
-    const compose = (await souieba("alice", "ClaudeA1", ["compose"])).out;
+    const compose = (await souieba("alice", "", ["compose"])).out;
     expect(compose).toContain("ソロキャンプ");
     const period = /--period (\S+)/.exec(compose)![1]!;
-    const pub = await souieba("alice", "ClaudeA2", ["publish", "--period", period, "主人は週末に初めてソロキャンプに行ったらしい"]);
-    expect(pub.out).toContain("ボブ に送りました");
-    expect((await souieba("alice", "ClaudeA1", ["compose"])).out).toContain("投稿待ちの時間帯はありません");
+    expect((await souieba("alice", "", ["publish", "--period", period, "主人は週末に初めてソロキャンプに行ったらしい"])).out).toContain("ボブ に送りました");
+    expect((await souieba("bob", "", ["tell"])).out).toContain("あ、そういえばアリスさん、週末に初めてソロキャンプに行ったみたいですよ。");
+    expect((await souieba("bob", "", ["tell"])).out).not.toContain("ソロキャンプ");
 
-    // ボブの1台目の会話で伝える。2台目の会話では、もう伝えない
-    const t1 = await souieba("bob", "ClaudeB1", ["tell"]);
-    expect(t1.out).toContain("あ、そういえばアリスさん、週末に初めてソロキャンプに行ったみたいですよ。");
-    const t2 = await souieba("bob", "ClaudeB2", ["tell"]);
-    expect(t2.out).not.toContain("ソロキャンプ");
-    expect((await souieba("alice", "ClaudeA1", ["relay", "sent"])).out).toContain("ボブ: 受信済み");
-
-    // ボブが2台目を取り消す。アリスの1台目から送ったものは1台目にだけ届き、2台目は受け取れない
-    expect((await souieba("bob", "ClaudeB1", ["device", "revoke", "ClaudeB2"])).out).toContain("取り消しました");
-    expect((await souieba("bob", "ClaudeB1", ["device", "list"])).out).toContain("取り消し済み");
-    await souieba("alice", "ClaudeA1", ["note", "主人は新しいカメラを買った"]);
+    await souieba("alice", "", ["note", "主人は新しいカメラを買った"]);
     now = new Date("2026-11-01T12:05:00Z");
-    const p2 = /--period (\S+)/.exec((await souieba("alice", "ClaudeA1", ["compose"])).out)![1]!;
-    expect((await souieba("alice", "ClaudeA1", ["publish", "--period", p2, "主人は新しいカメラを買ってうれしそうだったらしい"])).out).toContain("ボブ に送りました");
-    // アリスの側では、ボブの端末が減ったことを覚えている
-    const state = JSON.parse(readFileSync(join(tmp, "alice", "person", "relay-state.json"), "utf8"));
-    expect(state.contacts[bobId].revoked).toHaveLength(1);
-    expect((await souieba("bob", "ClaudeB2", ["tell"])).out).toContain("取り消してあります");
-    // 1台目の会話は、前に伝えてから時間がたったので、新しい近況を伝える
+    const p2 = /--period (\S+)/.exec((await souieba("alice", "", ["compose"])).out)![1]!;
+    expect((await souieba("alice", "", ["publish", "--period", p2, "主人は新しいカメラを買ってうれしそうだったらしい"])).out).toContain("ボブ に送りました");
     now = new Date("2026-11-01T12:30:00Z");
-    expect((await souieba("bob", "ClaudeB1", ["tell"])).out).toContain("カメラ");
+    expect((await souieba("bob", "", ["tell"])).out).toContain("カメラ");
 
-    // ID はこの PC に1つだけ（init をもう一度しても作り直さない）
-    expect((await souieba("alice", "ClaudeA1", ["init", baseUrl])).out).toContain("もうあります");
+    expect((await souieba("alice", "", ["init", baseUrl])).out).toContain("もうあります");
   });
 });
 
@@ -327,50 +296,3 @@ async function relayAs(home: string, args: string[], extra: { project?: string }
     if (savedAgent !== undefined) process.env.SOUIEBA_AGENT = savedAgent;
   }
 }
-
-describe("v2.1: 2.0.0 からの移行", () => {
-  it("2.0.0 の Agent「Claude Code v2」（仕事のプロジェクトつき）から init --from で移す。古いファイルは消さない", { timeout: 120_000 }, async () => {
-    const home = join(tmp, "owner");
-    const agentId = "sb_cccccccccccccccccccccccccccccccc";
-    mkdirSync(join(home, "agents", agentId), { recursive: true });
-    const statePath = join(home, "agents", agentId, "relay-state.json");
-    writeFileSync(statePath, JSON.stringify(AGENT_STATE_200));
-    writeFileSync(
-      join(home, "config.json"),
-      JSON.stringify({
-        agents: {},
-        relayAgents: {
-          "Claude Code v2": {
-            relayUrl: baseUrl,
-            agentId,
-            identity: { pub: "x", priv: "y" },
-            enc: { pub: "x", priv: "y" },
-            encKeyVersion: 1,
-            createdAt: "2026-10-31T00:00:00.000Z",
-          },
-        },
-      }),
-    );
-    // 2.0.0 の Agent を選ぶと、移し方を案内する
-    const before = await souieba("owner", "Claude Code v2", ["tell"]);
-    expect(before.out).toContain("init --from");
-
-    const r = await souieba("owner", "", ["init", "--from", "Claude Code v2"]);
-    expect(r.code).toBe(0);
-    expect(r.out).toContain("2.0.0 の Agent「Claude Code v2」");
-    expect(r.out).toContain("移した設定: プロジェクト 仕事");
-    expect(r.out).toContain("ボブ（古い ID: sb_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa）");
-    expect(r.out).toContain("キャロル");
-    expect(existsSync(statePath)).toBe(true);
-    const cfg = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
-    expect(cfg.relayAgents["Claude Code v2"]).toBeTruthy();
-    expect(Object.keys(cfg.person.devices)).toEqual(["Claude Code v2"]);
-
-    // 同じ名前（SOUIEBA_AGENT）のまま、新しい端末として使える
-    const list = (await souieba("owner", "Claude Code v2", ["relay", "project", "list"])).out;
-    expect(list).toContain("- 仕事: 共有先 0 人");
-    expect(list).toContain("/Users/ryouma/Documents/vivixy/jme、/Users/ryouma/Documents/spajam/spajam");
-    expect((await souieba("owner", "Claude Code v2", ["relay", "delegate"])).out).toContain("プロジェクト「仕事」のディレクトリ");
-    expect((await souieba("owner", "Claude Code v2", ["tell"])).code).toBe(0);
-  });
-});

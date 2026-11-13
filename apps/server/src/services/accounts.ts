@@ -259,7 +259,7 @@ export function publicAgent(a: AgentRow) {
 
 /**
  * Agent の登録。暗号鍵（X25519）と署名鍵（Ed25519）の公開鍵が必須。
- * 受信側はサーバが配るこの鍵をそのまま使う（サーバを信頼する。docs/public-deployment-plan.md §5）
+ * 受信側はサーバが配るこの鍵をそのまま使う（サーバを信頼する。docs/architecture.md）
  */
 export function createAgent(
   db: DB,

@@ -112,7 +112,7 @@ function context(flags: AgentFlags) {
   };
 }
 
-/** v2（Relay）の Agent のとき。Note・Session・Tell の扱いは v1 と同じで、送受信だけが Relay 経由になる */
+/** v2（Relay）のPersonのとき。Note・Session・Tell の扱いは v1 と同じで、送受信だけが Relay 経由になる */
 function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
   const parts = relayParts(r, flags.now);
   const state: { outdated: string | null } = { outdated: null };
@@ -157,9 +157,9 @@ function pendingPeriods(ctx: ReturnType<typeof anyContext>, now: Date): PendingP
   });
 }
 
-/** v1 と v2 のどちらの Agent かを見分けて、Note・Session・Tell に共通の部分を返す */
+/** v1のAgentとv2のPersonを見分けて、Note・Session・Tellに共通の部分を返す */
 function anyContext(flags: AgentFlags) {
-  const r = resolveRelayAgent(flags.agent);
+  const r = resolveRelayAgent();
   return r ? relayContext(flags, r) : { mode: "v1" as const, ...context(flags) };
 }
 
@@ -259,7 +259,7 @@ export function noteResult(flags: AgentFlags, text: string, opts: NoteOptions = 
 }
 
 /**
- * フックから: v2 の端末なら、この会話の作業ディレクトリを覚えて、会話の ID の手引きを返す。v1 の Agent なら null
+ * フックから: v2のPersonなら、この会話の作業ディレクトリを覚えて、会話のIDの手引きを返す。v1のAgentなら null
  * （作業ディレクトリはフックが知らせたもので、エージェントが言うものではない）
  */
 export function hookSession(flags: AgentFlags, sess: { id: string; cwd: string | null }): string | null {
@@ -284,7 +284,7 @@ export function inferenceHint(flags: AgentFlags): string | null {
  * relay の設定と同じく、--yes（エージェント）か端末での確認が要る
  */
 export async function noteMove(flags: AgentFlags, to: string, opts: { from?: string; periodStart?: string; yes?: boolean; held?: boolean; ts?: string }): Promise<void> {
-  const r = resolveRelayAgent(flags.agent);
+  const r = resolveRelayAgent();
   if (!r) throw new Error("note move は v2 の端末だけで使えます（v1 にはプロジェクトがありません）");
   const parts = relayParts(r, flags.now);
   const ops = relayOps({ parts, selfId: r.personId, now: flags.now });
@@ -388,7 +388,7 @@ export function composeResult(flags: AgentFlags): AgentResult {
 
 /**
  * v2 の compose。（時間帯, プロジェクト）ごとに、そのプロジェクトの共有の境界（共有してよい相手・Policy）とメモを1つの塊で出す。
- * Policy の意味の判断はエージェントが行い、宛先の制限は CLI が機械的に行う（docs/v2-design.md §8.3）。
+ * Policy の意味の判断はエージェントが行い、宛先の制限は CLI が機械的に行う（docs/architecture.md）。
  * 共有先が空のプロジェクトのメモは、材料にもしないよう出さない（docs/v2-projects.md §4）
  */
 function relayCompose(flags: AgentFlags, pending: PendingPeriod[], s: RelayState): AgentResult {

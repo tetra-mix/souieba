@@ -32,7 +32,7 @@ import {
   sealForMembers,
 } from "@souieba/sdk";
 import { HOOK_TARGETS, hookOutput, isHookTarget } from "./integrations/hook.ts";
-import { deviceCommand, initCommand } from "./person.ts";
+import { initCommand } from "./person.ts";
 import { SKILL_TOPICS, installedSkills, isSkillTopic, skillText, skillVersionAdvice } from "./skill.ts";
 import { latestVersion, newerThanCurrent, updateAdvice } from "./update-check.ts";
 import { CLI_VERSION } from "./version.ts";
@@ -69,13 +69,11 @@ const USAGE = `使い方: souieba <command>
                                    v2: まだ送っていないメモを別のプロジェクトに移す（主人が振り分けたことになる）
   compose [--skip <periodStart> [--project <名前>]]   投稿待ちの時間帯とメモを表示する
   publish [--period previous|current|<ISO>] <本文>   1時間分の投稿をする
-    v2 の Agent では: [--project <名前>] [--to <相手|group:<グループ>>]... [--purpose <理由>] [--nuance <調子>] [--context <合う話題>]
+    v2 のPersonでは: [--project <名前>] [--to <相手|group:<グループ>>]... [--purpose <理由>] [--nuance <調子>] [--context <合う話題>]
                       [--expires-in <時間>] [--allow-reshare]
 
 v2（Relay。Person IDで、アカウントなしで共有する）:
-  init <Relay の URL> [--name <内部名>]   Person IDと内部転送端末を作って Relay に登録する
-  init --from <2.0.0 の Agent 名>          2.0.0 の v2 Agent の設定を移して作る（古いファイルは消さない）
-  device list | add <名前> | revoke <名前>  内部転送端末（通常は操作不要）
+  init <Relay の URL> [--name <内部名>]   Person IDを作って Relay に登録する
   relay ...                        souieba relay help で一覧（id / contacts / connect / accept / allow / policy / project など）
 
 <グループ> は名前か ID。設定ファイル: ${configPath()}（環境変数 SOUIEBA_HOME で場所を変更できます）`;
@@ -281,8 +279,6 @@ async function main(argv: string[]) {
         const name = rest.join(" ");
         if (!name) throw new Error("souieba agent add <名前>");
         const cfg = loadClientConfig();
-        // v2 の端末と同じ名前にすると、--agent でどちらか分からなくなる
-        if (name in (cfg.person?.devices ?? {}) || name in (cfg.relayAgents ?? {})) throw new Error(`「${name}」は v2 の端末の名前です。別の名前にしてください`);
         const enc = generateEncryptionKey();
         const sign = generateSigningKey();
         const r = await client.request<{ agent: { id: string; name: string }; token: string }>("POST", "/v1/agents", {
@@ -414,10 +410,7 @@ async function main(argv: string[]) {
       break;
     }
     case "init":
-      await initCommand({ url: sub, name: values.name, from: values.from }, { log: (l) => console.log(l), now: testableNow });
-      break;
-    case "device":
-      await deviceCommand({ sub, rest }, { log: (l) => console.log(l), now: testableNow });
+      await initCommand({ url: sub, name: values.name }, { log: (l) => console.log(l), now: testableNow });
       break;
     case "relay": {
       try {
@@ -426,13 +419,12 @@ async function main(argv: string[]) {
             sub,
             rest,
             name: values.name,
-            agent: values.agent,
             yes: values.yes,
             project: values.project,
             copyDefault: values["copy-default"],
             term: values.for,
             session: values.session,
-            // 承認のあとに実行するコマンドは、読み取った値から組み立て直す（--agent=x のような書き方も1つにまとめる）
+            // 承認のあとに実行するコマンドは、読み取った値から組み立て直す
             raw: [
               ...positionals.slice(1),
               ...(values.name !== undefined ? ["--name", values.name] : []),

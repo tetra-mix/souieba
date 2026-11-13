@@ -17,27 +17,20 @@ export type ClientConfig = {
   userToken?: string;
   user?: { id: string; handle: string; displayName: string };
   agents: Record<string, AgentEntry>;
-  /**
-   * 2.0.0 の v2（Relay）の Agent（Agent ごとの ID）。2.1.0 では使わない（souieba init --from <名前> で、人ごとの ID に移す）。
-   * 自動では消さない
-   */
-  relayAgents?: Record<string, RelayAgentEntry>;
-  /** 2.1.0 からの v2: この PC の主人（人ごとの ID）と、その端末（エージェント）。docs/v2-design.md */
+  /** v2 RelayのPersonと、通信に使う内部端末。通常の操作ではPersonだけを意識する */
   person?: PersonEntry;
 };
 
 /**
- * 人。Person 鍵の秘密鍵は、その人の最初の PC にだけある（ほかの PC の端末を足す device link は今後。そのときは priv のない形になる）
+ * 人。現在は1つの設定ディレクトリにPerson鍵と、Relay通信用の内部端末を保存する。
  */
 export type PersonEntry = {
   relayUrl: string;
   personId: string;
   person: { pub: string; priv?: string };
   createdAt: string;
-  /** 端末。キーは手元だけの名前（「Claude Code」など。友人には見せない）。--agent・SOUIEBA_AGENT で選ぶ */
+  /** 内部転送端末。キーは手元だけの名前で、外部のIDやCLI引数には使わない */
   devices: Record<string, DeviceEntry>;
-  /** 2.0.0 の Agent から移したとき、その名前 */
-  migratedFrom?: string;
 };
 
 export type DeviceEntry = {
@@ -49,15 +42,6 @@ export type DeviceEntry = {
   cert: DeviceCert;
   /** 取り消した日時（取り消した端末は使わない。記録のために残す） */
   revokedAt?: string;
-};
-
-export type RelayAgentEntry = {
-  relayUrl: string;
-  agentId: string;
-  identity: KeyPair;
-  enc: KeyPair;
-  encKeyVersion: number;
-  createdAt: string;
 };
 
 /** SOUIEBA_HOME で切り替えられる（1台の PC で2人分のデモをするときなど） */
@@ -137,7 +121,7 @@ export type ResolvedAgent = {
 };
 
 /**
- * 使う Agent を決める。優先順: 引数（--agent）> 環境変数 SOUIEBA_AGENT > 登録が1つだけならそれ。
+ * v1で使うAgentを決める。優先順: 引数（--agent）> 環境変数 SOUIEBA_AGENT > 登録が1つだけならそれ。
  * 環境変数 SOUIEBA_SERVER があればサーバの URL だけ設定ファイルより優先する。
  * （トークンだけを環境変数で渡す方法はやめた。E2EE には Agent の秘密鍵が必要なため）
  */
@@ -168,7 +152,7 @@ export function resolveAgent(name?: string): ResolvedAgent {
   };
 }
 
-/** v2 の端末（エージェント）として選ばれたもの */
+/** v2 の内部転送端末として解決された接続情報 */
 export type ResolvedRelayAgent = {
   /** 端末の名前（手元だけ） */
   name: string;
@@ -188,54 +172,15 @@ export function deviceDir(deviceId: string): string {
   return join(personDir(), "devices", deviceId);
 }
 
-/** v1 の Agent・v2 の端末・2.0.0 の v2 Agent の名前は重ねない。agent を決めるときに、どれの名前かを見分けるため */
-export function agentNameTaken(cfg: ClientConfig, name: string): boolean {
-  return name in cfg.agents || name in (cfg.relayAgents ?? {}) || name in (cfg.person?.devices ?? {});
-}
-
-/** 使っている（取り消していない）端末の名前 */
-export function activeDeviceNames(cfg: ClientConfig): string[] {
-  return Object.entries(cfg.person?.devices ?? {})
-    .filter(([, d]) => !d.revokedAt)
-    .map(([n]) => n);
-}
-
-/** 2.0.0 の v2 Agent を選んだとき（2.1.0 では使えない。移行を案内する） */
-export class LegacyRelayAgentError extends Error {}
-
 /**
- * Person の Relay を使う内部端末を返す。v1 の Agent なら null。
- * Person が選ばれているときは、v1 Agent が同じ設定に残っていても、v2 側を既定にする。
- * --agent / SOUIEBA_AGENT は、旧設定や複数の内部端末との互換用にだけ使う。
+ * Person のRelayを使う内部端末を返す。v1のAgent設定しかなければ null。
+ * Personがあるときは、そのPersonの最初の有効な内部端末を使う。
  */
-export function resolveRelayAgent(name?: string): ResolvedRelayAgent | null {
-  const requested = name ?? (process.env.SOUIEBA_AGENT || undefined);
+export function resolveRelayAgent(): ResolvedRelayAgent | null {
   const cfg = loadClientConfig();
   const p = cfg.person;
-  const active = activeDeviceNames(cfg);
-  // Person がある場合は、同じ ~/.souieba に v1 Agent が残っていても v2 を優先する。
-  // 内部端末が複数ある旧設定では、明示指定がなければ先頭の有効な端末を使う。
-  const key = requested === undefined ? active[0] : p?.devices[requested] ? requested : undefined;
-  if (requested !== undefined && !key) {
-    if (cfg.agents[requested]) return null;
-    if (cfg.relayAgents?.[requested]) {
-      throw new LegacyRelayAgentError(
-        `「${requested}」は souieba 2.0.0 の v2 Agent です。2.1.0 から ID は人ごとになりました。souieba init --from ${JSON.stringify(requested)} で移してください（古いファイルは消しません）`,
-      );
-    }
-    return null;
-  }
-  if (!key) return null;
-  const d = p?.devices[key];
-  if (!p || !d) {
-    if (cfg.relayAgents?.[key]) {
-      throw new LegacyRelayAgentError(
-        `「${key}」は souieba 2.0.0 の v2 Agent です。2.1.0 から ID は人ごとになりました。souieba init --from ${JSON.stringify(key)} で移してください（古いファイルは消しません）`,
-      );
-    }
-    return null;
-  }
-  if (d.revokedAt) throw new Error(`端末「${key}」は取り消してあります（souieba device list で確かめられます）`);
+  const [key, d] = Object.entries(p?.devices ?? {}).find(([, device]) => !device.revokedAt) ?? [];
+  if (!p || !key || !d) return null;
   return {
     name: key,
     relayUrl: process.env.SOUIEBA_RELAY_URL ?? p.relayUrl,

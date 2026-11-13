@@ -1,11 +1,11 @@
 /**
- * v2 の Relay。公開鍵ディレクトリ・チャレンジ認証・接続管理・暗号文の配送と期限管理だけを行う（docs/v2-design.md §2.2）。
+ * v2 の Relay。公開鍵ディレクトリ・チャレンジ認証・接続管理・暗号文の配送と期限管理だけを行う（docs/architecture.md）。
  * メッセージの平文・Note・グループ・アクセス権限・Policy は持たない（それらは各 Client が持つ）。
  * Relay が確かめるのは、サーバで機械的に確かめられること（署名・接続の承認・期限・大きさ）だけ。
  *
- * 2.1.0 から ID は人ごと。ディレクトリは人ごとに Person 鍵・端末証明書・端末の取り消しを持ち、
+ * ID は人ごと。ディレクトリは人ごとに Person 鍵・端末証明書・端末の取り消しを持ち、
  * 認証は端末ごと（端末の署名鍵でチャレンジに署名する）。接続・ブロックは人と人。配送は端末ごと。
- * 2.0.0 の Agent ごとの表（relay_agents など）は使わない（残してあるだけ）。
+ * 旧Relayの表は現行のRelay処理では使わない。
  */
 import {
   type DeviceCert,
@@ -58,7 +58,7 @@ export const MAX_FETCH = 50;
 /** 取り消した端末も含めて、1人が登録できる端末の上限（取り消しを繰り返して表を膨らませないように） */
 export const MAX_DEVICE_ROWS_PER_PERSON = 50;
 
-/** maxAgents は、登録できる人の数（2.0.0 の名前のまま） */
+/** maxAgents は、登録できるPersonの数 */
 export type RelayLimits = { maxAgents: number };
 
 /** 認証済みの端末 */

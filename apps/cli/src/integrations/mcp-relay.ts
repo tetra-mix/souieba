@@ -1,6 +1,6 @@
 /**
  * souieba mcp の、v2（Relay）の共有の設定を変えるツール。シェルを使えないエージェント（Claude Desktop など）が、
- * 主人に頼まれたときに設定を変えられるようにする（docs/v2-relay-plan.md §5・docs/v2-projects.md §9）。
+ * 主人に頼まれたときに設定を変えられるようにする（docs/architecture.md・docs/v2-projects.md §9）。
  *
  * 中身は CLI の souieba relay ...（relay.ts の relayCommand）と同じで、同じ2段階を踏む:
  * - 共有を狭める操作は、そのまま実行する
@@ -29,11 +29,11 @@ const confirm = z.boolean().optional().describe("主人がこの会話で、示�
 const project = z.string().max(80).optional().describe("プロジェクトの名前（省略すると既定のプロジェクト）");
 
 /** relayCommand を、端末の外（エージェント）からの呼び出しとして実行し、出力をツールの結果にする */
-export async function runRelay(flags: AgentFlags, a: Omit<RelayArgs, "raw" | "agent">): Promise<CallToolResult> {
+export async function runRelay(flags: AgentFlags, a: Omit<RelayArgs, "raw">): Promise<CallToolResult> {
   const out: string[] = [];
   try {
     await relayCommand(
-      { ...a, agent: flags.agent, raw: [] },
+      { ...a, raw: [] },
       { log: (l) => out.push(l), interactive: false, ask: async () => false, now: flags.now, via: "mcp" },
     );
     return text(out.join("\n") || "souieba: 済みました");

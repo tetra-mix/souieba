@@ -186,7 +186,7 @@ export const groupNameBoxes = sqliteTable(
   (t) => [primaryKey({ columns: [t.groupId, t.agentId] })],
 );
 
-// ---- v2（Relay）。docs/v2-design.md・docs/v2-relay-plan.md ----
+// ---- v2（Relay）。docs/architecture.md ----
 // v1 のユーザー・Agent とは独立している。Relay はメッセージの平文・Note・グループ・Policy を持たない
 
 /** 公開鍵ディレクトリ。Agent ID は Identity 公開鍵のハッシュ */
@@ -292,8 +292,7 @@ export const relayDeliveries = sqliteTable(
   (t) => [primaryKey({ columns: [t.messageId, t.recipientId] }), index("relay_deliveries_recipient").on(t.recipientId, t.deliveredAt)],
 );
 
-// ---- v2.1（人ごとの ID と端末）。2.0.0 の Agent ごとの表（relay_agents など）は使わなくなったが、消さずに残す ----
-// （2.0.0 の Relay には本番の利用者がいないが、追加だけのマイグレーションにして、戻せるようにしておく）
+// ---- v2（人ごとの ID と内部端末） ----
 
 /** 人。Person ID は Person 公開鍵のハッシュ */
 export const relayPersons = sqliteTable("relay_persons", {

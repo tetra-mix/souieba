@@ -176,7 +176,7 @@ export function openPost(env: PostEnvelope, author: PostAuthor, me: { agentId: s
 }
 
 // ---- グループ名 ----
-// グループ名はメンバーの Agent ごとに封をする（docs/public-deployment-plan.md §14）。
+// グループ名はメンバーの鍵ごとに封をする（docs/architecture.md）。
 // 封をした Agent が署名するので、受信側はそれが今いっしょにグループにいる人の Agent かを確かめる。
 
 function groupNameAad(box: Pick<GroupNameBox, "groupId" | "version" | "recipientAgentId">): Buffer {

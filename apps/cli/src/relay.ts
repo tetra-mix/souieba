@@ -1,5 +1,5 @@
 /**
- * v2（Relay）の設定と確認のコマンド（souieba relay ...）。docs/v2-design.md §14・docs/v2-relay-plan.md §5
+ * v2（Relay）の設定と確認のコマンド（souieba relay ...）。docs/architecture.md
  *
  * ユーザー操作は原則として既存の LLM（エージェント）を通して行う（§1.1・§14.1）。どのコマンドもエージェントが実行できる。
  * ただし、LLM が自分の判断で共有の範囲を広げないよう（§6.2・§7.1）、広げる操作は2段階にする:
@@ -32,7 +32,6 @@ import {
   scopeKey,
   resolveNoteProject,
   resolveProject,
-  loadClientConfig,
   resolveRelayAgent,
 } from "@souieba/sdk";
 import { type Change, OpError, describeScope, parseScope, parseTerm, projectLabel, relayOps, requireProject, who } from "./relay-ops.ts";
@@ -83,7 +82,7 @@ export const isInteractive = () => !!process.stdin.isTTY && !!process.stdout.isT
 
 export const RELAY_USAGE = `使い方: souieba relay <command>（v2: Relay 経由で、人ごとの ID で共有する。始めるには souieba init <Relay の URL>）
 
-  id                                      自分の ID（友人に伝えて、接続してもらう。この PC のどのエージェントでも同じ）
+  id                                      自分の ID（友人に伝えて、接続してもらう。同じPersonを使うクライアントで共通）
   lookup <ID>                             ID が Relay にあるかを確かめる
   contacts                                接続済みの相手・届いた接続要求・送った接続要求
   status                                  設定の一覧（連絡先・グループ・アクセス権限・Policy・メモの振り分けの規則）
@@ -131,29 +130,13 @@ export const RELAY_USAGE = `使い方: souieba relay <command>（v2: Relay 経�
 <相手> は呼び名か ID。<グループ> は ID か名前
 共有を狭める操作（reject・disconnect・block・deny・groups remove など）は、確認なしで実行します`;
 
-function requireRelayAgent(name?: string): ResolvedRelayAgent {
-  const r = resolveRelayAgent(name);
-  if (!r) {
-    const cfg = loadClientConfig();
-    const names = Object.entries(cfg.person?.devices ?? {})
-      .filter(([, d]) => !d.revokedAt)
-      .map(([n]) => n);
-    const legacy = Object.keys(cfg.relayAgents ?? {});
-    throw new Error(
-      names.length === 0
-        ? legacy.length
-          ? `souieba 2.0.0 の v2 Agent（${legacy.join(", ")}）があります。2.1.0 から ID は人ごとです。souieba init --from <その名前> で移してください`
-          : "v2 の端末がありません。souieba init <Relay の URL> を実行してください"
-        : `v2 の端末を指定してください（--agent または環境変数 SOUIEBA_AGENT）。この PC の端末: ${names.join(", ")}`,
-    );
-  }
+function requireRelayAgent(): ResolvedRelayAgent {
+  const r = resolveRelayAgent();
+  if (!r) throw new Error("v2 のPersonがありません。souieba init <Relay の URL> を実行してください");
   return r;
 }
 
-/**
- * v2 の操作に使う部品。状態（連絡先・グループ・プロジェクト・メモ・受信箱・会話ごとの指定）は人ごとに1組で、この PC の端末で共有する。
- * Relay のセッションと会話の Session（tell の間隔）は端末ごと
- */
+/** v2 の操作に使う部品。状態とRelayの接続はPersonごとに扱う。 */
 export function relayParts(r: ResolvedRelayAgent, now: () => Date) {
   const dir = personDir();
   const devDir = deviceDir(r.device.deviceId);
@@ -181,8 +164,8 @@ export function relayParts(r: ResolvedRelayAgent, now: () => Date) {
 const short = (id: string) => `${id.slice(0, 10)}…`;
 
 /** 実行するコマンドを、主人がそのまま貼れる形にする */
-function commandLine(args: string[], agent: string | undefined): string {
-  return ["souieba", "relay", ...args.map(shellQuote), ...(agent ? ["--agent", shellQuote(agent)] : [])].join(" ");
+function commandLine(args: string[]): string {
+  return ["souieba", "relay", ...args.map(shellQuote)].join(" ");
 }
 
 /** シェルで特別な意味を持つ文字があるときだけ、シングルクォートで囲む */
@@ -194,7 +177,6 @@ export type RelayArgs = {
   sub: string | undefined;
   rest: string[];
   name?: string;
-  agent?: string;
   yes?: boolean;
   /** 設定するプロジェクト（省略時は既定） */
   project?: string;
@@ -215,13 +197,13 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     return;
   }
   if (sub === "init") {
-    io.log("souieba 2.1.0 から、v2 の ID は人ごとになりました。souieba init <Relay の URL> [--name <端末名>] で始めてください（2.0.0 の Agent からは souieba init --from <Agent名>）。");
+    io.log("v2 はPerson単位です。souieba init <Relay の URL> [--name <内部名>] で始めてください。");
     return;
   }
 
-  const r = requireRelayAgent(a.agent);
+  const r = requireRelayAgent();
   const p = relayParts(r, io.now);
-  const cmd = commandLine(a.raw, a.agent);
+  const cmd = commandLine(a.raw);
   const ops = relayOps({ parts: p, selfId: r.personId, now: io.now });
   /**
    * 変更を実行する。広げる操作は、端末なら y/N で聞き、端末の外（エージェント）なら --yes があるときだけ実行する。
@@ -266,7 +248,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       io.log(`ID: ${r.personId}`);
       io.log(`Relay: ${r.relayUrl}`);
       io.log("友人にこの ID を伝え、souieba relay connect <この ID> --name <呼び名> で接続を要求してもらってください。");
-      io.log("（ID はあなたの Person 鍵から作るので、ID が合っていれば相手は本物の鍵で確かめられます。ID は信頼できる経路で伝えてください。この PC のどのエージェントでも同じ ID です）");
+      io.log("（ID はあなたの Person 鍵から作るので、ID が合っていれば相手は本物の鍵で確かめられます。ID は信頼できる経路で伝えてください。同じPersonを使うクライアントでは同じIDです）");
       return;
     }
     case "lookup": {
@@ -298,7 +280,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     }
     case "status": {
       const s = p.state.load();
-      io.log(`ID: ${r.personId}（この端末: ${r.name}、Relay: ${r.relayUrl}）`);
+      io.log(`ID: ${r.personId}（Relay: ${r.relayUrl}）`);
       io.log(`どのプロジェクトにも決まらないメモ: ${s.unresolved === "hold" ? "保留（主人が振り分けるまで送らない）" : "既定のプロジェクトに入れる"}`);
       const cl = Object.entries(s.clients ?? {});
       if (cl.length) io.log(`MCP クライアントの規則: ${cl.map(([c, pr]) => `${c} → ${projectLabel(pr)}`).join("、")}`);

@@ -10,7 +10,7 @@
 
 ## 2. ログインと Agent の登録
 
-v2（Relay。アカウントなしで、主人ごとの ID で共有する）を使うときは、この節の代わりに `souieba skill get relay` の「初回セットアップ」に沿って `souieba init <Relay の URL> --name <このエージェントの名前>`（この PC に ID がもうあれば `souieba device add <名前>`）を実行します。3. の各プラットフォームの設定（フック・`SOUIEBA_AGENT`・MCP）は v1 と同じで、`--agent` / `SOUIEBA_AGENT` には端末の名前を使います。
+v2（Relay。アカウントなしで、主人ごとのPerson IDで共有する）を使うときは、この節の代わりに `souieba skill get relay` の「初回セットアップ」に沿って `souieba init <Relay の URL>` を実行します。同じPC上のエージェントは同じPersonを自動的に使い、別のPersonにしたいときだけ `SOUIEBA_HOME` を分けます。3. の各プラットフォームの設定（フック・MCP）は v1 と同じです。
 
 ```bash
 # 管理者から受け取ったログインコードの場合
@@ -142,11 +142,11 @@ Agent Skills（SKILL.md）に対応し、シェルコマンドを実行できる
 この PC で動き、MCP サーバを起動できるアプリなら、スキルの代わりに `souieba mcp`（stdio の MCP サーバ）で参加できる。
 アプリの設定はシェルから変えられないことが多いので、**次の手順を主人に頼んでください。**
 
-1. このアプリ用の Agent を登録する: `souieba agent add "Claude Desktop"`（v2 なら `souieba device add "Claude Desktop"`）
+1. v1ではこのアプリ用のAgentを登録する: `souieba agent add "Claude Desktop"`。v2では先に `souieba init <RelayのURL>` を実行する
 2. `which souieba` でパスを調べる（アプリはターミナルと違う `PATH` で起動するため、`souieba` だけでは見つからないことがある）
 3. アプリの MCP の設定に足して、アプリを再起動する。Claude Desktop なら、設定の「開発者」から開ける `claude_desktop_config.json`:
    ```json
-   { "mcpServers": { "souieba": { "command": "/usr/local/bin/souieba", "args": ["mcp", "--agent", "Claude Desktop"] } } }
+   { "mcpServers": { "souieba": { "command": "/usr/local/bin/souieba", "args": ["mcp"] } } }
    ```
    nvm などで入れた Node.js で `env: node: No such file or directory` になる場合は、`command` に `which node` のパスを、`args` の先頭に `realpath "$(which souieba)"` のパスを書く
 

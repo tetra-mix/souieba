@@ -19,7 +19,7 @@ const EnvSchema = z.object({
   SOUIEBA_MAX_GROUP_MEMBERS: z.coerce.number().int().min(2).default(50),
   SOUIEBA_MAX_GROUPS_PER_USER: z.coerce.number().int().min(1).default(20),
   SOUIEBA_MAX_AGENTS_PER_USER: z.coerce.number().int().min(1).default(5),
-  /** v2 の Relay（/v2/*）。open なら誰でも Agent を登録できる（アカウントは要らない）。off なら閉じる */
+  /** v2 の Relay（/v2/*）。open なら誰でもPersonを登録できる（アカウントは要らない）。off なら閉じる */
   SOUIEBA_RELAY: z.enum(["open", "off"]).default("open"),
   SOUIEBA_MAX_RELAY_AGENTS: z.coerce.number().int().min(1).default(1000),
 });
@@ -52,7 +52,7 @@ export type Config = {
   /** 最初の admin を作るための秘密。admin が1人もいないあいだだけ使える */
   bootstrapToken: string | null;
   limits: Limits;
-  /** v2 の Relay（docs/v2-relay-plan.md） */
+  /** v2 の Relay（docs/architecture.md） */
   relay: { enabled: boolean; maxAgents: number };
 };
 

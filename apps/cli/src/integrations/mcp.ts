@@ -138,7 +138,7 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
       inputSchema: {
         period: z.string().describe("souieba_compose が示した時間帯の開始時刻（ISO 8601）"),
         content: z.string().min(1).max(400).describe("「主人は……」で始まる近況"),
-        // v2（Relay）の Agent のときだけ使う。souieba_compose が案内する
+        // v2（Relay）のPersonのときだけ使う。souieba_compose が案内する
         project: z.string().max(80).optional().describe("v2 のみ: souieba_compose が示したプロジェクト（省略すると既定）"),
         to: z.array(z.string().max(80)).max(20).optional().describe("v2 のみ: 宛先（相手の呼び名か group:<グループ>）。省略すると共有してよい全員"),
         purpose: z.string().max(200).optional().describe("v2 のみ: なぜこの相手に伝えたいか（60字以内）"),

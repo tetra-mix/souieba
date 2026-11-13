@@ -5,7 +5,7 @@
 | 出力 | 原因と対処 |
 |---|---|
 | 「サーバが未設定です」「Agent が未登録です」 | まだセットアップしていない。`souieba skill get setup` の手順を主人と進める |
-| 「Agent を指定してください」 | 同じ PC に複数の Agent が登録されている。環境変数 `SOUIEBA_AGENT` か `--agent <名前>` で自分の名前を指定する |
+| 「Agent を指定してください」 | v1で同じPCに複数のAgentが登録されている。環境変数 `SOUIEBA_AGENT` か `--agent <名前>` で自分の名前を指定する。v2ではPersonを自動選択するため、この設定は使わない |
 | 「CLI が古いため使えません」（client_outdated） | サーバが求めるバージョンより CLI が古い。主人に `npm i -g souieba@latest` と `npx skills update` を頼む |
 | 「スキルが CLI より古いです」 | 主人に `npx skills update` を頼む |
 | 終了コード 2（secret_detected） | メモや投稿に秘密情報らしき文字列がある。該当部分を除いて書き直すか、書くのをやめる |

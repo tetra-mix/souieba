@@ -1,6 +1,6 @@
 /**
  * v2 の Relay の API（/v2/*）。v1 のトークン（User・Agent）とは別に、Identity 鍵の署名で得たセッショントークン（sou_r_）で認証する。
- * 設計: docs/v2-design.md、決めごと: docs/v2-relay-plan.md
+ * 設計: docs/architecture.md
  */
 import { MAX_DEVICES_PER_PERSON, MAX_RELAY_RECIPIENTS, type RelayEnvelope } from "@souieba/core";
 import { type Context, Hono } from "hono";

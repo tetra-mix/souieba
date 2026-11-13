@@ -14,47 +14,16 @@ import {
   emptyProject,
   emptyState,
   SessionStore,
-  migrateAgentState,
   migrateRelayState,
   resolveNoteProject,
   resolveProject,
   resolveTargets,
 } from "../src/index.ts";
 
-import { AGENT_STATE_200 } from "./fixtures/agent-state-2.0.0.ts";
-
 const at = (iso: string) => new Date(iso);
 
-describe("v2 のプロジェクト: 2.0.0 の Agent ごとの状態から、人ごとの状態へ移す", () => {
-  it("仕事のプロジェクト（ディレクトリ・空の共有先）・グループ・方針・任せた範囲を移し、連絡先は一覧にする", () => {
-    const m = migrateAgentState(AGENT_STATE_200, at("2026-11-01T00:00:00Z"))!;
-    expect(m.state.v).toBe(3);
-    expect(m.state.projects.仕事).toMatchObject({
-      name: "仕事",
-      dirs: ["/Users/ryouma/Documents/vivixy/jme", "/Users/ryouma/Documents/spajam/spajam"],
-      access: { people: {}, groups: {} },
-      policy: null,
-    });
-    expect(m.state.projects[DEFAULT_PROJECT]!.access).toEqual({ people: {}, groups: { friends: "allow" } });
-    expect(m.state.projects[DEFAULT_PROJECT]!.policy?.text).toBe("趣味の話はよい");
-    expect(m.state.groups.friends).toMatchObject({ name: "友達", members: [] });
-    expect(m.state.contacts).toEqual({});
-    expect(m.state.delegations).toEqual([AGENT_STATE_200.delegations[0]]);
-    expect(m.oldContacts.map((c) => c.name)).toEqual(["ボブ", "キャロル"]);
-    expect(m.dropped.join("\n")).toContain("友達");
-    expect(m.state.unresolved).toBe("default");
-    // 移したあとは、人ごとの状態として読める
-    const dir = mkdtempSync(join(tmpdir(), "souieba-migrate-"));
-    new RelayStateStore(dir).save(m.state);
-    expect(new RelayStateStore(dir).load().projects.仕事!.dirs).toHaveLength(2);
-  });
-
-  it("v1（プロジェクトがなかったころ）の状態も移せる。知らない版は読まない", () => {
-    const m = migrateAgentState({ v: 1, access: { agents: { sb_x: "allow" }, groups: {} }, policy: { text: "趣味", updatedAt: "2026-10-01T00:00:00.000Z" } }, at("2026-11-01T00:00:00Z"))!;
-    expect(m.state.projects[DEFAULT_PROJECT]!.policy?.text).toBe("趣味");
-    expect(m.state.projects[DEFAULT_PROJECT]!.access.people).toEqual({});
-    expect(migrateAgentState({ v: 9 }, new Date())).toBeNull();
-    // 人ごとの状態は v3 だけを読む（2.0.0 の Agent の状態を、そのまま人の状態として読まない）
+describe("v2 のプロジェクト状態", () => {
+  it("人ごとの状態は v3 だけを読み、既定のプロジェクトを補う", () => {
     expect(migrateRelayState({ v: 2, projects: {} })).toBeNull();
     expect(migrateRelayState({ v: 3, projects: {} })!.projects[DEFAULT_PROJECT]).toBeTruthy();
   });

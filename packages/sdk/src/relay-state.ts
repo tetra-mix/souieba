@@ -1,6 +1,6 @@
 /**
- * v2 で Client（この PC）が持つ状態。Relay には置かない（docs/v2-design.md §6.4・§7・§8・§13.4）。
- * 2.1.0 から人ごと: この PC のすべての端末（エージェント）が、~/.souieba/person/ の1組を共有する。
+ * v2 で Client（この PC）が持つ状態。Relay には置かない（docs/architecture.md）。
+ * Person単位: このPCの内部転送端末が、~/.souieba/person/ の1組を共有する。
  * - 連絡先: 接続済みの人と、主人が付けた呼び名、検証して固定した Person 鍵と、知っている端末
  * - グループ: Person ID の集合。この PC だけのもので、他のメンバーとは共有しない
  * - プロジェクト: 作業するディレクトリに名前を付けたもの。プロジェクトごとに共有先（アクセス権限）と Policy を持つ（docs/v2-projects.md）
@@ -157,72 +157,13 @@ export function allowedSet(state: RelayState, project: string = DEFAULT_PROJECT)
   return new Set(Object.keys(state.contacts).filter((id) => accessFor(state, id, project).allowed));
 }
 
-/** 今の版の状態にする。読めない版なら null（2.0.0 の Agent ごとの状態は migrateAgentState で移す） */
+/** 今の版の状態にする。読めない版なら null */
 export function migrateRelayState(raw: unknown): RelayState | null {
   if (!raw || typeof raw !== "object") return null;
   if ((raw as { v?: unknown }).v !== 3) return null;
   const s = { ...emptyState(), ...(raw as RelayState) };
   if (!s.projects[DEFAULT_PROJECT]) s.projects = { ...s.projects, [DEFAULT_PROJECT]: emptyState().projects[DEFAULT_PROJECT]! };
   return s;
-}
-
-/** 2.0.0 までの、Agent ごとの状態（v1: プロジェクトなし / v2: プロジェクトあり） */
-type AgentStateV1 = { v: 1; contacts?: Record<string, { name?: string }>; pendingNames?: Record<string, string>; groups?: Record<string, LocalGroup>; access?: { agents?: Record<string, AccessRule>; groups?: Record<string, AccessRule> }; policy?: SharingPolicy | null; delegations?: Delegation[] };
-type AgentStateV2 = Omit<AgentStateV1, "v" | "access" | "policy"> & {
-  v: 2;
-  projects?: Record<string, { name: string; dirs?: string[]; access?: { agents?: Record<string, AccessRule>; groups?: Record<string, AccessRule> }; policy?: SharingPolicy | null; createdAt?: string }>;
-};
-
-export type AgentStateMigration = {
-  state: RelayState;
-  /** つなぎ直してもらう相手（ID が変わったので、連絡先は移せない） */
-  oldContacts: { name: string; agentId: string }[];
-  /** 移せなかった設定（個人ごとの共有の設定・グループのメンバー）の説明 */
-  dropped: string[];
-};
-
-/**
- * 2.0.0 の Agent ごとの状態（relay-state.json）を、人ごとの状態に移す（souieba init --from）。
- * プロジェクト（ディレクトリ・方針・グループごとの共有先）・グループ（名前だけ）・任せた範囲を移す。
- * 連絡先・個人ごとの共有の設定・グループのメンバーは、相手の ID が変わるので移さない（一覧にして、つなぎ直してもらう）
- */
-export function migrateAgentState(raw: unknown, now: Date): AgentStateMigration | null {
-  if (!raw || typeof raw !== "object") return null;
-  const r = raw as AgentStateV1 | AgentStateV2;
-  if (r.v !== 1 && r.v !== 2) return null;
-  const state = emptyState();
-  const dropped: string[] = [];
-  const oldContacts = [
-    ...Object.entries(r.contacts ?? {}).map(([agentId, c]) => ({ agentId, name: typeof c?.name === "string" ? c.name : agentId })),
-    ...Object.entries(r.pendingNames ?? {}).map(([agentId, name]) => ({ agentId, name })),
-  ];
-  for (const g of Object.values(r.groups ?? {})) {
-    if (!g || !isGroupId(g.id)) continue;
-    state.groups[g.id] = { id: g.id, name: g.name, members: [], createdAt: g.createdAt ?? now.toISOString() };
-    if (g.members?.length) dropped.push(`グループ「${g.name}」のメンバー ${g.members.length} 人（つなぎ直したら、もう一度加えてください）`);
-  }
-  const projects =
-    r.v === 1
-      ? { [DEFAULT_PROJECT]: { name: DEFAULT_PROJECT, dirs: [], access: r.access, policy: r.policy ?? null, createdAt: new Date(0).toISOString() } }
-      : (r.projects ?? {});
-  for (const [name, p] of Object.entries(projects)) {
-    if (!p) continue;
-    const pr = emptyProject(name, p.createdAt ?? now.toISOString(), name === DEFAULT_PROJECT ? [] : [...(p.dirs ?? [])]);
-    for (const [gid, rule] of Object.entries(p.access?.groups ?? {})) if (state.groups[gid] && (rule === "allow" || rule === "deny")) pr.access.groups[gid] = rule;
-    const people = Object.keys(p.access?.agents ?? {}).length;
-    if (people) dropped.push(`プロジェクト「${name === DEFAULT_PROJECT ? "既定" : name}」の個人ごとの共有の設定 ${people} 件`);
-    pr.policy = p.policy ?? null;
-    state.projects[name] = pr;
-  }
-  if (!state.projects[DEFAULT_PROJECT]) state.projects[DEFAULT_PROJECT] = emptyState().projects[DEFAULT_PROJECT]!;
-  state.delegations = (r.delegations ?? []).filter((d) => {
-    const sc = d?.scope;
-    if (!sc) return false;
-    if (sc.kind === "members") return !!state.groups[sc.group];
-    if (sc.kind === "accept") return true;
-    return !!state.projects[sc.project];
-  });
-  return { state, oldContacts, dropped };
 }
 
 export const MAX_POLICY_LENGTH = 1000;
@@ -341,7 +282,7 @@ export function findGroup(state: RelayState, ref: string): LocalGroup | undefine
 export type AccessDecision = { allowed: boolean; why: "person_allow" | "person_deny" | "group_allow" | "group_deny" | "default_deny" };
 
 /**
- * その人に共有してよいか（§7）。優先順位は次のとおり（docs/v2-relay-plan.md「未決定事項の決定」）:
+ * その人に共有してよいか。優先順位は次のとおり（docs/v2-projects.md）:
  * 1. 個人の設定があればそれに従う（グループの設定より優先）
  * 2. 入っているグループの設定のうち、1つでも deny があれば禁止
  * 3. 入っているグループのどれかが allow なら許可
