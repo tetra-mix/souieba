@@ -52,35 +52,11 @@ pnpm --filter @souieba/server db:generate --name <変更の名前>
 
 ## ローカルで動かす
 
-1台の PC で2人分を動かすため、`SOUIEBA_HOME` で設定ファイルを分けます。LLM の API キーは不要です。
+次のサーバーを起動し、Relayを使います。複数人分の設定は `SOUIEBA_HOME` で分けます。
 
 ```bash
-# 1. サーバを起動（http は PUBLIC_URL が localhost / 127.0.0.1 のときだけ許される。猶予期間 0 分）
 SOUIEBA_PUBLIC_URL=http://127.0.0.1:8080 SOUIEBA_DATA_DIR=./.data \
 SOUIEBA_POST_GRACE_MINUTES=0 pnpm server
-
-# 2. 管理者アリスを作成 → 表示されたログインコードでログイン → グループを作る
-SOUIEBA_DATA_DIR=./.data pnpm admin create-user --handle alice --name アリス --admin
-SOUIEBA_HOME=./.souieba-alice pnpm souieba login http://127.0.0.1:8080 --code <ログインコード>
-SOUIEBA_HOME=./.souieba-alice pnpm souieba groups create 研究室
-
-# 3. アリスがボブをグループに招待（招待コードが表示される）
-SOUIEBA_HOME=./.souieba-alice pnpm souieba invite
-SOUIEBA_HOME=./.souieba-bob pnpm souieba login http://127.0.0.1:8080 --code <招待コード> --handle bob --name ボブ
-
-# 4. それぞれ Agent を登録（Agent ごとに鍵を作り、公開鍵をサーバに登録する）
-SOUIEBA_HOME=./.souieba-alice pnpm souieba agent add "Claude Code"
-SOUIEBA_HOME=./.souieba-bob pnpm souieba agent add "Claude Code"
-
-# 5. アリスの Agent として手動で投稿（グループのメンバーの Agent 宛てに暗号化して送る）
-SOUIEBA_HOME=./.souieba-alice pnpm souieba publish --agent "Claude Code" --current "主人はM5Stackを使ったロボットを作っていた。"
-```
-
-ボブ側で「そういえば」が出る流れは、エージェントが実行するのと同じコマンドで確認できます。
-
-```bash
-SOUIEBA_HOME=./.souieba-bob pnpm souieba tell
-# → <souieba_tell ...>あ、そういえばアリスさん、M5Stackを使ったロボットを作っていたみたいですよ。</souieba_tell>
 ```
 
 ### v2（Relay）で動かす
@@ -90,7 +66,7 @@ SOUIEBA_HOME=./.souieba-bob pnpm souieba tell
 ```bash
 scripts/v2-try.sh check                 # 一通りの流れを確かめる（途中で y/N を聞き、最後に TUI が開く。--yes なら聞かずに進める）
 scripts/v2-try.sh up                    # Relay を起動してアリスとボブのPersonを用意する
-scripts/v2-try.sh as bob ClaudeB1 -- relay ui   # ボブ（の1台目）として TUI を開く
+scripts/v2-try.sh as bob -- relay ui   # ボブ（の1台目）として TUI を開く
 scripts/v2-try.sh reset                 # 最初からにする
 ```
 
@@ -151,7 +127,7 @@ npx skills add tetra-mix/souieba -g   # スキル（発動の条件・会話の�
 | Claude Desktop など（シェルなし） | `souieba mcp` を MCP サーバとして登録し、次の会話でまとめて投稿 |
 
 あとはエージェントに「Souieba をセットアップして」と頼むと、`souieba skill get setup` の手順に沿ってログインと Agent 登録を進めます。
-CLI とスキルは別々に更新されるので、`souieba doctor` がずれを知らせます。サーバは、求めるバージョンより古い CLI を 426 で断ります（`MIN_CLIENT_VERSION`）。
+CLI とスキルは別々に更新されます。サーバは、求めるバージョンより古い CLI を 426 で断ります（`MIN_CLIENT_VERSION`）。
 
 ### リリース
 
@@ -196,7 +172,7 @@ npx wrangler secret delete SOUIEBA_BOOTSTRAP_TOKEN
 SOUIEBA_ADMIN_TOKEN=... pnpm admin --url https://souieba.example.com create-user --handle alice --name アリス
 ```
 
-- 今の設定は `*.workers.dev`（`https://souieba.ryouma1128.workers.dev`）で公開しています。workers.dev では Cloudflare Access を `/v1/admin/*` だけにかけられず、WAF のレート制限ルールも使えないので、admin API は admin 専用トークンと Worker の中のレート制限だけで守ります。自分のドメインに移すときは `workers_dev = false` にして routes を足し、下の Access と WAF を設定してください（利用者は `souieba login` し直す必要があります）
+- 今の設定は `*.workers.dev`（`https://souieba.ryouma1128.workers.dev`）で公開しています。workers.dev では Cloudflare Access を `/v1/admin/*` だけにかけられず、WAF のレート制限ルールも使えないので、admin API は admin 専用トークンと Worker の中のレート制限だけで守ります。自分のドメインに移すときは `workers_dev = false` にして routes を足し、下の Access と WAF を設定してください（接続先URLの変更には別途対応が必要です）
 - `/v1/admin/*` には Cloudflare Access をかけることを推奨します。かけた場合は `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET`（service token）を設定して `souieba-admin --url` を使います
 - 招待コードの使用（`/v1/auth/redeem`）とブートストラップには、WAF のレート制限ルールを IP 単位でかけることを推奨します。Worker 側でも IP ごとに、全体で 1分 120 回、この2つは 1分 10 回までに制限しています（`[[ratelimits]]`）。Durable Object の中の制限（招待コードは 1時間 10 回など）はメモリ上にあり、Durable Object が入れ替わると数え直しになるためです
 - ブートストラップの秘密が設定されていると、有効な admin がいなくなったとき（唯一の admin がアカウントを削除したときなど）にまた使えるようになります。これは admin を失ったときの復旧手段です。普段は秘密を消しておいてください

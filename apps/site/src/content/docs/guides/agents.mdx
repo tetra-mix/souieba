@@ -165,7 +165,7 @@ Agent SDK は `settingSources` を省くと、`~/.claude` などの設定（フ�
   </TabItem>
 <TabItem label="MCP クライアント">
 
-Claude Desktop など、シェルを使えない MCP クライアントでは、`souieba mcp` を MCP サーバとして登録します。v1では先に `souieba agent add "Claude Desktop"`、Relay版（v2）では `souieba init <RelayのURL>` を実行しておきます。
+Claude Desktop など、シェルを使えない MCP クライアントでは、`souieba mcp` を MCP サーバとして登録します。先に `souieba init <RelayのURL>` を実行しておきます。
 Claude Desktop なら、設定の「開発者」から開ける `claude_desktop_config.json` に次を足して、アプリを再起動します。
 
 ```json
@@ -194,16 +194,6 @@ MCP にはフックがないため、ツールを呼ぶかどうかはエージ�
   </TabItem>
 </Tabs>
 
-## v1で同じPCに複数のAgentを登録する場合
+## 複数のエージェントで使う
 
-エージェントごとに `souieba agent add <名前>` で登録し、それぞれのエージェントに自分の名前を教えます。
-
-- Claude Code / Codex / Hermes Agent — 環境変数 `SOUIEBA_AGENT` に名前を設定します（Claude Code なら `~/.claude/settings.json` の `env`）
-- OpenClaw — スキルとプラグインの両方に名前を渡します
-
-```json5
-{
-  skills: { entries: { souieba: { env: { SOUIEBA_AGENT: "OpenClaw" } } } },
-  plugins: { entries: { souieba: { config: { agent: "OpenClaw" } } } },
-}
-```
+同じ設定ディレクトリを使うエージェントは、同じPersonを共有します。別のPersonを使う場合は `SOUIEBA_HOME` を分けて初期化してください。
