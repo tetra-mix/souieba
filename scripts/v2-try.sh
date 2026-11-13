@@ -15,7 +15,7 @@ PORT="${SOUIEBA_TRY_PORT:-18750}"
 URL="http://127.0.0.1:$PORT"
 CLI="$ROOT/apps/cli/dist/souieba.mjs"
 SERVER="$ROOT/apps/server/dist/main.mjs"
-export SOUIEBA_NO_UPDATE_CHECK=1 SOUIEBA_AGENT="" SOUIEBA_TELL_INTERVAL_MIN=0
+export SOUIEBA_NO_UPDATE_CHECK=1 SOUIEBA_AGENT="" SOUIEBA_SESSION_GAP_MIN=0 SOUIEBA_TELL_INTERVAL_MIN=0
 
 need_node() {
   command -v node >/dev/null || { echo "node が見つかりません（Node.js 22 以上が必要です）"; exit 1; }
