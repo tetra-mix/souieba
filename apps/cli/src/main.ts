@@ -54,6 +54,9 @@ const USAGE = `使い方: souieba <command>
   posts mine                       自分について書かれた投稿（この PC の Agent の鍵で復号する）
   posts delete <id>
   export                           自分のデータを JSON で出力する
+  config [show]                    CLIの設定（間隔・更新確認）を見る
+  config set <項目> <値>            CLIの設定を保存する（session-gap / tell-interval / update-check）
+  config unset <項目>              CLIの設定を既定に戻す
   doctor                           接続・トークン・鍵・設定ファイルの権限・バージョンを確認する
   --version                        CLI のバージョン
 
@@ -159,6 +162,39 @@ async function resolveGroup(client: HttpClient, ref: string | undefined): Promis
 /** テスト用に現在時刻を固定できる（SOUIEBA_NOW=ISO 8601） */
 const testableNow = () => (process.env.SOUIEBA_NOW ? new Date(process.env.SOUIEBA_NOW) : new Date());
 
+function configCommand(sub: string | undefined, rest: string[]): void {
+  const cfg = loadClientConfig();
+  if (!sub || sub === "show") {
+    console.log(JSON.stringify({ client: cfg.client ?? {} }, null, 2));
+    return;
+  }
+  if (sub !== "set" && sub !== "unset") throw new Error("souieba config [show] | config set <session-gap|tell-interval|update-check> <値> | config unset <項目>");
+  const key = rest[0];
+  if (!key || !["session-gap", "tell-interval", "update-check"].includes(key)) {
+    throw new Error("設定項目は session-gap / tell-interval / update-check です");
+  }
+  cfg.client ??= {};
+  const field = key === "session-gap" ? "sessionGapMinutes" : key === "tell-interval" ? "tellIntervalMinutes" : "updateCheck";
+  if (sub === "unset") {
+    delete cfg.client[field];
+    saveClientConfig(cfg);
+    console.log(`${key} を既定に戻しました`);
+    return;
+  }
+  const value = rest[1];
+  if (value === undefined) throw new Error(`souieba config set ${key} <値>`);
+  if (field === "updateCheck") {
+    if (value !== "on" && value !== "off") throw new Error("update-check は on または off で指定してください");
+    cfg.client.updateCheck = value === "on";
+  } else {
+    const minutes = Number(value);
+    if (!Number.isFinite(minutes) || minutes < 0) throw new Error(`${key} は0以上の分数で指定してください`);
+    cfg.client[field] = minutes;
+  }
+  saveClientConfig(cfg);
+  console.log(`${key} を ${value} に設定しました（${configPath()}）`);
+}
+
 async function main(argv: string[]) {
   const { values, positionals } = parseArgs({
     args: argv,
@@ -229,7 +265,7 @@ async function main(argv: string[]) {
       // 別のサーバ・別のユーザーに切り替えたときは、古い Agent を持ち越さない
       const agents = cfg.serverUrl === baseUrl && cfg.user?.id === data.user.id ? cfg.agents : {};
       const user = { id: data.user.id, handle: data.user.handle, displayName: data.user.displayName };
-      saveClientConfig({ serverUrl: baseUrl, userToken: data.token, user, agents });
+      saveClientConfig({ serverUrl: baseUrl, userToken: data.token, user, agents, client: cfg.client });
 
       console.log(`${instance.name}${instance.version ? `（v${instance.version}）` : ""} に @${user.handle} としてログインしました`);
       if (data.group) {
@@ -455,6 +491,10 @@ async function main(argv: string[]) {
     }
     case "doctor": {
       await doctor();
+      break;
+    }
+    case "config": {
+      configCommand(sub, rest);
       break;
     }
     case "skill": {
