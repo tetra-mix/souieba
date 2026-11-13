@@ -28,6 +28,7 @@ import {
   type NoteVia,
   accessFor,
   resolveNoteProject,
+  resolveClientSettings,
   resolveRelayAgent,
   SecretInNoteError,
   SecretInPostError,
@@ -74,6 +75,7 @@ const shq = (a: string) => (/^[^\s'"$`\\!*?;&|<>(){}[\]#~=%]+$/.test(a) ? a : `'
 
 function context(flags: AgentFlags) {
   const a = resolveAgent(flags.agent);
+  const settings = resolveClientSettings();
   const dir = join(souiebaHome(), "agents", a.agentId);
   if (!a.keys || !a.userId) {
     throw new Error(`Agent「${a.name}」の鍵がありません（E2EE に対応する前に登録した Agent です）。souieba doctor で確認してください`);
@@ -93,8 +95,8 @@ function context(flags: AgentFlags) {
     transport,
     statePath: join(dir, "session.json"),
     // 未設定なら SDK の既定（DEFAULT_SESSION_GAP_MS・DEFAULT_TELL_INTERVAL_MS）に任せる
-    sessionGapMs: process.env.SOUIEBA_SESSION_GAP_MIN ? Number(process.env.SOUIEBA_SESSION_GAP_MIN) * 60_000 : undefined,
-    tellIntervalMs: process.env.SOUIEBA_TELL_INTERVAL_MIN ? Number(process.env.SOUIEBA_TELL_INTERVAL_MIN) * 60_000 : undefined,
+    sessionGapMs: settings.sessionGapMs,
+    tellIntervalMs: settings.tellIntervalMs,
     now: flags.now,
     onError: (op, err) => {
       if (err instanceof SouiebaApiError && err.code === "client_outdated") state.outdated = err.message;
@@ -114,6 +116,7 @@ function context(flags: AgentFlags) {
 
 /** v2（Relay）のPersonのとき。Note・Session・Tell の扱いは v1 と同じで、送受信だけが Relay 経由になる */
 function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
+  const settings = resolveClientSettings();
   const parts = relayParts(r, flags.now);
   const state: { outdated: string | null } = { outdated: null };
   const transport = parts.transport({
@@ -125,8 +128,8 @@ function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
     transport,
     // 会話の Session（tell の間隔）は端末ごと。受信箱と TOLD は人ごとに1つなので、同じ近況を2つの端末で伝えることはない
     statePath: join(parts.deviceDir, "session.json"),
-    sessionGapMs: process.env.SOUIEBA_SESSION_GAP_MIN ? Number(process.env.SOUIEBA_SESSION_GAP_MIN) * 60_000 : undefined,
-    tellIntervalMs: process.env.SOUIEBA_TELL_INTERVAL_MIN ? Number(process.env.SOUIEBA_TELL_INTERVAL_MIN) * 60_000 : undefined,
+    sessionGapMs: settings.sessionGapMs,
+    tellIntervalMs: settings.tellIntervalMs,
     now: flags.now,
     onError: (op, err) => {
       // Relay は信頼しないので、Relay の文面ではなく手元の決まった文を出す

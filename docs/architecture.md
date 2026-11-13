@@ -13,13 +13,14 @@ v2の外部インターフェースにAgent選択はない。Relay通信に必�
 
 `SOUIEBA_HOME`（既定は `~/.souieba`）に次を置く。
 
-- `config.json`: v1のアカウント情報と、v2のPerson鍵・Relay URL・内部Device鍵
+- `config.json`: v1のアカウント情報と、v2のPerson鍵・Relay URL・内部Device鍵・クライアント設定
 - `person/relay-state.json`: v2の連絡先、ローカルグループ、プロジェクト、共有方針、委任、変更記録
 - `person/notes.jsonl`: まだ投稿していないメモ
 - `person/inbox.jsonl`: 受け取った近況
 - `person/devices/<deviceId>/`: 内部DeviceのRelayセッションと会話セッション
 
 Personの秘密鍵を含むため、設定ファイルとPersonディレクトリは所有者だけが読める権限で扱う。
+Tellのセッション間隔・再通知間隔・更新確認は `souieba config` で変更できる。対応する環境変数は設定ファイルを一時的に上書きする。
 
 ## 3. v2の通信
 
@@ -33,7 +34,7 @@ Personの秘密鍵を含むため、設定ファイルとPersonディレクト�
 
 ## 4. 近況の流れ
 
-会話中のメモはローカルに保存し、時間帯ごとに `compose` でまとめる。共有先が決まった投稿だけを `publish` し、受信側の `tell` が会話に添える。投稿の公開猶予・Tellのセッション間隔・Tellの再通知間隔はクライアントまたはサーバの設定で決まり、デモでは環境変数で0にできる。
+会話中のメモはローカルに保存し、時間帯ごとに `compose` でまとめる。共有先が決まった投稿だけを `publish` し、受信側の `tell` が会話に添える。投稿の公開猶予はサーバ設定、Tellのセッション間隔・再通知間隔はクライアント設定で決まり、デモでは `souieba config set ... 0` で待ち時間をなくせる。
 
 ## 5. デプロイ
 

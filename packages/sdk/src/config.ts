@@ -8,6 +8,16 @@ export type AgentKeys = { enc: KeyPair; sign: KeyPair };
 
 export type AgentEntry = { id: string; token: string; keys?: AgentKeys };
 
+/** エージェント連携などのクライアント動作。秘密情報はここに置かない */
+export type ClientSettings = {
+  /** 会話の区切りとみなす無通信時間（分）。0なら発話ごとに新しいSession */
+  sessionGapMinutes?: number;
+  /** 同じSessionで次の友人の近況を伝えるまでの間隔（分）。0なら待たない */
+  tellIntervalMinutes?: number;
+  /** npm の更新確認を行うか。省略時は行う */
+  updateCheck?: boolean;
+};
+
 /**
  * ~/.souieba/config.json。SDK・CLI が共通で読む。
  * トークンに加えて Agent の秘密鍵も入るので、権限は必ず 600 にする。
@@ -17,6 +27,7 @@ export type ClientConfig = {
   userToken?: string;
   user?: { id: string; handle: string; displayName: string };
   agents: Record<string, AgentEntry>;
+  client?: ClientSettings;
   /** v2 RelayのPersonと、通信に使う内部端末。通常の操作ではPersonだけを意識する */
   person?: PersonEntry;
 };
@@ -61,6 +72,41 @@ export function loadClientConfig(): ClientConfig {
   const cfg = JSON.parse(readFileSync(p, "utf8")) as ClientConfig;
   cfg.agents ??= {};
   return cfg;
+}
+
+export type ResolvedClientSettings = {
+  sessionGapMs?: number;
+  tellIntervalMs?: number;
+  updateCheck: boolean;
+};
+
+function minutes(value: unknown, label: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`設定 ${label} は0以上の分数で指定してください`);
+  }
+  return value;
+}
+
+function envMinutes(name: string, fallback: unknown, label: string): number | undefined {
+  const value = process.env[name];
+  if (value !== undefined && value !== "") {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0) throw new Error(`環境変数 ${name} は0以上の分数で指定してください`);
+    return n;
+  }
+  return minutes(fallback, label);
+}
+
+/** config.json のクライアント設定を読み、環境変数があれば一時的な上書きとして適用する */
+export function resolveClientSettings(cfg: ClientConfig = loadClientConfig()): ResolvedClientSettings {
+  const sessionGapMinutes = envMinutes("SOUIEBA_SESSION_GAP_MIN", cfg.client?.sessionGapMinutes, "client.sessionGapMinutes");
+  const tellIntervalMinutes = envMinutes("SOUIEBA_TELL_INTERVAL_MIN", cfg.client?.tellIntervalMinutes, "client.tellIntervalMinutes");
+  return {
+    sessionGapMs: sessionGapMinutes === undefined ? undefined : sessionGapMinutes * 60_000,
+    tellIntervalMs: tellIntervalMinutes === undefined ? undefined : tellIntervalMinutes * 60_000,
+    updateCheck: !process.env.SOUIEBA_NO_UPDATE_CHECK && cfg.client?.updateCheck !== false,
+  };
 }
 
 /**

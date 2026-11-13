@@ -29,6 +29,8 @@ export default defineConfig({
             { label: "Souieba とは", slug: "guides/how-it-works" },
             { label: "はじめかた", slug: "guides/getting-started" },
             { label: "対応エージェント", slug: "guides/agents" },
+            { label: "v2（Relay）で使う", slug: "guides/v2" },
+            { label: "ChatGPT で使う", slug: "guides/chatgpt" },
             { label: "プライバシーと安全", slug: "guides/privacy" },
           ],
         },
