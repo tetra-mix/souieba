@@ -84,10 +84,10 @@ describe("v2.1: 人ごとの ID と端末", () => {
     expect(a1.code).toBe(0);
     const aliceId = idOf(a1.out);
     expect((await souieba("alice", "", ["device", "add", "ClaudeA2"])).out).toContain("端末「ClaudeA2」を足しました");
-    // 同じ名前の端末は足せない。2台になったので、端末を選ばないと使えない
+    // 同じ名前の端末は足せない。Personの操作は内部端末を明示しなくても使える
     expect((await souieba("alice", "", ["device", "add", "ClaudeA2"])).code).toBe(1);
-    expect((await souieba("alice", "", ["relay", "id"])).out).toContain("端末を指定してください");
-    // どちらの端末でも同じ ID
+    expect((await souieba("alice", "", ["relay", "id"])).out).toContain(aliceId);
+    // どちらの内部端末でも同じPerson ID
     expect((await souieba("alice", "ClaudeA2", ["relay", "id"])).out).toContain(aliceId);
     const list = (await souieba("alice", "ClaudeA1", ["device", "list"])).out;
     expect(list).toContain("ClaudeA1（この端末）");

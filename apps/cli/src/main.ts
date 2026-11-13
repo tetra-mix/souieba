@@ -72,10 +72,10 @@ const USAGE = `使い方: souieba <command>
     v2 の Agent では: [--project <名前>] [--to <相手|group:<グループ>>]... [--purpose <理由>] [--nuance <調子>] [--context <合う話題>]
                       [--expires-in <時間>] [--allow-reshare]
 
-v2（Relay。人ごとの ID と、エージェントごとの端末の鍵で、アカウントなしで共有する）:
-  init <Relay の URL> [--name <端末名>]   ID（Person 鍵）と最初の端末を作って Relay に登録する
+v2（Relay。Person IDで、アカウントなしで共有する）:
+  init <Relay の URL> [--name <内部名>]   Person IDと内部転送端末を作って Relay に登録する
   init --from <2.0.0 の Agent 名>          2.0.0 の v2 Agent の設定を移して作る（古いファイルは消さない）
-  device list | add <名前> | revoke <名前>  この PC のエージェント（端末）を足す・取り消す
+  device list | add <名前> | revoke <名前>  内部転送端末（通常は操作不要）
   relay ...                        souieba relay help で一覧（id / contacts / connect / accept / allow / policy / project など）
 
 <グループ> は名前か ID。設定ファイル: ${configPath()}（環境変数 SOUIEBA_HOME で場所を変更できます）`;

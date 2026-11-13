@@ -183,7 +183,7 @@ export function personDir(): string {
   return join(souiebaHome(), "person");
 }
 
-/** 端末ごとの状態（Relay のセッション・会話の Session）を置くディレクトリ */
+/** 内部の転送端末ごとの状態（Relay のセッション・会話の Session）を置くディレクトリ */
 export function deviceDir(deviceId: string): string {
   return join(personDir(), "devices", deviceId);
 }
@@ -204,16 +204,27 @@ export function activeDeviceNames(cfg: ClientConfig): string[] {
 export class LegacyRelayAgentError extends Error {}
 
 /**
- * 使う Agent が v2（Relay）の端末なら、その端末を返す。v1 の Agent なら null。
- * 決め方は resolveAgent と同じ（引数 > SOUIEBA_AGENT > 登録が1つだけならそれ）。v1 と v2 を合わせて1つだけのときも、それを使う
+ * Person の Relay を使う内部端末を返す。v1 の Agent なら null。
+ * Person が選ばれているときは、v1 Agent が同じ設定に残っていても、v2 側を既定にする。
+ * --agent / SOUIEBA_AGENT は、旧設定や複数の内部端末との互換用にだけ使う。
  */
 export function resolveRelayAgent(name?: string): ResolvedRelayAgent | null {
-  name ??= process.env.SOUIEBA_AGENT || undefined;
+  const requested = name ?? (process.env.SOUIEBA_AGENT || undefined);
   const cfg = loadClientConfig();
   const p = cfg.person;
   const active = activeDeviceNames(cfg);
-  const total = active.length + Object.keys(cfg.agents).length;
-  const key = name ?? (active.length === 1 && total === 1 ? active[0] : undefined);
+  // Person がある場合は、同じ ~/.souieba に v1 Agent が残っていても v2 を優先する。
+  // 内部端末が複数ある旧設定では、明示指定がなければ先頭の有効な端末を使う。
+  const key = requested === undefined ? active[0] : p?.devices[requested] ? requested : undefined;
+  if (requested !== undefined && !key) {
+    if (cfg.agents[requested]) return null;
+    if (cfg.relayAgents?.[requested]) {
+      throw new LegacyRelayAgentError(
+        `「${requested}」は souieba 2.0.0 の v2 Agent です。2.1.0 から ID は人ごとになりました。souieba init --from ${JSON.stringify(requested)} で移してください（古いファイルは消しません）`,
+      );
+    }
+    return null;
+  }
   if (!key) return null;
   const d = p?.devices[key];
   if (!p || !d) {

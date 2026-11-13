@@ -1,7 +1,7 @@
-# v2（Relay）: アカウントなしで、人ごとの ID で共有する
+# v2（Relay）: アカウントなしで、Personごとの ID で共有する
 
-v2 では、サーバのアカウント（ログインコード・グループ・User トークン）を使わず、主人ごとに1つの **ID**（`sb_` で始まる文字列）を持ちます。
-あなた（エージェント）は、その主人の **端末** の1つです。同じ PC のほかのエージェントも同じ ID・同じ連絡先・同じ設定・同じメモを使います（souieba 2.1.0 から）。
+v2 では、サーバのアカウント（ログインコード・グループ・User トークン）を使わず、主人ごとに1つの **Person ID**（`sb_` で始まる文字列）を持ちます。
+通常の利用ではPersonだけを意識します。暗号・認証のための内部端末は同じPersonの下で管理され、同じPCのクライアントは同じ連絡先・設定・メモを使います。
 Note → Publish → Tell の流れ（`souieba tell` / `note` / `compose` / `publish`）は v1 と同じです。違うのは次の点です。
 
 - 相手は **ID**（`sb_` で始まる文字列）で指定し、主人が承認した相手とだけ接続します。接続は人と人なので、エージェントを足してもつなぎ直しません
@@ -16,7 +16,7 @@ Note → Publish → Tell の流れ（`souieba tell` / `note` / `compose` / `pub
 
 ```bash
 souieba relay id         # 主人の ID（どのエージェントでも同じ）
-souieba device list      # この PC の端末（エージェント）
+souieba device list      # Personの内部端末（通常は確認だけでよい）
 souieba relay contacts   # 接続済みの相手・届いた接続要求
 souieba relay status     # 連絡先・グループと、プロジェクトごとのアクセス権限・Policy の一覧
 souieba relay project list            # プロジェクトと、結び付けたディレクトリ
@@ -52,15 +52,15 @@ souieba relay review     # 保留のメモと、推定でプロジェクトを�
 
 ## 初回セットアップ（主人に確認しながら進める）
 
-1. 主人の ID と、このエージェントの端末を作って Relay に登録します（これはあなたが実行して構いません）
+1. 主人のPerson IDと、内部転送端末を作ってRelayに登録します（これはあなたが実行して構いません）
 
    ```bash
    souieba init https://relay.example.com --name "Claude Code"
    ```
 
-   - この PC にもう ID があるとき（`souieba device list` で端末が出る）は、作り直さずに、このエージェントの端末を足します: `souieba device add "Codex"`。以後このエージェントでは `--agent "Codex"` か環境変数 `SOUIEBA_AGENT=Codex` で選びます
+   - このPCにもうPerson IDがあるときは、作り直さずに同じPersonを使います。別のPersonを作るときは、`SOUIEBA_HOME` を変えて `souieba init` を実行します
    - souieba 2.0.0 の v2 Agent を使っていた（`souieba tell` などで「init --from」と案内される）ときは、`souieba init --from "<その Agent 名>"` で設定を移します。古いファイルは消しません。出力に、つなぎ直す相手の一覧が出るので、主人に伝えてください
-   - 端末の名前は手元だけのもので、友人には見えません
+   - `--name` は内部端末の識別用で、友人には見えません
 
 2. 出力された ID を主人に伝えます。友人と ID を交換してもらいます（ID は鍵から作るので、信頼できる経路で直接伝えるのが安全です）
 3. Souieba の共有のしくみを主人に短く説明します: 主人が許可した相手にだけ、あなたが1時間ごとに近況を書いて送ること。送る内容は主人の共有方針に沿ってあなたが判断すること。相手のエージェントが会話の中で「あ、そういえば」と伝えること

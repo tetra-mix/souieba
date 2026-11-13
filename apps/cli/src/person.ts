@@ -1,8 +1,8 @@
 /**
- * souieba init / souieba device: v2 の人（Person 鍵）と端末（エージェントごとの鍵）を作る・足す・取り消す（docs/v2-design.md §4）。
+ * souieba init / souieba device: v2 のPersonと、Relayの内部転送端末を管理する（docs/v2-design.md §4）。
  *
  * - init: Person 鍵と最初の端末を作り、Relay に登録する。--from <2.0.0 の Agent 名> なら、その Agent の設定（プロジェクト・グループ・方針・任せた範囲）を移す
- * - device add: この PC に端末（エージェント）を足す。Person 鍵で端末証明書に署名する
+ * - device add: 互換用。Person 鍵で内部転送端末を足す
  * - device revoke: 端末を取り消す（Person 鍵で署名した取り消しを Relay に置く。友人の Client はその端末に送らなくなる）
  * 端末の名前は手元だけのもので、Relay にも友人にも送らない。
  * ほかの PC の端末を足す（device link）は今後。Person 鍵はこの PC にだけある。
@@ -36,10 +36,10 @@ import { CLI_VERSION } from "./version.ts";
 
 export type PersonIo = { log: (line: string) => void; now: () => Date };
 
-export const DEVICE_USAGE = `使い方: souieba device <command>（v2: この PC のエージェントごとの端末）
-  list                    端末の一覧（名前は手元だけのもので、友人には見えません）
-  add <名前>              端末を足す（エージェントを足したとき。--agent <名前> か SOUIEBA_AGENT=<名前> で選ぶ）
-  revoke <名前>           端末を取り消す（その端末の鍵では、もう近況を受け取れません）
+export const DEVICE_USAGE = `使い方: souieba device <command>（v2: 内部の転送端末。通常はPersonだけを使います）
+  list                    Personの内部端末を確認する
+  add <名前>              互換用に内部端末を足す（通常は別の SOUIEBA_HOME でPersonを作る）
+  revoke <名前>           内部端末を取り消す
   link                    （今後）ほかの PC の端末を足す`;
 
 /** セッショントークンを平文で流さないよう、http は手元で動かす開発用（localhost / 127.0.0.1）だけにする */
@@ -78,7 +78,7 @@ function personKeys(cfg: ClientConfig): PersonKeys {
 export async function initCommand(a: { url?: string; name?: string; from?: string }, io: PersonIo): Promise<void> {
   const cfg = loadClientConfig();
   if (cfg.person) {
-    throw new Error(`v2 の ID（${cfg.person.personId}）はもうあります。エージェントを足すときは souieba device add <名前> を使ってください`);
+    throw new Error(`v2 のPerson ID（${cfg.person.personId}）はもうあります。別のPersonを作るときは SOUIEBA_HOME を変えてください`);
   }
   const legacy = a.from !== undefined ? cfg.relayAgents?.[a.from] : undefined;
   if (a.from !== undefined && !legacy) {
@@ -116,7 +116,7 @@ export async function initCommand(a: { url?: string; name?: string; from?: strin
   saveClientConfig(cfg);
   io.log(`v2 の ID を作り、${relayUrl} に登録しました。`);
   io.log(`ID: ${person.personId}（この PC のどのエージェントでも同じです。友人にはこの ID を伝えます）`);
-  io.log(`この端末の名前: ${name}（手元だけの名前です。友人には見えません。--agent ${JSON.stringify(name)} か SOUIEBA_AGENT で選びます）`);
+  io.log(`内部転送端末: ${name}（通常の操作では指定不要です）`);
   if (legacy) {
     io.log("");
     io.log(`2.0.0 の Agent「${a.from}」（${legacy.agentId}）から移しました。古い鍵とファイル（~/.souieba/agents/${legacy.agentId}/）は消していません。`);
@@ -137,7 +137,7 @@ export async function initCommand(a: { url?: string; name?: string; from?: strin
   io.log("次に:");
   io.log("  1. 友人と ID を伝え合い、souieba relay connect <相手の ID> --name <呼び名> で接続を要求する（相手が承認すると接続）");
   io.log("  2. 共有してよい相手を決める: souieba relay allow <呼び名>（既定はすべて禁止）");
-  io.log("  3. ほかのエージェントも使うなら: souieba device add <名前>（同じ ID のまま、エージェントごとに鍵を分けます）");
+  io.log("  3. 別のPersonを作るなら、SOUIEBA_HOMEを変えて souieba init を実行します");
   io.log("souieba relay ui で、これらを画面で見ながら設定することもできます。");
 }
 
@@ -190,7 +190,7 @@ export async function addDevice(rawName: string, now: () => Date): Promise<strin
   saveClientConfig(cfg);
   return [
     `端末「${name}」を足しました（同じ ID のまま、この端末の鍵で送受信します）。`,
-    `このエージェントでは --agent ${JSON.stringify(name)} か SOUIEBA_AGENT=${JSON.stringify(name)} で選びます。連絡先・プロジェクト・メモはこの PC のほかの端末と共有します。`,
+    "通常の操作ではAgent指定は不要です。連絡先・プロジェクト・メモはPerson単位で共有します。",
   ];
 }
 
