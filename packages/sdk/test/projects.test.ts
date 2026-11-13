@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { directoryEntry, generateRelayIdentity } from "@souieba/core";
+import { generatePerson } from "@souieba/core";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PROJECT,
@@ -13,40 +13,19 @@ import {
   contactFrom,
   emptyProject,
   emptyState,
+  SessionStore,
   migrateRelayState,
+  resolveNoteProject,
   resolveProject,
   resolveTargets,
 } from "../src/index.ts";
 
 const at = (iso: string) => new Date(iso);
 
-describe("v2 のプロジェクト: 状態の移行", () => {
-  it("v1 の access・policy は既定のプロジェクトになる", () => {
-    const dir = mkdtempSync(join(tmpdir(), "souieba-migrate-"));
-    writeFileSync(
-      join(dir, "relay-state.json"),
-      JSON.stringify({
-        v: 1,
-        contacts: {},
-        pendingNames: {},
-        groups: {},
-        access: { agents: { sb_x: "allow" }, groups: { g1: "deny" } },
-        policy: { text: "趣味の話はよい", updatedAt: "2026-10-01T00:00:00.000Z" },
-        notifiedRequests: [],
-        lastToldSender: null,
-      }),
-    );
-    const s = new RelayStateStore(dir).load();
-    expect(s.v).toBe(2);
-    expect(s.projects[DEFAULT_PROJECT]!.access).toEqual({ agents: { sb_x: "allow" }, groups: { g1: "deny" } });
-    expect(s.projects[DEFAULT_PROJECT]!.policy?.text).toBe("趣味の話はよい");
-    expect("access" in s).toBe(false);
-    expect("policy" in s).toBe(false);
-  });
-
-  it("既定のプロジェクトがなければ足す。知らない版は読まない", () => {
-    expect(migrateRelayState({ v: 2, projects: {} })!.projects[DEFAULT_PROJECT]).toBeTruthy();
-    expect(migrateRelayState({ v: 9 })).toBeNull();
+describe("v2 のプロジェクト状態", () => {
+  it("人ごとの状態は v3 だけを読み、既定のプロジェクトを補う", () => {
+    expect(migrateRelayState({ v: 2, projects: {} })).toBeNull();
+    expect(migrateRelayState({ v: 3, projects: {} })!.projects[DEFAULT_PROJECT]).toBeTruthy();
   });
 });
 
@@ -92,13 +71,68 @@ describe("v2 のプロジェクト: ディレクトリから決める", () => {
 
   it("共有先はプロジェクトの設定だけで決まる（既定を引き継がない）", () => {
     const s = structuredClone(state);
-    const id = generateRelayIdentity();
-    s.contacts[id.agentId] = contactFrom(directoryEntry(id), "ボブ", at("2026-10-30T00:00:00Z"));
-    s.projects[DEFAULT_PROJECT]!.access.agents[id.agentId] = "allow";
-    expect(accessFor(s, id.agentId).allowed).toBe(true);
-    expect(accessFor(s, id.agentId, "研究").allowed).toBe(false);
-    expect(resolveTargets(s, [], new Set([id.agentId]), "研究").denied).toEqual([id.agentId]);
+    const id = generatePerson();
+    s.contacts[id.personId] = contactFrom(id.personId, id.person.pub, [], [], "ボブ", at("2026-10-30T00:00:00Z"));
+    s.projects[DEFAULT_PROJECT]!.access.people[id.personId] = "allow";
+    expect(accessFor(s, id.personId).allowed).toBe(true);
+    expect(accessFor(s, id.personId, "研究").allowed).toBe(false);
+    expect(resolveTargets(s, [], new Set([id.personId]), "研究").denied).toEqual([id.personId]);
     expect(() => resolveTargets(s, [], new Set(), "ない")).toThrow();
+  });
+});
+
+describe("v2 のプロジェクト: メモのプロジェクトの決め方（2.1.0）", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "souieba-prec-")));
+  const work = join(root, "work");
+  const hobby = join(root, "hobby");
+  const other = join(root, "other");
+  for (const d of [work, hobby, other]) mkdirSync(d, { recursive: true });
+  const base = () => {
+    const s = emptyState();
+    s.projects.仕事 = { ...emptyProject("仕事", "2026-10-30T00:00:00.000Z", [work]), acceptInference: false, description: "会社の開発" };
+    s.projects.趣味 = { ...emptyProject("趣味", "2026-10-30T00:00:00.000Z", [hobby]), description: "趣味の工作" };
+    s.projects.読書 = emptyProject("読書", "2026-10-30T00:00:00.000Z");
+    s.clients = { "claude-ai": "読書" };
+    return s;
+  };
+  const env = {};
+
+  it("ディレクトリの規則 > クライアントの規則 > 会話の指定 > 作業場所 > 推定 > 既定", () => {
+    const s = base();
+    const all = { cwd: work, client: "claude-ai", pin: "趣味", sessionCwd: hobby, roots: [hobby], guess: "趣味", env };
+    expect(resolveNoteProject(s, all)).toMatchObject({ project: "仕事", via: "rule-dir" });
+    expect(resolveNoteProject(s, { ...all, cwd: other })).toMatchObject({ project: "読書", via: "rule-client" });
+    expect(resolveNoteProject(s, { ...all, cwd: other, client: "cursor" })).toMatchObject({ project: "趣味", via: "pin" });
+    expect(resolveNoteProject(s, { ...all, cwd: other, client: null, pin: null, sessionCwd: work })).toMatchObject({ project: "仕事", via: "cwd" });
+    expect(resolveNoteProject(s, { ...all, cwd: null, client: null, pin: null, sessionCwd: null, roots: [other, work] })).toMatchObject({ project: "仕事", via: "roots" });
+    expect(resolveNoteProject(s, { guess: "趣味", env })).toMatchObject({ project: "趣味", via: "inferred" });
+    expect(resolveNoteProject(s, { env })).toMatchObject({ project: DEFAULT_PROJECT, via: "default" });
+  });
+
+  it("推定は acceptInference が false のプロジェクトには入れない。ないプロジェクトも断る", () => {
+    const s = base();
+    expect(resolveNoteProject(s, { guess: "仕事", env })).toMatchObject({ project: DEFAULT_PROJECT, via: "default", rejectedGuess: { project: "仕事", reason: "not_accepted" } });
+    expect(resolveNoteProject(s, { guess: "ない", env })).toMatchObject({ via: "default", rejectedGuess: { reason: "unknown" } });
+    // 会話の指定なら、推定を断るプロジェクトにも入る（主人の言葉なので）
+    expect(resolveNoteProject(s, { pin: "仕事", env })).toMatchObject({ project: "仕事", via: "pin" });
+  });
+
+  it("unresolved が hold なら、決まらないメモは保留にする", () => {
+    const s = { ...base(), unresolved: "hold" as const };
+    expect(resolveNoteProject(s, { env })).toEqual({ project: null, via: "hold", rejectedGuess: undefined });
+    expect(resolveNoteProject(s, { guess: "仕事", env })).toMatchObject({ project: null, via: "hold" });
+  });
+
+  it("会話の指定と作業ディレクトリは、会話の ID ごとに覚え、期限で消える", () => {
+    const store = new SessionStore(mkdtempSync(join(tmpdir(), "souieba-sess-")));
+    store.touch("sess-1", work, at("2026-11-01T00:00:00Z"));
+    store.pin("sess-1", "趣味", at("2026-11-01T00:01:00Z"));
+    expect(store.get("sess-1", at("2026-11-01T01:00:00Z"))).toEqual({ pin: "趣味", cwd: work });
+    expect(store.get("sess-2", at("2026-11-01T01:00:00Z"))).toBeNull();
+    store.pin("sess-1", null, at("2026-11-01T01:00:00Z"));
+    expect(store.get("sess-1", at("2026-11-01T01:00:00Z"))).toEqual({ pin: undefined, cwd: work });
+    expect(store.get("sess-1", at("2026-11-03T00:00:00Z"))).toBeNull();
+    expect(() => store.pin("bad key!", "趣味", new Date())).toThrow();
   });
 });
 
@@ -129,5 +163,28 @@ describe("v2 のプロジェクト: メモ", () => {
     s.mark("2026-10-05T12:00:00Z", "published", "研究");
     expect(s.move(DEFAULT_PROJECT, { from: "研究" }, at("2026-10-05T14:00:00Z"))).toBe(1);
     expect(s.all().map((n) => n.project)).toEqual(["研究", DEFAULT_PROJECT]);
+  });
+
+  it("保留のメモは投稿の材料にせず、主人が振り分けると via: owner になる。推定のメモも確かめられる", () => {
+    const s = store();
+    s.add("主人は何かを調べていた", at("2026-10-05T12:10:00Z"), undefined, "hold");
+    s.add("主人は工作をしていた", at("2026-10-05T12:20:00Z"), "趣味", "inferred");
+    expect(s.pending(at("2026-10-05T13:20:00Z")).map((x) => x.project)).toEqual(["趣味"]);
+    expect(s.review(at("2026-10-05T13:20:00Z")).map((n) => n.via)).toEqual(["hold", "inferred"]);
+    // 保留のメモは held を付けたときだけ動かす
+    expect(s.move(DEFAULT_PROJECT, {}, at("2026-10-05T13:20:00Z"))).toBe(1);
+    expect(s.move("仕事", { held: true }, at("2026-10-05T13:20:00Z"))).toBe(1);
+    expect(s.all().map((n) => [n.project, n.via])).toEqual([
+      ["仕事", "owner"],
+      [DEFAULT_PROJECT, "owner"],
+    ]);
+    expect(s.review(at("2026-10-05T13:20:00Z"))).toEqual([]);
+  });
+
+  it("推定で入れたメモを同じプロジェクトに移すと、主人が確かめたことになる", () => {
+    const s = store();
+    s.add("主人は工作をしていた", at("2026-10-05T12:20:00Z"), "趣味", "inferred");
+    expect(s.move("趣味", { ts: "2026-10-05T12:20:00.000Z" }, at("2026-10-05T13:20:00Z"))).toBe(1);
+    expect(s.all()[0]).toMatchObject({ project: "趣味", via: "owner" });
   });
 });

@@ -23,8 +23,11 @@ import {
   type PendingPeriod,
   type RelayState,
   RelayStateError,
+  type NoteContext,
+  type NoteProjectChoice,
+  type NoteVia,
   accessFor,
-  resolveProject,
+  resolveNoteProject,
   resolveRelayAgent,
   SecretInNoteError,
   SecretInPostError,
@@ -33,7 +36,7 @@ import {
   resolveAgent,
   souiebaHome,
 } from "@souieba/sdk";
-import { NOTHING_TO_TELL } from "./integrations/guide.ts";
+import { NOTHING_TO_TELL, sessionGuide } from "./integrations/guide.ts";
 import { NeedsApprovalError, approvalMessage, relayParts } from "./relay.ts";
 import { OpError, projectLabel, relayOps } from "./relay-ops.ts";
 import { updateAdvice, updateToNotify } from "./update-check.ts";
@@ -109,7 +112,7 @@ function context(flags: AgentFlags) {
   };
 }
 
-/** v2（Relay）の Agent のとき。Note・Session・Tell の扱いは v1 と同じで、送受信だけが Relay 経由になる */
+/** v2（Relay）のPersonのとき。Note・Session・Tell の扱いは v1 と同じで、送受信だけが Relay 経由になる */
 function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
   const parts = relayParts(r, flags.now);
   const state: { outdated: string | null } = { outdated: null };
@@ -120,7 +123,8 @@ function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
   });
   const souieba = new Souieba({
     transport,
-    statePath: join(parts.dir, "session.json"),
+    // 会話の Session（tell の間隔）は端末ごと。受信箱と TOLD は人ごとに1つなので、同じ近況を2つの端末で伝えることはない
+    statePath: join(parts.deviceDir, "session.json"),
     sessionGapMs: process.env.SOUIEBA_SESSION_GAP_MIN ? Number(process.env.SOUIEBA_SESSION_GAP_MIN) * 60_000 : undefined,
     tellIntervalMs: process.env.SOUIEBA_TELL_INTERVAL_MIN ? Number(process.env.SOUIEBA_TELL_INTERVAL_MIN) * 60_000 : undefined,
     now: flags.now,
@@ -132,7 +136,7 @@ function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
       if (flags.debug) console.error(`[souieba] ${op} 失敗: ${err instanceof Error ? err.message : err}`);
     },
   });
-  return { mode: "relay" as const, relay: r, parts, transport, souieba, state, notes: new NotesStore(r.identity.agentId, parts.dir) };
+  return { mode: "relay" as const, relay: r, parts, transport, souieba, state, notes: parts.notes };
 }
 
 /**
@@ -153,9 +157,9 @@ function pendingPeriods(ctx: ReturnType<typeof anyContext>, now: Date): PendingP
   });
 }
 
-/** v1 と v2 のどちらの Agent かを見分けて、Note・Session・Tell に共通の部分を返す */
+/** v1のAgentとv2のPersonを見分けて、Note・Session・Tellに共通の部分を返す */
 function anyContext(flags: AgentFlags) {
-  const r = resolveRelayAgent(flags.agent);
+  const r = resolveRelayAgent();
   return r ? relayContext(flags, r) : { mode: "v1" as const, ...context(flags) };
 }
 
@@ -172,53 +176,131 @@ function print(flags: AgentFlags, r: AgentResult) {
   if (!r.ok) process.exitCode = 2;
 }
 
+/** メモを書くときの文脈（v2 でプロジェクトを決めるのに使う。docs/v2-projects.md §3） */
+export type NoteOptions = Omit<NoteContext, "pin" | "sessionCwd" | "env"> & {
+  /** 会話の ID（フックの session_id。CLI の --session）。主人の指定（pin）とフックが知らせた作業ディレクトリを引く */
+  session?: string | null;
+  /** souieba mcp の会話での指定（MCP は会話ごとにプロセスが分かれるので、プロセスの中に持つ） */
+  pin?: string | null;
+};
+
 /** 会話中に知った主人の活動をローカルに書き溜める（サーバには送らない） */
-export function note(flags: AgentFlags, text: string, cwd?: string | null): void {
-  print(flags, noteResult(flags, text, cwd));
+export function note(flags: AgentFlags, text: string, opts: NoteOptions = {}): void {
+  print(flags, noteResult(flags, text, opts));
+}
+
+const VIA_LABEL: Record<NoteVia, string> = {
+  "rule-dir": "ディレクトリの規則",
+  "rule-client": "クライアントの規則",
+  pin: "この会話の指定",
+  env: "SOUIEBA_PROJECT",
+  cwd: "会話の作業ディレクトリ",
+  roots: "クライアントの作業フォルダ",
+  inferred: "推定",
+  default: "決まらないので既定",
+  hold: "保留",
+  owner: "主人の振り分け",
+};
+
+/** v2 で、このメモのプロジェクトを決める。会話の ID があれば、主人の指定とフックが知らせた作業ディレクトリを使う */
+export function noteProjectFor(flags: AgentFlags, opts: NoteOptions = {}): NoteProjectChoice | null {
+  const ctx = anyContext(flags);
+  if (ctx.mode !== "relay") return null;
+  const now = flags.now();
+  const sess = opts.session ? ctx.parts.sessions.get(opts.session, now) : null;
+  return resolveNoteProject(ctx.transport.localState(), {
+    cwd: opts.cwd,
+    client: opts.client,
+    pin: opts.pin ?? sess?.pin ?? null,
+    sessionCwd: sess?.cwd ?? null,
+    roots: opts.roots,
+    guess: opts.guess,
+  });
 }
 
 /**
- * cwd は作業しているディレクトリ（v2 では、ここからプロジェクトを決める。docs/v2-projects.md §3）。
- * 渡せない（ディレクトリを持たない会話）ときは既定のプロジェクト
+ * v2 では、主人の規則・会話の指定・作業場所・エージェントの推定の順にプロジェクトを決める（docs/v2-projects.md §3）。
+ * どれでも決まらなければ、主人の設定どおり既定のプロジェクトか保留
  */
-export function noteResult(flags: AgentFlags, text: string, cwd?: string | null): AgentResult {
+export function noteResult(flags: AgentFlags, text: string, opts: NoteOptions = {}): AgentResult {
   const ctx = anyContext(flags);
   const { notes } = ctx;
   const now = flags.now();
-  let project: string | undefined;
+  let choice: NoteProjectChoice | null = null;
   if (ctx.mode === "relay") {
     try {
-      project = resolveProject(ctx.transport.localState(), { cwd }).project;
+      choice = noteProjectFor(flags, opts);
     } catch (err) {
       if (!(err instanceof RelayStateError)) throw err;
       return { ok: false, json: { ok: false, error: "unknown_project" }, text: `souieba: ${err.message}。メモはしていません。` };
     }
   }
   try {
-    const n = notes.add(text, now, project);
+    const n = notes.add(text, now, choice?.project ?? undefined, choice?.via);
     notes.prune(now);
-    const where = project && project !== DEFAULT_PROJECT ? `（プロジェクト: ${project}）` : "";
-    return { ok: true, json: { ok: true, note: n, project: project ?? null }, text: `souieba: メモしました${where}。` };
+    let where = "";
+    if (choice) {
+      if (choice.via === "hold") where = "（どのプロジェクトにも決まらないので保留にしました。主人が振り分けるまで送りません）";
+      else if (choice.project !== DEFAULT_PROJECT || choice.via === "inferred") where = `（プロジェクト: ${projectLabel(choice.project!)}${choice.via === "inferred" ? "・推定" : ""}）`;
+    }
+    const rejected = choice?.rejectedGuess
+      ? choice.rejectedGuess.reason === "not_accepted"
+        ? `プロジェクト「${choice.rejectedGuess.project}」は推定では選べない設定なので、使いませんでした。`
+        : `プロジェクト「${choice.rejectedGuess.project}」はないので、推定は使いませんでした。`
+      : "";
+    return {
+      ok: true,
+      json: { ok: true, note: n, project: choice?.project ?? null, via: choice?.via ?? null, inferred: choice?.via === "inferred", rejectedGuess: choice?.rejectedGuess ?? null },
+      text: `souieba: メモしました${where}。${rejected}`,
+    };
   } catch (err) {
     return rewriteRequest(err);
   }
 }
 
 /**
+ * フックから: v2のPersonなら、この会話の作業ディレクトリを覚えて、会話のIDの手引きを返す。v1のAgentなら null
+ * （作業ディレクトリはフックが知らせたもので、エージェントが言うものではない）
+ */
+export function hookSession(flags: AgentFlags, sess: { id: string; cwd: string | null }): string | null {
+  const ctx = anyContext(flags);
+  if (ctx.mode !== "relay") return null;
+  ctx.parts.sessions.touch(sess.id, sess.cwd, flags.now());
+  return sessionGuide(sess.id, inferenceHint(flags));
+}
+
+/** エージェントが推定に使える、プロジェクトの一覧（説明つき。推定で選べないものは出さない）。なければ null */
+export function inferenceHint(flags: AgentFlags): string | null {
+  const ctx = anyContext(flags);
+  if (ctx.mode !== "relay") return null;
+  const s = ctx.transport.localState();
+  const list = Object.values(s.projects).filter((p) => p.name !== DEFAULT_PROJECT && p.acceptInference !== false);
+  if (list.length === 0) return null;
+  return list.map((p) => `${p.name}${p.description ? `: ${p.description}` : ""}`).join(" / ");
+}
+
+/**
  * まだ送っていないメモを別のプロジェクトに移す（souieba note move）。移した先で届く相手が増えるなら、
  * relay の設定と同じく、--yes（エージェント）か端末での確認が要る
  */
-export async function noteMove(flags: AgentFlags, to: string, opts: { from?: string; periodStart?: string; yes?: boolean }): Promise<void> {
-  const r = resolveRelayAgent(flags.agent);
-  if (!r) throw new Error("note move は v2 の Agent だけで使えます（v1 にはプロジェクトがありません）");
+export async function noteMove(flags: AgentFlags, to: string, opts: { from?: string; periodStart?: string; yes?: boolean; held?: boolean; ts?: string }): Promise<void> {
+  const r = resolveRelayAgent();
+  if (!r) throw new Error("note move は v2 の端末だけで使えます（v1 にはプロジェクトがありません）");
   const parts = relayParts(r, flags.now);
-  const ops = relayOps({ parts, selfId: r.identity.agentId, now: flags.now });
+  const ops = relayOps({ parts, selfId: r.personId, now: flags.now });
   const periodStart = opts.periodStart ? parsePeriod(opts.periodStart).periodStart : undefined;
-  const change = ops.noteMove(to, { from: opts.from, periodStart });
+  const change = ops.noteMove(to, { from: opts.from, periodStart, held: opts.held, ts: opts.ts });
   const interactive = !!process.stdin.isTTY && !!process.stdout.isTTY;
   if (change.widens && !opts.yes) {
     if (!interactive) {
-      const cmd = ["souieba note move", shq(to), ...(opts.from ? ["--from", shq(opts.from)] : []), ...(periodStart ? ["--period", periodStart] : [])].join(" ");
+      const cmd = [
+        "souieba note move",
+        shq(to),
+        ...(opts.from ? ["--from", shq(opts.from)] : []),
+        ...(periodStart ? ["--period", periodStart] : []),
+        ...(opts.held ? ["--held"] : []),
+        ...(opts.ts ? ["--note", opts.ts] : []),
+      ].join(" ");
       throw new NeedsApprovalError(approvalMessage(change.summary, `次のコマンドを実行してください:\n  ${cmd} --yes`));
     }
     const { ttyAsk } = await import("./relay.ts");
@@ -306,14 +388,14 @@ export function composeResult(flags: AgentFlags): AgentResult {
 
 /**
  * v2 の compose。（時間帯, プロジェクト）ごとに、そのプロジェクトの共有の境界（共有してよい相手・Policy）とメモを1つの塊で出す。
- * Policy の意味の判断はエージェントが行い、宛先の制限は CLI が機械的に行う（docs/v2-design.md §8.3）。
+ * Policy の意味の判断はエージェントが行い、宛先の制限は CLI が機械的に行う（docs/architecture.md）。
  * 共有先が空のプロジェクトのメモは、材料にもしないよう出さない（docs/v2-projects.md §4）
  */
 function relayCompose(flags: AgentFlags, pending: PendingPeriod[], s: RelayState): AgentResult {
   const next = nextSteps(flags);
   // 消したプロジェクトのメモ（付け替えの前に書かれたもの）は既定として扱う
   const projectOf = (p: PendingPeriod) => (s.projects[p.project] ? p.project : DEFAULT_PROJECT);
-  const allowedIn = (pr: string) => Object.values(s.contacts).filter((c) => accessFor(s, c.agentId, pr).allowed);
+  const allowedIn = (pr: string) => Object.values(s.contacts).filter((c) => accessFor(s, c.personId, pr).allowed);
   const anyAllowed = Object.keys(s.projects).some((pr) => allowedIn(pr).length > 0);
   const multi = Object.keys(s.projects).length > 1;
   const lines = [
@@ -335,7 +417,8 @@ function relayCompose(flags: AgentFlags, pending: PendingPeriod[], s: RelayState
   for (const p of pending) {
     const pr = projectOf(p);
     const tag = pr === DEFAULT_PROJECT ? "" : pr;
-    lines.push("", `## ${fmt.format(new Date(p.periodStart))}〜${hm.format(new Date(p.periodEnd))}${multi ? `  プロジェクト: ${projectLabel(pr)}` : ""}`);
+    const inferred = p.notes.some((n) => n.via === "inferred");
+    lines.push("", `## ${fmt.format(new Date(p.periodStart))}〜${hm.format(new Date(p.periodEnd))}${multi ? `  プロジェクト: ${projectLabel(pr)}${inferred ? "（推定を含む）" : ""}` : ""}`);
     // 共有先が空のプロジェクトは pendingPeriods で自動でスキップしてあるので、ここには来ない（誰にも共有していない使い始めを除く）
     const allowed = allowedIn(pr);
     if (allowed.length > 0) {
@@ -353,7 +436,7 @@ function relayCompose(flags: AgentFlags, pending: PendingPeriod[], s: RelayState
       }
     }
     lines.push("メモ:");
-    for (const n of p.notes) lines.push(`- ${hm.format(new Date(n.ts))} ${n.text}`);
+    for (const n of p.notes) lines.push(`- ${hm.format(new Date(n.ts))} ${n.text}${n.via === "inferred" ? "（プロジェクトは推定）" : ""}`);
     lines.push(next.publish(p.periodStart, tag || undefined));
     lines.push(next.skip(p.periodStart, tag || undefined));
   }
@@ -388,7 +471,7 @@ export async function publishResult(
     if (!ctx.transport.localState().projects[project]) {
       return { ok: false, json: { ok: false, error: "unknown_project" }, text: `souieba: プロジェクト「${project}」はありません。souieba compose が示した --project を使ってください。` };
     }
-    return relayPublish(ctx, period, content, { ...narrative, project });
+    return relayPublish(flags, ctx, period, content, { ...narrative, project });
   }
   const { transport, notes } = ctx;
   let r;
@@ -406,6 +489,7 @@ export async function publishResult(
 }
 
 async function relayPublish(
+  flags: AgentFlags,
   ctx: ReturnType<typeof relayContext>,
   period: { periodStart: string; periodEnd: string },
   content: string,
@@ -427,6 +511,14 @@ async function relayPublish(
     return rewriteRequest(err);
   }
   ctx.notes.mark(period.periodStart, "published", narrative.project);
+  const project = narrative.project ?? DEFAULT_PROJECT;
+  const inferred = ctx.notes.notesIn(period.periodStart).some((n) => (n.project ?? DEFAULT_PROJECT) === project && n.via === "inferred");
+  const at = flags.now();
+  ctx.parts.state.update((s) => {
+    const t = at.toISOString();
+    s.sent = Object.fromEntries(Object.entries(s.sent ?? {}).filter(([, v]) => v.until > t));
+    s.sent[r.postId] = { project, inferred, at: t, until: new Date(at.getTime() + 7 * 86_400_000).toISOString() };
+  });
   const extra: string[] = [];
   if (r.denied.length) extra.push(`共有を許可していない ${r.denied.length} 人には送っていません`);
   if (r.notConnected.length) extra.push(`接続していない ${r.notConnected.length} 人には送っていません`);
@@ -437,8 +529,8 @@ async function relayPublish(
   }
   return {
     ok: true,
-    json: { ok: true, ...r, ...period, project: narrative.project },
-    text: `souieba: ${r.recipients.join("、")} に送りました（${fmt.format(new Date(period.periodStart))}〜の1時間、${hm.format(new Date(r.visibleAt))} から届きます）。${extra.join("。")}`,
+    json: { ok: true, ...r, ...period, project, inferred },
+    text: `souieba: ${r.recipients.join("、")} に送りました（${fmt.format(new Date(period.periodStart))}〜の1時間${project !== DEFAULT_PROJECT || inferred ? `、プロジェクト: ${projectLabel(project)}${inferred ? "・推定を含む" : ""}` : ""}、${hm.format(new Date(r.visibleAt))} から届きます）。${extra.join("。")}`,
   };
 }
 
@@ -622,13 +714,13 @@ async function relayTellResult(
   else if (update) lines.push(`souieba: ${updateAdvice(update)}。ユーザーへの回答のあとで、主人に更新を勧めてください。あなたが実行してはいけません。`);
   for (const id of notices.incomingRequests) {
     lines.push(
-      `souieba: Agent ${id} から接続要求が届いています。ユーザーへの回答のあとで、このことを主人に伝えてください。承認するかは主人が決めます。` +
+      `souieba: ${id} から接続要求が届いています。ユーザーへの回答のあとで、このことを主人に伝えてください。承認するかは主人が決めます。` +
         `主人に承認を頼まれたら souieba relay accept ${id} --name <呼び名> を（変更の内容を主人に見せて同意を得てから --yes を付けて）、断るよう頼まれたら souieba relay reject ${id} を実行します。主人に頼まれないうちに実行してはいけません。`,
     );
   }
   for (const id of notices.unnamedPeers) {
     lines.push(
-      `souieba: 接続済みの Agent ${id} にまだ呼び名がないため、この人からの近況を受け取れていません。ユーザーへの回答のあとで、主人に souieba relay rename ${id} <呼び名> を頼んでください。`,
+      `souieba: 接続済みの ${id} にまだ呼び名がないため、この人からの近況を受け取れていません。ユーザーへの回答のあとで、主人に souieba relay rename ${id} <呼び名> を頼んでください。`,
     );
   }
   if (notices.settingsChanges.length > 0) {
@@ -642,7 +734,7 @@ async function relayTellResult(
   for (const k of notices.keyChanges) {
     const name = contextName(k.name);
     lines.push(
-      `souieba: ${name ? `「${name}」` : k.agentId}の暗号化の鍵が新しくなりました（相手が鍵を替えたときに起きます）。ユーザーへの回答のあとで、このことを主人に伝え、心当たりがなければ相手に確かめるよう勧めてください。`,
+      `souieba: ${name ? `「${name}」` : k.personId}の端末が増えたか、端末の暗号化の鍵が新しくなりました（相手がエージェントを足したときや鍵を替えたときに起きます。どれも相手の Person 鍵の署名を確かめてあります）。ユーザーへの回答のあとで、このことを主人に伝え、心当たりがなければ相手に確かめるよう勧めてください。`,
     );
   }
   const json = {

@@ -1,6 +1,6 @@
 /**
  * グループ（近況の共有範囲）。所属はサーバが管理し、クライアントはそれを信頼する
- * （サーバを信頼する E2EE。docs/public-deployment-plan.md §5）。
+ * （サーバを信頼する E2EE。docs/architecture.md）。
  */
 import type { DirectoryUser, GroupNameBox, KeyDirectory, WireGroup } from "@souieba/core";
 import { type SQLWrapper, and, count, eq, exists, inArray, isNotNull, isNull, notExists, or, sql } from "drizzle-orm";

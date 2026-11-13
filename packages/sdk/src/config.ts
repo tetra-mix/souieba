@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { KeyPair, RelayIdentity } from "@souieba/core";
+import type { DeviceCert, DeviceIdentity, KeyPair } from "@souieba/core";
 
 export type AgentKeys = { enc: KeyPair; sign: KeyPair };
 
@@ -17,17 +17,31 @@ export type ClientConfig = {
   userToken?: string;
   user?: { id: string; handle: string; displayName: string };
   agents: Record<string, AgentEntry>;
-  /** v2（Relay）の Agent。アカウントもトークンもなく、Identity 鍵と Encryption 鍵だけを持つ（docs/v2-relay-plan.md） */
-  relayAgents?: Record<string, RelayAgentEntry>;
+  /** v2 RelayのPersonと、通信に使う内部端末。通常の操作ではPersonだけを意識する */
+  person?: PersonEntry;
 };
 
-export type RelayAgentEntry = {
+/**
+ * 人。現在は1つの設定ディレクトリにPerson鍵と、Relay通信用の内部端末を保存する。
+ */
+export type PersonEntry = {
   relayUrl: string;
-  agentId: string;
-  identity: KeyPair;
+  personId: string;
+  person: { pub: string; priv?: string };
+  createdAt: string;
+  /** 内部転送端末。キーは手元だけの名前で、外部のIDやCLI引数には使わない */
+  devices: Record<string, DeviceEntry>;
+};
+
+export type DeviceEntry = {
+  deviceId: string;
+  sign: KeyPair;
   enc: KeyPair;
   encKeyVersion: number;
   createdAt: string;
+  cert: DeviceCert;
+  /** 取り消した日時（取り消した端末は使わない。記録のために残す） */
+  revokedAt?: string;
 };
 
 /** SOUIEBA_HOME で切り替えられる（1台の PC で2人分のデモをするときなど） */
@@ -107,7 +121,7 @@ export type ResolvedAgent = {
 };
 
 /**
- * 使う Agent を決める。優先順: 引数（--agent）> 環境変数 SOUIEBA_AGENT > 登録が1つだけならそれ。
+ * v1で使うAgentを決める。優先順: 引数（--agent）> 環境変数 SOUIEBA_AGENT > 登録が1つだけならそれ。
  * 環境変数 SOUIEBA_SERVER があればサーバの URL だけ設定ファイルより優先する。
  * （トークンだけを環境変数で渡す方法はやめた。E2EE には Agent の秘密鍵が必要なため）
  */
@@ -138,29 +152,40 @@ export function resolveAgent(name?: string): ResolvedAgent {
   };
 }
 
-export type ResolvedRelayAgent = { name: string; relayUrl: string; identity: RelayIdentity };
+/** v2 の内部転送端末として解決された接続情報 */
+export type ResolvedRelayAgent = {
+  /** 端末の名前（手元だけ） */
+  name: string;
+  relayUrl: string;
+  personId: string;
+  personKey: string;
+  device: DeviceIdentity;
+};
 
-/** v2 の Agent と v1 の Agent の名前は重ねない。agent を決めるときに、どちらの名前かを見分けるため */
-export function agentNameTaken(cfg: ClientConfig, name: string): boolean {
-  return name in cfg.agents || name in (cfg.relayAgents ?? {});
+/** 人ごとの状態（連絡先・グループ・プロジェクト・メモ・受信箱）を置くディレクトリ。この PC のすべての端末で共有する */
+export function personDir(): string {
+  return join(souiebaHome(), "person");
+}
+
+/** 内部の転送端末ごとの状態（Relay のセッション・会話の Session）を置くディレクトリ */
+export function deviceDir(deviceId: string): string {
+  return join(personDir(), "devices", deviceId);
 }
 
 /**
- * 使う Agent が v2（Relay）のものなら、その Agent を返す。v1 の Agent なら null。
- * 決め方は resolveAgent と同じ（引数 > SOUIEBA_AGENT > 登録が1つだけならそれ）。v1 と v2 を合わせて1つだけのときも、それを使う
+ * Person のRelayを使う内部端末を返す。v1のAgent設定しかなければ null。
+ * Personがあるときは、そのPersonの最初の有効な内部端末を使う。
  */
-export function resolveRelayAgent(name?: string): ResolvedRelayAgent | null {
-  name ??= process.env.SOUIEBA_AGENT || undefined;
+export function resolveRelayAgent(): ResolvedRelayAgent | null {
   const cfg = loadClientConfig();
-  const relay = cfg.relayAgents ?? {};
-  const relayNames = Object.keys(relay);
-  const total = relayNames.length + Object.keys(cfg.agents).length;
-  const key = name ?? (relayNames.length === 1 && total === 1 ? relayNames[0] : undefined);
-  const e = key ? relay[key] : undefined;
-  if (!key || !e) return null;
+  const p = cfg.person;
+  const [key, d] = Object.entries(p?.devices ?? {}).find(([, device]) => !device.revokedAt) ?? [];
+  if (!p || !key || !d) return null;
   return {
     name: key,
-    relayUrl: process.env.SOUIEBA_RELAY_URL ?? e.relayUrl,
-    identity: { agentId: e.agentId, identity: e.identity, enc: e.enc, encKeyVersion: e.encKeyVersion },
+    relayUrl: process.env.SOUIEBA_RELAY_URL ?? p.relayUrl,
+    personId: p.personId,
+    personKey: p.person.pub,
+    device: { personId: p.personId, deviceId: d.deviceId, sign: d.sign, enc: d.enc, encKeyVersion: d.encKeyVersion, createdAt: d.createdAt, cert: d.cert },
   };
 }

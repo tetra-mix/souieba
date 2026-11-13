@@ -1,20 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
+  type DeviceIdentity,
   type NarrativeMessage,
+  type PersonKeys,
   RelayDecryptError,
-  deriveAgentId,
-  directoryEntry,
+  authSigningText,
+  certifyDevice,
+  deriveDeviceId,
+  derivePersonId,
+  generateDevice,
   generateEncryptionKey,
-  generateRelayIdentity,
+  generatePerson,
   generateSigningKey,
-  isAgentId,
+  isDeviceId,
+  isPersonId,
   normalizeNarrative,
   openRelayMessage,
+  revokeDevice,
   sealRelayMessage,
   signChallenge,
-  authSigningText,
-  verifyDirectoryEntry,
-  verifyRecipientBox,
+  verifyDeviceCert,
+  verifyPersonDirectory,
+  verifyRecipientGroup,
   verifyText,
 } from "../src/index.ts";
 
@@ -30,91 +37,139 @@ const message: NarrativeMessage = {
   reshare: "deny",
 };
 
-const recipientOf = (id: ReturnType<typeof generateRelayIdentity>) => ({
-  agentId: id.agentId,
-  encKey: id.enc.pub,
-  encKeyVersion: id.encKeyVersion,
+function device(p: PersonKeys): DeviceIdentity {
+  const d = generateDevice(p.personId, createdAt);
+  return { ...d, cert: certifyDevice(p, d) };
+}
+
+function person(n = 1) {
+  const p = generatePerson();
+  const devices = Array.from({ length: n }, () => device(p));
+  return { ...p, devices };
+}
+
+const recipientOf = (x: ReturnType<typeof person>) => ({
+  personId: x.personId,
+  devices: x.devices.map((d) => ({ deviceId: d.deviceId, encKey: d.enc.pub, encKeyVersion: d.encKeyVersion })),
 });
 
-describe("Identity と Agent ID", () => {
-  it("Agent ID は Identity 公開鍵から決まり、形式が決まっている", () => {
-    const id = generateRelayIdentity();
-    expect(isAgentId(id.agentId)).toBe(true);
-    expect(deriveAgentId(id.identity.pub)).toBe(id.agentId);
-    expect(deriveAgentId(generateSigningKey().pub)).not.toBe(id.agentId);
+const dirOf = (x: ReturnType<typeof person>, extra: Partial<Parameters<typeof verifyPersonDirectory>[0]> = {}) => ({
+  personId: x.personId,
+  personKey: x.person.pub,
+  devices: x.devices.map((d) => d.cert),
+  revocations: [],
+  ...extra,
+});
+
+describe("Person ID と端末証明書", () => {
+  it("Person ID は Person 公開鍵から、Device ID は端末の署名鍵から決まる", () => {
+    const p = person();
+    expect(isPersonId(p.personId)).toBe(true);
+    expect(derivePersonId(p.person.pub)).toBe(p.personId);
+    expect(isDeviceId(p.devices[0]!.deviceId)).toBe(true);
+    expect(deriveDeviceId(p.devices[0]!.sign.pub)).toBe(p.devices[0]!.deviceId);
+    expect(derivePersonId(generateSigningKey().pub)).not.toBe(p.personId);
   });
 
-  it("ディレクトリの1件を検証できる。鍵のすり替えに気づく", () => {
-    const id = generateRelayIdentity();
-    const e = directoryEntry(id);
-    expect(verifyDirectoryEntry(e)).toEqual({ ok: true });
-    // Relay が Encryption 鍵だけを差し替えた
-    expect(verifyDirectoryEntry({ ...e, encKey: generateEncryptionKey().pub })).toEqual({ ok: false, reason: "bad_enc_key_sig" });
-    // 版だけ変えた
-    expect(verifyDirectoryEntry({ ...e, encKeyVersion: 2 })).toEqual({ ok: false, reason: "bad_enc_key_sig" });
-    // 別の Identity 鍵ごと差し替えた（Agent ID と合わない）
-    const other = directoryEntry(generateRelayIdentity());
-    expect(verifyDirectoryEntry({ ...other, agentId: id.agentId })).toEqual({ ok: false, reason: "bad_agent_id" });
+  it("端末証明書は Person 鍵で確かめられ、鍵の差し替えに気づく。名前は入らない", () => {
+    const p = person();
+    const c = p.devices[0]!.cert;
+    expect(verifyDeviceCert(c, p.person.pub)).toBe(true);
+    expect(Object.keys(c).sort()).toEqual(["createdAt", "deviceId", "encKey", "encKeyVersion", "personId", "sig", "signKey", "v"]);
+    expect(verifyDeviceCert({ ...c, encKey: generateEncryptionKey().pub }, p.person.pub)).toBe(false);
+    expect(verifyDeviceCert({ ...c, encKeyVersion: 2 }, p.person.pub)).toBe(false);
+    // 別の人の鍵では確かめられない
+    expect(verifyDeviceCert(c, generatePerson().person.pub)).toBe(false);
   });
 
-  it("小さい位数の点（DH の結果がすべて 0 になる鍵）を Encryption 鍵として受け付けない", () => {
-    const id = generateRelayIdentity();
+  it("小さい位数の点を暗号化鍵として受け付けない", () => {
+    const p = generatePerson();
+    const d = generateDevice(p.personId, createdAt);
     const zero = Buffer.alloc(32).toString("base64url");
-    const e = directoryEntry({ ...id, enc: { pub: zero, priv: id.enc.priv } });
-    expect(verifyDirectoryEntry(e)).toEqual({ ok: false, reason: "bad_key" });
+    expect(verifyDeviceCert(certifyDevice(p, { ...d, enc: { pub: zero, priv: d.enc.priv } }), p.person.pub)).toBe(false);
   });
 
-  it("チャレンジへの署名は Relay の origin に縛られる", () => {
-    const id = generateRelayIdentity();
-    const sig = signChallenge(id, "https://relay.test", "abc");
-    expect(verifyText(id.identity.pub, authSigningText("https://relay.test", id.agentId, "abc"), sig)).toBe(true);
-    expect(verifyText(id.identity.pub, authSigningText("https://other.test", id.agentId, "abc"), sig)).toBe(false);
+  it("Relay が足した偽の端末（Person 鍵で署名されていない）は使わない", () => {
+    const alice = person(1);
+    const mallory = generatePerson();
+    // Relay（や攻撃者）が、自分の鍵で署名した端末を Alice の端末として足す
+    const fake = generateDevice(alice.personId, createdAt);
+    const forged = { ...certifyDevice(mallory, fake), personId: alice.personId };
+    const r = verifyPersonDirectory(dirOf(alice, { devices: [alice.devices[0]!.cert, forged] }), { pinnedKey: alice.person.pub });
+    expect(r.ok && r.devices.map((d) => d.deviceId)).toEqual([alice.devices[0]!.deviceId]);
+    // Person 鍵ごと差し替えたら、Person ID と合わないか、固定した鍵と合わない
+    expect(verifyPersonDirectory({ ...dirOf(alice), personKey: mallory.person.pub })).toEqual({ ok: false, reason: "bad_person_id" });
+    const other = person();
+    expect(verifyPersonDirectory(dirOf(other), { pinnedKey: alice.person.pub })).toEqual({ ok: false, reason: "key_mismatch" });
+  });
+
+  it("取り消した端末は使わない。Relay が取り消しを隠しても、覚えている取り消しは効く。偽の取り消しは効かない", () => {
+    const alice = person(2);
+    const [d1, d2] = alice.devices;
+    const rev = revokeDevice(alice, d2!.deviceId, createdAt);
+    const r = verifyPersonDirectory(dirOf(alice, { revocations: [rev] }));
+    expect(r.ok && r.devices.map((d) => d.deviceId)).toEqual([d1!.deviceId]);
+    expect(r.ok && r.revoked).toEqual([d2!.deviceId]);
+    const hidden = verifyPersonDirectory(dirOf(alice), { knownRevoked: [d2!.deviceId] });
+    expect(hidden.ok && hidden.devices.map((d) => d.deviceId)).toEqual([d1!.deviceId]);
+    const forgedRev = { ...revokeDevice(generatePerson(), d1!.deviceId, createdAt), personId: alice.personId };
+    const r2 = verifyPersonDirectory(dirOf(alice, { revocations: [forgedRev] }));
+    expect(r2.ok && r2.devices.length).toBe(2);
+  });
+
+  it("チャレンジへの署名は Relay の origin と端末に縛られる", () => {
+    const d = person().devices[0]!;
+    const sig = signChallenge(d, "https://relay.test", "abc");
+    expect(verifyText(d.sign.pub, authSigningText("https://relay.test", d.personId, d.deviceId, "abc"), sig)).toBe(true);
+    expect(verifyText(d.sign.pub, authSigningText("https://other.test", d.personId, d.deviceId, "abc"), sig)).toBe(false);
   });
 });
 
-describe("メッセージの暗号化（受信者ごとの HPKE）", () => {
-  it("宛先の全員が開けて、宛先でない人は開けない", () => {
-    const a = generateRelayIdentity();
-    const b = generateRelayIdentity();
-    const c = generateRelayIdentity();
-    const d = generateRelayIdentity();
-    const env = sealRelayMessage(message, a, [recipientOf(b), recipientOf(c)], opts);
-    expect(env.recipients.map((r) => r.agentId).sort()).toEqual([b.agentId, c.agentId].sort());
+describe("メッセージの暗号化（受信者の端末ごとの HPKE）", () => {
+  it("宛先の人のすべての端末が開けて、宛先でない人は開けない", () => {
+    const a = person(1);
+    const b = person(2);
+    const c = person(1);
+    const d = person(1);
+    const sender = a.devices[0]!;
+    const env = sealRelayMessage(message, sender, [recipientOf(b), recipientOf(c)], opts);
+    expect(env.recipients.map((r) => r.person).sort()).toEqual([b.personId, c.personId].sort());
+    expect(env.senderCert).toEqual(sender.cert);
     for (const r of [b, c]) {
-      const box = env.recipients.find((x) => x.agentId === r.agentId)!;
-      expect(verifyRecipientBox(env, box, a.identity.pub)).toBe(true);
-      expect(openRelayMessage(env, r)).toEqual(message);
+      const g = env.recipients.find((x) => x.person === r.personId)!;
+      expect(verifyRecipientGroup(env, g, sender.cert.signKey)).toBe(true);
+      for (const dev of r.devices) expect(openRelayMessage(env, dev)).toEqual(message);
     }
-    expect(() => openRelayMessage(env, d)).toThrow(RelayDecryptError);
+    expect(() => openRelayMessage(env, d.devices[0]!)).toThrow(RelayDecryptError);
   });
 
   it("受信者が自分の分だけを受け取っても、署名を確かめて開ける", () => {
-    const a = generateRelayIdentity();
-    const b = generateRelayIdentity();
-    const c = generateRelayIdentity();
-    const env = sealRelayMessage(message, a, [recipientOf(b), recipientOf(c)], opts);
-    const onlyB = { ...env, recipients: env.recipients.filter((r) => r.agentId === b.agentId) };
-    expect(verifyRecipientBox(onlyB, onlyB.recipients[0]!, a.identity.pub)).toBe(true);
-    expect(openRelayMessage(onlyB, b)).toEqual(message);
+    const a = person();
+    const b = person(2);
+    const c = person();
+    const env = sealRelayMessage(message, a.devices[0]!, [recipientOf(b), recipientOf(c)], opts);
+    const onlyB = { ...env, recipients: env.recipients.filter((r) => r.person === b.personId) };
+    expect(verifyRecipientGroup(onlyB, onlyB.recipients[0]!, a.devices[0]!.sign.pub)).toBe(true);
+    expect(openRelayMessage(onlyB, b.devices[1]!)).toEqual(message);
   });
 
-  it("ヘッダや本文を書き換えると、署名か復号で気づく", () => {
-    const a = generateRelayIdentity();
-    const b = generateRelayIdentity();
-    const env = sealRelayMessage(message, a, [recipientOf(b)], opts);
-    const box = env.recipients[0]!;
-    // 配送期限を延ばした
+  it("ヘッダや本文・箱を書き換えると、署名か復号で気づく", () => {
+    const a = person();
+    const b = person(2);
+    const s = a.devices[0]!;
+    const env = sealRelayMessage(message, s, [recipientOf(b)], opts);
+    const g = env.recipients[0]!;
     const extended = { ...env, deliveryExpiresAt: "2026-11-30T01:00:00.000Z" };
-    expect(verifyRecipientBox(extended, box, a.identity.pub)).toBe(false);
-    expect(() => openRelayMessage(extended, b)).toThrow(RelayDecryptError);
-    // 送信者を偽った
-    const c = generateRelayIdentity();
-    expect(verifyRecipientBox({ ...env, sender: c.agentId }, box, c.identity.pub)).toBe(false);
-    // 本文を差し替えた（同じ受信者宛ての別のメッセージの暗号文）
-    const other = sealRelayMessage({ ...message, content: "主人は今日は一日中家で寝ていたらしい" }, a, [recipientOf(b)], opts);
-    expect(verifyRecipientBox({ ...env, ciphertext: other.ciphertext, iv: other.iv }, box, a.identity.pub)).toBe(false);
-    // 別の受信者の箱を自分宛てに付け替えた
-    expect(verifyRecipientBox(env, { ...box, agentId: c.agentId }, a.identity.pub)).toBe(false);
+    expect(verifyRecipientGroup(extended, g, s.sign.pub)).toBe(false);
+    expect(() => openRelayMessage(extended, b.devices[0]!)).toThrow(RelayDecryptError);
+    // 送った端末を偽った
+    const c = person();
+    expect(verifyRecipientGroup({ ...env, senderDevice: c.devices[0]!.deviceId }, g, s.sign.pub)).toBe(false);
+    const other = sealRelayMessage({ ...message, content: "主人は今日は一日中家で寝ていたらしい" }, s, [recipientOf(b)], opts);
+    expect(verifyRecipientGroup({ ...env, ciphertext: other.ciphertext, iv: other.iv }, g, s.sign.pub)).toBe(false);
+    // 別の人の箱に付け替えた・端末の箱を1つ落とした
+    expect(verifyRecipientGroup(env, { ...g, person: c.personId }, s.sign.pub)).toBe(false);
+    expect(verifyRecipientGroup(env, { ...g, boxes: g.boxes.slice(1) }, s.sign.pub)).toBe(false);
   });
 });
 

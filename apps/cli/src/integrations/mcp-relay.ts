@@ -1,6 +1,6 @@
 /**
  * souieba mcp の、v2（Relay）の共有の設定を変えるツール。シェルを使えないエージェント（Claude Desktop など）が、
- * 主人に頼まれたときに設定を変えられるようにする（docs/v2-relay-plan.md §5・docs/v2-projects.md §9）。
+ * 主人に頼まれたときに設定を変えられるようにする（docs/architecture.md・docs/v2-projects.md §9）。
  *
  * 中身は CLI の souieba relay ...（relay.ts の relayCommand）と同じで、同じ2段階を踏む:
  * - 共有を狭める操作は、そのまま実行する
@@ -29,11 +29,11 @@ const confirm = z.boolean().optional().describe("主人がこの会話で、示�
 const project = z.string().max(80).optional().describe("プロジェクトの名前（省略すると既定のプロジェクト）");
 
 /** relayCommand を、端末の外（エージェント）からの呼び出しとして実行し、出力をツールの結果にする */
-async function runRelay(flags: AgentFlags, a: Omit<RelayArgs, "raw" | "agent">): Promise<CallToolResult> {
+export async function runRelay(flags: AgentFlags, a: Omit<RelayArgs, "raw">): Promise<CallToolResult> {
   const out: string[] = [];
   try {
     await relayCommand(
-      { ...a, agent: flags.agent, raw: [] },
+      { ...a, raw: [] },
       { log: (l) => out.push(l), interactive: false, ask: async () => false, now: flags.now, via: "mcp" },
     );
     return text(out.join("\n") || "souieba: 済みました");
@@ -51,12 +51,15 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
     {
       title: "v2 の共有の設定を見る",
       description:
-        "v2（Relay）の Agent の設定を見る。view: status（連絡先・グループ・プロジェクトごとの共有先と共有方針・任せている範囲）、contacts（接続済みの相手・届いた接続要求・送った接続要求）、projects（プロジェクトとディレクトリ）、delegations（主人がエージェントに任せている範囲）。いつ呼んでもよい。",
-      inputSchema: { view: z.enum(["status", "contacts", "projects", "delegations"]).optional() },
+        "v2（Relay）の設定を見る。view: status（連絡先・グループ・プロジェクトごとの共有先と共有方針・任せている範囲・メモの振り分けの規則）、contacts（接続済みの相手・届いた接続要求・送った接続要求）、projects（プロジェクトとディレクトリ・説明・推定で選べるか）、delegations（主人がエージェントに任せている範囲）、review（保留のメモと推定で決めたメモ）。いつ呼んでもよい。",
+      inputSchema: { view: z.enum(["status", "contacts", "projects", "delegations", "review"]).optional() },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     ({ view }) =>
-      runRelay(flags, view === "projects" ? { sub: "project", rest: ["list"] } : view === "delegations" ? { sub: "delegate", rest: ["list"] } : { sub: view ?? "status", rest: [] }),
+      runRelay(
+        flags,
+        view === "projects" ? { sub: "project", rest: ["list"] } : view === "delegations" ? { sub: "delegate", rest: ["list"] } : { sub: view ?? "status", rest: [] },
+      ),
   );
 
   server.registerTool(
@@ -68,7 +71,7 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
         WIDEN_RULE,
       inputSchema: {
         action: z.enum(["connect", "accept", "reject", "rename", "disconnect", "block", "unblock"]),
-        agent: z.string().max(80).describe("相手の Agent ID（sb_...）か呼び名。connect・accept・reject・unblock は Agent ID"),
+        agent: z.string().max(80).describe("相手の ID（sb_...）か呼び名。connect・accept・reject・unblock は ID"),
         name: z.string().max(80).optional().describe("connect・accept・rename のときの呼び名（主人が決めたもの）"),
         confirm,
       },
@@ -87,7 +90,7 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
         WIDEN_RULE,
       inputSchema: {
         rule: z.enum(["allow", "deny", "unset"]),
-        target: z.string().max(80).describe("相手の呼び名か Agent ID、または group:<グループの ID か名前>"),
+        target: z.string().max(80).describe("相手の呼び名か ID、または group:<グループの ID か名前>"),
         project,
         confirm,
       },
@@ -106,7 +109,7 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
         action: z.enum(["create", "add", "remove", "delete"]),
         group: z.string().max(80).describe("グループの ID か名前（create のときは新しい ID: 英小文字・数字・-_）"),
         name: z.string().max(80).optional().describe("create のときのグループ名"),
-        members: z.array(z.string().max(80)).max(50).optional().describe("add・remove のときの相手（呼び名か Agent ID）"),
+        members: z.array(z.string().max(80)).max(50).optional().describe("add・remove のときの相手（呼び名か ID）"),
         confirm,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
@@ -137,19 +140,40 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
     {
       title: "プロジェクトを変える",
       description:
-        "主人に頼まれたときに、プロジェクト（作業するディレクトリに名前を付けたもの）を変える。add（作る。共有先は空で始まる）・dir_add / dir_remove（ディレクトリを付け外し。そのディレクトリのメモが届く相手が増えるなら広げる）・delete（消す。そのディレクトリは既定になる）・rename（名前を変える）・which（そのディレクトリがどのプロジェクトか）。" +
+        "主人に頼まれたときに、プロジェクト（作業ごとに共有先を変える単位）とメモの振り分けの規則を変える。add（作る。共有先は空で始まる）・dir_add / dir_remove（ディレクトリを付け外し。そのディレクトリのメモが届く相手が増えるなら広げる）・describe（説明を書く。text に主人の言葉）・inference_on / inference_off（エージェントの推定でこのプロジェクトに入れてよいか）・client_set / client_unset（MCP クライアントの名前 client ごとに、メモを入れるプロジェクト）・unresolved_default / unresolved_hold（どのプロジェクトにも決まらないメモを既定に入れるか、保留するか）・delete（消す）・rename（名前を変える）・which（そのディレクトリがどのプロジェクトか）。" +
         WIDEN_RULE,
       inputSchema: {
-        action: z.enum(["add", "dir_add", "dir_remove", "delete", "rename", "which"]),
+        action: z.enum([
+          "add",
+          "dir_add",
+          "dir_remove",
+          "describe",
+          "inference_on",
+          "inference_off",
+          "client_set",
+          "client_unset",
+          "unresolved_default",
+          "unresolved_hold",
+          "delete",
+          "rename",
+          "which",
+        ]),
         name: z.string().max(80).optional().describe("プロジェクトの名前（which では使わない）"),
         dirs: z.array(z.string().max(1000)).max(20).optional().describe("add・dir_add・dir_remove のディレクトリ（絶対パス）。which は1つ"),
         new_name: z.string().max(80).optional().describe("rename のときの新しい名前"),
         copy_default: z.boolean().optional().describe("add のとき、既定のプロジェクトの共有先と共有方針を写して始める"),
+        text: z.string().max(200).optional().describe("describe のときの説明（主人の言葉）"),
+        client: z.string().max(80).optional().describe("client_set・client_unset のときの MCP クライアントの名前（clientInfo.name）"),
         confirm,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
-    ({ action, name, dirs, new_name, copy_default, confirm: yes }) => {
+    ({ action, name, dirs, new_name, copy_default, text: desc, client, confirm: yes }) => {
+      if (action === "unresolved_default" || action === "unresolved_hold") return runRelay(flags, { sub: "unresolved", rest: [action.slice(11)], yes });
+      if (action === "client_set") return runRelay(flags, { sub: "client", rest: ["set", client ?? "", name ?? ""], yes });
+      if (action === "client_unset") return runRelay(flags, { sub: "client", rest: ["unset", client ?? ""], yes });
+      if (action === "describe") return runRelay(flags, { sub: "project", rest: ["describe", name ?? "", desc ?? ""], yes });
+      if (action === "inference_on" || action === "inference_off") return runRelay(flags, { sub: "project", rest: ["inference", name ?? "", action === "inference_on" ? "on" : "off"], yes });
       if (action === "which") {
         if (!dirs?.[0]) return text("souieba: which には dirs にディレクトリを1つ渡してください", true);
         return runRelay(flags, { sub: "project", rest: ["which", dirs[0]] });

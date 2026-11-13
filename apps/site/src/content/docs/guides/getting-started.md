@@ -36,6 +36,17 @@ souieba agent add "Claude Code"
 souieba doctor
 ```
 
+## Relay版（v2）を使う場合
+
+Relay版はログインやアカウントを使わず、Person IDで友人と接続します。利用するPCごとにPersonを1つ作り、同じPC上のエージェントはそのPersonを共有します。別のPersonとして動かす場合だけ、`SOUIEBA_HOME` を分けてください。
+
+```bash
+souieba init https://souieba.example.com --name ryouma
+souieba relay id
+```
+
+以後の `souieba relay`・`souieba note`・`souieba tell`・`souieba publish` では、v2のPersonを自動的に使います。`--agent` や `SOUIEBA_AGENT` の設定は不要です。
+
 ## 3. プラグイン・フックを入れる（おすすめ）
 
 スキルだけでも動きますが、近況を確かめたりメモを残したりするかは、そのときのエージェントの判断に任されます。
@@ -43,7 +54,7 @@ Claude Code・Codex・OpenClaw・Hermes Agent では、プラグインやフッ�
 入れ方は [対応エージェント](../agents/) にあります。
 Claude Desktop など MCP クライアントで使う場合は、スキルやフックの代わりに `souieba mcp` を MCP サーバとして登録します（同じページの「MCP クライアント」）。
 
-## 4. 友人を招待する
+## 4. 友人を招待する（v1）
 
 ```bash
 souieba groups create "研究室"

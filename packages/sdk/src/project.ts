@@ -9,6 +9,9 @@
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readStateJson, writeSecretJson } from "./config.ts";
+import type { NoteVia } from "./notes.ts";
+import { withFileLock } from "./notes.ts";
 import { DEFAULT_PROJECT, type RelayState, RelayStateError, findProject } from "./relay-state.ts";
 
 /** git に聞く。git がない・リポジトリでないときは null */
@@ -79,4 +82,159 @@ export function resolveProject(state: RelayState, opts: { cwd?: string | null; e
   }
   const m = matchProject(state, canonical);
   return m.dir ? { project: m.project, via: "dir", dir: m.dir } : { project: DEFAULT_PROJECT, via: "default", dir: null };
+}
+
+// ---- メモのプロジェクトの決め方（2.1.0。docs/v2-projects.md §3） ----
+
+/** メモを書くときに分かっていること。どれも、なければ省く */
+export type NoteContext = {
+  /** souieba note を実行したディレクトリ（CLI。エージェントのシェルが実際に動いている場所） */
+  cwd?: string | null;
+  /** MCP の initialize で分かったクライアントの名前（clientInfo.name） */
+  client?: string | null;
+  /** この会話に主人が指定したプロジェクト（会話ごとの指定。主人の言葉があったときだけ） */
+  pin?: string | null;
+  /** フックが知らせた、この会話の作業ディレクトリ（Claude Code などのフックの cwd） */
+  sessionCwd?: string | null;
+  /** MCP クライアントの roots（roots/list。file:// のパス） */
+  roots?: string[];
+  /** エージェントの推定（note の --project-guess / project） */
+  guess?: string | null;
+  env?: NodeJS.ProcessEnv;
+};
+
+export type NoteProjectChoice = {
+  /** hold のときは null（どのプロジェクトにも入れない） */
+  project: string | null;
+  via: NoteVia;
+  dir?: string | null;
+  /** 推定を受け付けなかったとき、その理由 */
+  rejectedGuess?: { project: string; reason: "unknown" | "not_accepted" };
+};
+
+function dirMatch(state: RelayState, dir: string | null | undefined): { project: string; dir: string } | null {
+  if (!dir) return null;
+  let canonical: string;
+  try {
+    canonical = canonicalDir(dir);
+  } catch {
+    return null;
+  }
+  const m = matchProject(state, canonical);
+  return m.dir ? { project: m.project, dir: m.dir } : null;
+}
+
+/** 推定を受け付けるプロジェクトか（acceptInference が false なら受け付けない） */
+export function acceptsInference(state: RelayState, name: string): boolean {
+  const p = findProject(state, name);
+  return !!p && p.acceptInference !== false;
+}
+
+/**
+ * メモのプロジェクトを決める。先に当てはまったものを使う:
+ * 1. 主人の規則: SOUIEBA_PROJECT（環境変数）・ディレクトリ（souieba note を実行した場所）・MCP クライアント
+ * 2. 会話ごとの指定（pin。主人が「この会話は仕事」と言ったとき）
+ * 3. 作業場所: フックが知らせた会話の作業ディレクトリ・MCP の roots（主人が結び付けたディレクトリと照らす）
+ * 4. エージェントの推定（そのプロジェクトが acceptInference のときだけ。「推定」の印が付く）
+ * 5. どれでもなければ unresolved の設定（default: 既定のプロジェクト / hold: 保留）
+ * どの手順で決めたかを via で返す（メモに記録する）
+ */
+export function resolveNoteProject(state: RelayState, ctx: NoteContext = {}): NoteProjectChoice {
+  const forced = (ctx.env ?? process.env).SOUIEBA_PROJECT?.trim();
+  if (forced) {
+    const p = findProject(state, forced);
+    if (!p) throw new RelayStateError(`SOUIEBA_PROJECT のプロジェクト「${forced}」はありません（souieba relay project list で確かめられます）`);
+    return { project: p.name, via: "env" };
+  }
+  const d = dirMatch(state, ctx.cwd);
+  if (d) return { project: d.project, via: "rule-dir", dir: d.dir };
+  const client = ctx.client?.trim();
+  if (client) {
+    const pr = state.clients?.[client];
+    if (pr && state.projects[pr]) return { project: pr, via: "rule-client" };
+  }
+  if (ctx.pin) {
+    const p = findProject(state, ctx.pin);
+    if (p) return { project: p.name, via: "pin" };
+  }
+  const sc = dirMatch(state, ctx.sessionCwd);
+  if (sc) return { project: sc.project, via: "cwd", dir: sc.dir };
+  for (const r of ctx.roots ?? []) {
+    const m = dirMatch(state, r);
+    if (m) return { project: m.project, via: "roots", dir: m.dir };
+  }
+  let rejectedGuess: NoteProjectChoice["rejectedGuess"];
+  const guess = ctx.guess?.trim();
+  if (guess) {
+    const p = findProject(state, guess);
+    if (p && p.acceptInference !== false) return { project: p.name, via: "inferred" };
+    rejectedGuess = { project: guess, reason: p ? "not_accepted" : "unknown" };
+  }
+  return state.unresolved === "hold" ? { project: null, via: "hold", rejectedGuess } : { project: DEFAULT_PROJECT, via: "default", rejectedGuess };
+}
+
+// ---- 会話ごとの指定（pin）と、フックが知らせた会話の作業ディレクトリ ----
+
+/** 会話ごとの記録を残す期間。会話が終わっても消す手がかりがないので、期限で消す */
+export const SESSION_RECORD_TTL_MS = 24 * 3_600_000;
+
+type SessionFile = { v: 1; sessions: Record<string, { pin?: string; pinnedAt?: string; cwd?: string; seenAt: string }> };
+
+const SESSION_KEY_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+export function isSessionKey(k: unknown): k is string {
+  return typeof k === "string" && SESSION_KEY_RE.test(k);
+}
+
+/**
+ * 会話（Claude Code などのフックの session_id）ごとの、主人の指定と作業ディレクトリ。人の状態ディレクトリに置く。
+ * MCP は会話ごとに別のプロセスなので、ここは使わずプロセスの中に持つ
+ */
+export class SessionStore {
+  readonly path: string;
+
+  constructor(dir: string) {
+    this.path = join(dir, "sessions.json");
+  }
+
+  private load(now: Date): SessionFile {
+    const f = readStateJson<SessionFile>(this.path);
+    const file: SessionFile = f && f.v === 1 && f.sessions ? f : { v: 1, sessions: {} };
+    const cutoff = new Date(now.getTime() - SESSION_RECORD_TTL_MS).toISOString();
+    for (const [k, v] of Object.entries(file.sessions)) if (!v || v.seenAt < cutoff) delete file.sessions[k];
+    return file;
+  }
+
+  private update(now: Date, fn: (f: SessionFile) => void): void {
+    withFileLock(`${this.path}.lock`, () => {
+      const f = this.load(now);
+      fn(f);
+      writeSecretJson(this.path, f);
+    });
+  }
+
+  get(key: string, now: Date): { pin?: string; cwd?: string } | null {
+    if (!isSessionKey(key)) return null;
+    const v = this.load(now).sessions[key];
+    return v ? { pin: v.pin, cwd: v.cwd } : null;
+  }
+
+  /** フックから: その会話の作業ディレクトリを覚える */
+  touch(key: string, cwd: string | null, now: Date): void {
+    if (!isSessionKey(key)) return;
+    this.update(now, (f) => {
+      const cur = f.sessions[key] ?? { seenAt: now.toISOString() };
+      f.sessions[key] = { ...cur, ...(cwd ? { cwd } : {}), seenAt: now.toISOString() };
+    });
+  }
+
+  /** project が null なら指定を外す */
+  pin(key: string, project: string | null, now: Date): void {
+    if (!isSessionKey(key)) throw new RelayStateError("会話の ID の形式が不正です");
+    this.update(now, (f) => {
+      const cur = f.sessions[key] ?? { seenAt: now.toISOString() };
+      const { pin: _, pinnedAt: __, ...rest } = cur;
+      f.sessions[key] = project ? { ...rest, pin: project, pinnedAt: now.toISOString(), seenAt: now.toISOString() } : { ...rest, seenAt: now.toISOString() };
+    });
+  }
 }

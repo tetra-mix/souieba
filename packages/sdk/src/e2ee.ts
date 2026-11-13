@@ -210,7 +210,7 @@ export class E2eeTransport implements SouiebaTransport {
     return this.inner.release(postId);
   }
 
-  /** 受け取った投稿の検証と復号（docs/public-deployment-plan.md §6.3） */
+  /** 受け取った投稿の検証と復号（docs/architecture.md） */
   private open(
     item: WireInboxItem,
     dir: Directory,
