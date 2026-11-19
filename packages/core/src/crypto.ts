@@ -3,14 +3,13 @@
  * 鍵は JWK の x（公開鍵）・d（秘密鍵）、つまり生の 32 バイトを base64url で扱う。
  */
 import { type KeyObject, createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
+import { b64, unb64 } from "./base64.ts";
 
 export type KeyPair = { pub: string; priv: string };
 type Kind = "ed25519" | "x25519";
 
 const CURVE = { ed25519: "Ed25519", x25519: "X25519" } as const;
 
-const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64url");
-const unb64 = (s: string) => Buffer.from(s, "base64url");
 
 function generate(kind: Kind): KeyPair {
   const { privateKey } = generateKeyPairSync(kind as "ed25519");

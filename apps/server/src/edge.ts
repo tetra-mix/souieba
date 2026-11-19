@@ -5,6 +5,7 @@
  */
 import { getPath } from "hono/utils/url";
 import { POST_BODY_LIMIT, PUBLIC_ROUTES } from "./app.ts";
+import { bearerToken } from "./crypto.ts";
 
 const json = (status: number, code: string, message: string) =>
   new Response(JSON.stringify({ error: { code, message } }), {
@@ -25,7 +26,7 @@ export function edgeGuard(req: Request): Response | null {
   // HEAD は GET と同じ扱い（Hono も GET のルートで応答する）
   const method = req.method === "HEAD" ? "GET" : req.method;
   const isPublic = PUBLIC_ROUTES.includes(`${method} ${path}`);
-  if (!isPublic && !/^Bearer\s+sou_r_[A-Za-z0-9_-]+$/.test(req.headers.get("authorization") ?? "")) {
+  if (!isPublic && bearerToken(req.headers.get("authorization")) === null) {
     return json(401, "unauthorized", "認証に失敗しました");
   }
   return null;

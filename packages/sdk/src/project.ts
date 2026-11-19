@@ -1,3 +1,4 @@
+import { DAY_MS } from "@souieba/core";
 /**
  * 作業しているディレクトリから、プロジェクトを決める（docs/v2-projects.md §3）。
  * - ディレクトリは realpath にしてから比べる（シンボリックリンクで別の名前になっても同じに扱う）
@@ -176,7 +177,7 @@ export function resolveNoteProject(state: RelayState, ctx: NoteContext = {}): No
 // ---- 会話ごとの指定（pin）と、フックが知らせた会話の作業ディレクトリ ----
 
 /** 会話ごとの記録を残す期間。会話が終わっても消す手がかりがないので、期限で消す */
-export const SESSION_RECORD_TTL_MS = 24 * 3_600_000;
+export const SESSION_RECORD_TTL_MS = DAY_MS;
 
 type SessionFile = { v: 1; sessions: Record<string, { pin?: string; pinnedAt?: string; cwd?: string; seenAt: string }> };
 

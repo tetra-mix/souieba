@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   closeSync,
@@ -6,14 +5,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { HOUR_MS, MAX_POST_AGE_MS, floorToHour, sanitizeContent, scanSecrets } from "@souieba/core";
-import { readStateJson, souiebaHome, writeSecretJson } from "./config.ts";
+import { HOUR_MS, MAX_POST_AGE_MS, MINUTE_MS, floorToHour, sanitizeContent, scanSecrets } from "@souieba/core";
+import { readStateJson, souiebaHome, writeSecretFile, writeSecretJson } from "./config.ts";
 
 /**
  * メモのプロジェクトをどこから決めたか（docs/v2-projects.md §3）。
@@ -182,7 +179,7 @@ export class NotesStore {
   private openPeriod(n: Note, now: Date): number | null {
     const start = floorToHour(new Date(n.ts)).getTime();
     // サーバは48時間より古い期間を受け付けないので、少し余裕を持たせる
-    const oldest = now.getTime() - MAX_POST_AGE_MS + 10 * 60_000;
+    const oldest = now.getTime() - MAX_POST_AGE_MS + 10 * MINUTE_MS;
     return start >= floorToHour(now).getTime() || start < oldest ? null : start;
   }
 
@@ -267,9 +264,7 @@ export class NotesStore {
 
   /** 途中で落ちても元のファイルが残るよう、一時ファイルに書いてから置き換える */
   private rewrite(notes: Note[]): void {
-    const tmp = `${this.notesPath}.${process.pid}.${randomUUID()}.tmp`;
-    writeFileSync(tmp, notes.map((n) => `${JSON.stringify(n)}\n`).join(""), { mode: 0o600 });
-    renameSync(tmp, this.notesPath);
+    writeSecretFile(this.notesPath, notes.map((n) => `${JSON.stringify(n)}\n`).join(""));
   }
 
   /** 48時間より古いメモと記録を消す。消すものがなければ書き直さない */

@@ -112,14 +112,22 @@ export function readStateJson<T>(path: string): T | null {
   }
 }
 
-/** トークンを含むので所有者だけが読める権限（600）で書く */
+/** トークンを含む JSON を、所有者だけが読める権限（600）で書く */
 export function writeSecretJson(path: string, value: unknown): void {
+  writeSecretFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/**
+ * 所有者だけが読める権限（600）で、途中で落ちても元のファイルが残るように書く（一時ファイルに書いてから置き換える）。
+ * メモ（notes.jsonl）のように JSON 以外の中身にも使う
+ */
+export function writeSecretFile(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   // 同時に動く別の souieba と一時ファイルがぶつからないよう、名前を毎回変える
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const fd = openSync(tmp, "w", 0o600);
   try {
-    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+    writeFileSync(fd, content);
     // 置き換えたあとに落ちても中身が空にならないよう、ディスクに書いてから rename する
     fsyncSync(fd);
   } finally {

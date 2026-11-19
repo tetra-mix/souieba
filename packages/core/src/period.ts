@@ -1,4 +1,6 @@
-export const HOUR_MS = 60 * 60 * 1000;
+export const MINUTE_MS = 60 * 1000;
+export const HOUR_MS = 60 * MINUTE_MS;
+export const DAY_MS = 24 * HOUR_MS;
 
 /** メモと近況を扱う最古の期間（Tell の対象期間と同じ48時間） */
 export const MAX_POST_AGE_MS = 48 * HOUR_MS;
