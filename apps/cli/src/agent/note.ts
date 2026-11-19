@@ -5,9 +5,10 @@ import {
   type NoteProjectChoice,
   RelayStateError,
   resolveNoteProject,
-  resolveRelayAgent,
 } from "@souieba/sdk";
 import { NeedsApprovalError, approvalMessage, relayParts } from "../relay.ts";
+import { requirePerson } from "../person.ts";
+import { isInteractive } from "../tty.ts";
 import { OpError, projectLabel, relayOps } from "../relay-ops/index.ts";
 import { sessionGuide } from "../integrations/shared/guide.ts";
 import { type AgentFlags, type AgentResult, context, out, parsePeriod, print, rewriteRequest, shq } from "./context.ts";
@@ -102,13 +103,12 @@ export function inferenceHint(flags: AgentFlags): string | null {
  * relay の設定と同じく、--yes（エージェント）か端末での確認が要る
  */
 export async function noteMove(flags: AgentFlags, to: string, opts: { from?: string; periodStart?: string; yes?: boolean; held?: boolean; ts?: string }): Promise<void> {
-  const r = resolveRelayAgent();
-  if (!r) throw new Error("Person がありません。souieba init <Relay の URL> を実行してください");
+  const r = requirePerson();
   const parts = relayParts(r, flags.now);
   const ops = relayOps({ parts, selfId: r.personId, now: flags.now });
   const periodStart = opts.periodStart ? parsePeriod(opts.periodStart).periodStart : undefined;
   const change = ops.noteMove(to, { from: opts.from, periodStart, held: opts.held, ts: opts.ts });
-  const interactive = !!process.stdin.isTTY && !!process.stdout.isTTY;
+  const interactive = isInteractive();
   if (change.widens && !opts.yes) {
     if (!interactive) {
       const cmd = [

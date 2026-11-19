@@ -1,3 +1,4 @@
+import { HOUR_MS } from "@souieba/core";
 /** エージェントが Skill やフックから呼ぶコマンド（tell・told・release・note・compose・publish・hook・mcp） */
 import * as agentCmd from "../agent/index.ts";
 import { HOOK_TARGETS, hookOutput, isHookTarget } from "../integrations/hook/index.ts";
@@ -69,7 +70,7 @@ export async function publishCommand({ sub, rest, flags, values }: CommandContex
     purpose: values.purpose,
     nuance: values.nuance,
     context: values.context,
-    useTtlMs: hours !== undefined ? hours * 3_600_000 : undefined,
+    useTtlMs: hours !== undefined ? hours * HOUR_MS : undefined,
     reshare: values["allow-reshare"] ? "allow" : "deny",
     project: values.project,
   });

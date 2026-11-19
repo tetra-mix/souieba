@@ -1,6 +1,7 @@
 /** 主人が使うコマンド（init・relay・doctor） */
 import { initCommand as createPerson } from "../person.ts";
-import { NeedsApprovalError, OwnerOnlyError, isInteractive, relayCommand as runRelay, ttyAsk } from "../relay.ts";
+import { NeedsApprovalError, OwnerOnlyError, relayCommand as runRelay, ttyAsk } from "../relay.ts";
+import { isInteractive } from "../tty.ts";
 import { skillVersionAdvice, installedSkills } from "../skill.ts";
 import { latestVersion, newerThanCurrent, updateAdvice } from "../update-check.ts";
 import { type CommandContext, log, testableNow } from "./context.ts";

@@ -13,11 +13,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { AgentFlags } from "../../agent/index.ts";
+import { text } from "./result.ts";
 import { NeedsApprovalError, OwnerOnlyError, type RelayArgs, relayCommand } from "../../relay.ts";
-
-function text(t: string, isError = false): CallToolResult {
-  return { content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) };
-}
 
 /** 広げる操作を含むツールの説明に添える注意 */
 const WIDEN_RULE =

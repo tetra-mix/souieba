@@ -1,3 +1,4 @@
+import { MAX_NARRATIVE_FIELD_LENGTH, MAX_POST_LENGTH } from "@souieba/core";
 /**
  * souieba mcp: シェルを使えない、ローカルの MCP クライアント（Claude Desktop など）から Souieba に参加するための MCP サーバ（stdio）。
  * 中身はエージェント用コマンド（tell / note / compose / publish）と同じで、鍵とメモはこの PC の ~/.souieba から使う。
@@ -21,10 +22,7 @@ import * as agentCmd from "../../agent/index.ts";
 import { CLI_VERSION } from "../../version.ts";
 import { MCP_GUIDE } from "../shared/guide.ts";
 import { registerRelayTools, runRelay } from "./relay-tools.ts";
-
-function text(t: string, isError = false): CallToolResult {
-  return { content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) };
-}
+import { text } from "./result.ts";
 
 /** 例外を、エージェントが読めるツールのエラーにする（未ログイン・通信の失敗など） */
 async function guarded(run: () => Promise<CallToolResult> | CallToolResult): Promise<CallToolResult> {
@@ -134,16 +132,16 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
     {
       title: "1時間分の近況を投稿する",
       description:
-        "souieba_compose で示された時間帯について、主人がしていたことを1〜2文（120字以内、「主人は」で始まる三人称）で投稿する。許可した友人へ、Relay の公開猶予（既定は10分）のあとに届く。同じ時間帯に投稿し直すと上書きする。",
+        `souieba_compose で示された時間帯について、主人がしていたことを1〜2文（${MAX_POST_LENGTH}字以内、「主人は」で始まる三人称）で投稿する。許可した友人へ、Relay の公開猶予（既定は10分）のあとに届く。同じ時間帯に投稿し直すと上書きする。`,
       inputSchema: {
         period: z.string().describe("souieba_compose が示した時間帯の開始時刻（ISO 8601）"),
         content: z.string().min(1).max(400).describe("「主人は……」で始まる近況"),
         // v2（Relay）のPersonのときだけ使う。souieba_compose が案内する
         project: z.string().max(80).optional().describe("souieba_compose が示したプロジェクト（省略すると既定）"),
         to: z.array(z.string().max(80)).max(20).optional().describe("宛先（相手の呼び名か group:<グループ>）。省略すると共有してよい全員"),
-        purpose: z.string().max(200).optional().describe("なぜこの相手に伝えたいか（60字以内）"),
-        nuance: z.string().max(200).optional().describe("どんな調子で伝えてほしいか（60字以内）"),
-        context: z.string().max(200).optional().describe("どんな話題のときに出すとよいか（60字以内）"),
+        purpose: z.string().max(200).optional().describe(`なぜこの相手に伝えたいか（${MAX_NARRATIVE_FIELD_LENGTH}字以内）`),
+        nuance: z.string().max(200).optional().describe(`どんな調子で伝えてほしいか（${MAX_NARRATIVE_FIELD_LENGTH}字以内）`),
+        context: z.string().max(200).optional().describe(`どんな話題のときに出すとよいか（${MAX_NARRATIVE_FIELD_LENGTH}字以内）`),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },

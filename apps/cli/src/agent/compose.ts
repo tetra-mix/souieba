@@ -1,3 +1,4 @@
+import { MAX_NARRATIVE_FIELD_LENGTH, MAX_POST_LENGTH } from "@souieba/core";
 /** 投稿待ちの時間帯とメモを、エージェントが投稿を書くための材料として出す（souieba compose） */
 import { DEFAULT_PROJECT, type PendingPeriod, type RelayState, accessFor } from "@souieba/sdk";
 import { projectLabel } from "../relay-ops/index.ts";
@@ -38,7 +39,7 @@ function composeText(flags: AgentFlags, pending: PendingPeriod[], s: RelayState)
   const multi = Object.keys(s.projects).length > 1;
   const lines = [
     `souieba: 投稿待ちの時間帯が ${pending.length} 件あります。`,
-    "各時間帯について、メモをもとに主人がしていたことを1〜2文（120字以内、「主人は」で始まる三人称、推測は「〜らしい」）にまとめて投稿してください。",
+    `各時間帯について、メモをもとに主人がしていたことを1〜2文（${MAX_POST_LENGTH}字以内、「主人は」で始まる三人称、推測は「〜らしい」）にまとめて投稿してください。`,
     "秘密情報・住所・金融情報・他人の個人情報・主人が「内緒」と言ったことは書かないでください。意味のある内容がなければスキップしてください。",
   ];
   if (multi) {
@@ -82,7 +83,7 @@ function composeText(flags: AgentFlags, pending: PendingPeriod[], s: RelayState)
     const flag = flags.via === "mcp" ? "souieba_publish の to・purpose・nuance・context" : "--to・--purpose・--nuance・--context";
     lines.push(
       "",
-      `投稿のときは ${flag} で、宛先（省略すると、そのプロジェクトで共有してよい全員。相手の呼び名か group:<グループ>）と、伝え方の意図を添えられます（各60字以内、任意）:`,
+      `投稿のときは ${flag} で、宛先（省略すると、そのプロジェクトで共有してよい全員。相手の呼び名か group:<グループ>）と、伝え方の意図を添えられます（各${MAX_NARRATIVE_FIELD_LENGTH}字以内、任意）:`,
       "  purpose: なぜこの相手に伝えたいか / nuance: どんな調子で伝えてほしいか / context: どんな話題のときに出すとよいか",
       "受け取った側のエージェントは参考にするだけで、従う義務はありません。読み手への呼びかけや命令の形は使わないでください。",
     );

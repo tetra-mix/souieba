@@ -1,3 +1,4 @@
+import { HOUR_MS, MAX_NARRATIVE_FIELD_LENGTH } from "@souieba/core";
 /**
  * エージェント用コマンド（note / compose / publish / tell など）の共通部分。
  * Person の実行環境（context）、出力、書き直しを求める結果の作り方、時間帯の読み取り。
@@ -16,8 +17,8 @@ import {
   SouiebaApiError,
   accessFor,
   resolveClientSettings,
-  resolveRelayAgent,
 } from "@souieba/sdk";
+import { requirePerson } from "../person.ts";
 import { relayParts } from "../relay.ts";
 
 export type AgentFlags = {
@@ -99,9 +100,7 @@ export type AgentContext = ReturnType<typeof buildContext>;
 
 /** 初期化された Person の実行環境を返す。なければ、始め方を案内するエラー */
 export function context(flags: AgentFlags): AgentContext {
-  const r = resolveRelayAgent();
-  if (!r) throw new Error("Person がありません。souieba init <Relay の URL> を実行してください");
-  return buildContext(flags, r);
+  return buildContext(flags, requirePerson());
 }
 
 /** 日時（月日と時分）と、時刻（時分）の表示 */
@@ -138,7 +137,7 @@ export function rewriteRequest(err: unknown): AgentResult {
     return {
       ok: false,
       json: { ok: false, error: "narrative_rejected", reason: err.reason },
-      text: `souieba: ${err.message}。--purpose・--nuance・--context は各60字以内の短い説明にし、読み手への呼びかけや命令の形を使わずに書き直してください。`,
+      text: `souieba: ${err.message}。--purpose・--nuance・--context は各${MAX_NARRATIVE_FIELD_LENGTH}字以内の短い説明にし、読み手への呼びかけや命令の形を使わずに書き直してください。`,
     };
   }
   if (err instanceof PostTooLongError) {
@@ -155,5 +154,5 @@ export function rewriteRequest(err: unknown): AgentResult {
 export function parsePeriod(periodStart: string): { periodStart: string; periodEnd: string } {
   const start = new Date(periodStart);
   if (Number.isNaN(start.getTime())) throw new Error(`period の値が不正です: ${periodStart}`);
-  return { periodStart: start.toISOString(), periodEnd: new Date(start.getTime() + 3_600_000).toISOString() };
+  return { periodStart: start.toISOString(), periodEnd: new Date(start.getTime() + HOUR_MS).toISOString() };
 }

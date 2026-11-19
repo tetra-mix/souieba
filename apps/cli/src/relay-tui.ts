@@ -18,6 +18,7 @@
 import { emitKeypressEvents } from "node:readline";
 import type { DelegationScope, Note, RelayConnection, RelayState, ResolvedRelayAgent } from "@souieba/sdk";
 import { DEFAULT_PROJECT, accessFor, activeDelegations, scopeKey } from "@souieba/sdk";
+import { isInteractive } from "./tty.ts";
 import { type Change, describeScope, parseTerm, projectLabel, relayOps } from "./relay-ops/index.ts";
 import type { relayParts } from "./relay.ts";
 
@@ -752,7 +753,7 @@ export function createRelayTui(opts: TuiOptions) {
 }
 
 export async function runRelayTui(opts: TuiOptions): Promise<void> {
-  if (!opts.input && !(process.stdin.isTTY && process.stdout.isTTY)) {
+  if (!opts.input && !isInteractive()) {
     throw new Error("souieba relay ui は端末で実行してください（主人が自分で操作する画面です。エージェントは souieba relay の各コマンドを使います）");
   }
   const ui = createRelayTui(opts);

@@ -1,3 +1,4 @@
+import { DAY_MS, HOUR_MS } from "@souieba/core";
 import { homedir } from "node:os";
 import { resolve, sep } from "node:path";
 import { type Contact, DEFAULT_PROJECT, type DelegationScope, type LocalGroup, type Project, type RelayState, allowedSet, canonicalDir, findContact, findGroup, findProject } from "@souieba/sdk";
@@ -16,7 +17,7 @@ export type Change = {
 };
 
 /** 任せる期限の選び方（TUI・CLI 共通） */
-export const DELEGATION_TERMS = { "24h": 24 * 3_600_000, "7d": 7 * 86_400_000, forever: null } as const;
+export const DELEGATION_TERMS = { "24h": 24 * HOUR_MS, "7d": 7 * DAY_MS, forever: null } as const;
 export type DelegationTerm = keyof typeof DELEGATION_TERMS;
 
 export function parseTerm(v: string | undefined): DelegationTerm {

@@ -1,5 +1,5 @@
 /** 1時間分の投稿を、Relay へ暗号化して送る（souieba publish） */
-import { periodOf } from "@souieba/core";
+import { periodOf, DAY_MS } from "@souieba/core";
 import { DEFAULT_PROJECT, NoRecipientsError, type RelayPublishOptions } from "@souieba/sdk";
 import { projectLabel } from "../relay-ops/index.ts";
 import { type AgentContext, type AgentFlags, type AgentResult, context, fmt, hm, parsePeriod, print, rewriteRequest } from "./context.ts";
@@ -54,7 +54,7 @@ async function sendPost(
   ctx.parts.state.update((s) => {
     const t = at.toISOString();
     s.sent = Object.fromEntries(Object.entries(s.sent ?? {}).filter(([, v]) => v.until > t));
-    s.sent[r.postId] = { project, inferred, at: t, until: new Date(at.getTime() + 7 * 86_400_000).toISOString() };
+    s.sent[r.postId] = { project, inferred, at: t, until: new Date(at.getTime() + 7 * DAY_MS).toISOString() };
   });
   const extra: string[] = [];
   if (r.denied.length) extra.push(`共有を許可していない ${r.denied.length} 人には送っていません`);

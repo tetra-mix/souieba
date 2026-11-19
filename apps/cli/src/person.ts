@@ -15,14 +15,25 @@ import {
 import {
   type ClientConfig,
   type DeviceEntry,
+  type ResolvedRelayAgent,
   RelayHttp,
   deviceDir,
   loadClientConfig,
+  resolveRelayAgent,
   saveClientConfig,
 } from "@souieba/sdk";
+import { usageOf } from "./commands/catalog.ts";
 import { CLI_VERSION } from "./version.ts";
 
-import { usageOf } from "./commands/catalog.ts";
+/** Person がまだないときの案内 */
+export const NO_PERSON_MESSAGE = `Person がありません。${usageOf("init")} を実行してください`;
+
+/** 初期化された Person（と内部の端末）を返す。なければ、始め方を案内するエラー */
+export function requirePerson(): ResolvedRelayAgent {
+  const r = resolveRelayAgent();
+  if (!r) throw new Error(NO_PERSON_MESSAGE);
+  return r;
+}
 
 export type PersonIo = { log: (line: string) => void; now: () => Date };
 

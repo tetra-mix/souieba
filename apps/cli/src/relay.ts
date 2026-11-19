@@ -32,8 +32,8 @@ import {
   scopeKey,
   resolveNoteProject,
   resolveProject,
-  resolveRelayAgent,
 } from "@souieba/sdk";
+import { NO_PERSON_MESSAGE, requirePerson } from "./person.ts";
 import { renderRelayUsage, usageFamily, usageOf } from "./commands/catalog.ts";
 import { type Change, OpError, describeScope, parseScope, parseTerm, projectLabel, relayOps, requireProject, who } from "./relay-ops/index.ts";
 import { CLI_VERSION } from "./version.ts";
@@ -79,15 +79,8 @@ export async function ttyAsk(summary: string): Promise<boolean> {
   }
 }
 
-export const isInteractive = () => !!process.stdin.isTTY && !!process.stdout.isTTY;
 
 export const RELAY_USAGE = renderRelayUsage({ topics: "", hooks: "" });
-
-function requireRelayAgent(): ResolvedRelayAgent {
-  const r = resolveRelayAgent();
-  if (!r) throw new Error("Person がありません。souieba init <Relay の URL> を実行してください");
-  return r;
-}
 
 /** v2 の操作に使う部品。状態とRelayの接続はPersonごとに扱う。 */
 export function relayParts(r: ResolvedRelayAgent, now: () => Date) {
@@ -150,11 +143,11 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     return;
   }
   if (sub === "init") {
-    io.log("Person がありません。souieba init <Relay の URL> で始めてください。");
+    io.log(NO_PERSON_MESSAGE);
     return;
   }
 
-  const r = requireRelayAgent();
+  const r = requirePerson();
   const p = relayParts(r, io.now);
   const cmd = commandLine(a.raw);
   const ops = relayOps({ parts: p, selfId: r.personId, now: io.now });
