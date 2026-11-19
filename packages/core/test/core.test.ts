@@ -4,7 +4,6 @@ import {
   canTell,
   compareVersions,
   maskSecrets,
-  periodOf,
   findInstructionLike,
   sanitizeContent,
   scanSecrets,
@@ -13,7 +12,6 @@ import {
 } from "../src/index.ts";
 
 const NOW = new Date("2026-10-05T14:20:00Z");
-const ago = (min: number) => new Date(NOW.getTime() - min * 60_000).toISOString();
 
 describe("session", () => {
   it("10分空くと新しい Session になり、Tell 回数がリセットされる", () => {

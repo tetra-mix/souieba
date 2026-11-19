@@ -17,7 +17,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import * as agentCmd from "../../agent.ts";
+import * as agentCmd from "../../agent/index.ts";
 import { CLI_VERSION } from "../../version.ts";
 import { MCP_GUIDE } from "../shared/guide.ts";
 import { registerRelayTools, runRelay } from "./relay-tools.ts";

@@ -1,5 +1,5 @@
 import { parseArgs } from "node:util";
-import * as agentCmd from "./agent.ts";
+import * as agentCmd from "./agent/index.ts";
 import { NeedsApprovalError, OwnerOnlyError, isInteractive, relayCommand, ttyAsk } from "./relay.ts";
 import {
   SouiebaApiError,

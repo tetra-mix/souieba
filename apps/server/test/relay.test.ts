@@ -326,7 +326,7 @@ describe("v2 Relay: 検索と接続", () => {
 
 describe("v2 Relay: メッセージの配送", () => {
   it("接続している相手にだけ届き、受信者は自分の分の鍵だけを受け取る", async () => {
-    const { h, member, connect, send, inbox } = relayHarness();
+    const { member, connect, send, inbox } = relayHarness();
     const a = await member();
     const b = await member();
     const c = await member();

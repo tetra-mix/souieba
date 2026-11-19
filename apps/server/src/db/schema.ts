@@ -3,7 +3,7 @@
  * v1（アカウント・グループ・投稿）の表は 0005 で落とした。0000〜0004 は、その表がある古い DB を移行するために残している（test/db.test.ts で確かめる）。
  */
 import { sql } from "drizzle-orm";
-import { check, index, integer, primaryKey, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
+import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const instanceMeta = sqliteTable("instance_meta", {
   key: text().primaryKey(),

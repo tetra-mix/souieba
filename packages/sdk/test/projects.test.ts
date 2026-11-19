@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PROJECT,
   NotesStore,
-  RelayStateStore,
   accessFor,
   canonicalDir,
   contactFrom,
