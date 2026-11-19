@@ -5,7 +5,7 @@
  * 「連絡先」のタブには、全体のもの（届いた接続要求・連絡先の呼び名・グループ・ブロック）をまとめる（docs/v2-projects.md §6）。
  * 「保留と推定」のタブには、どのプロジェクトにも決まらず保留にしたメモと、エージェントの推定で決めたメモ、メモの振り分けの規則
  * （MCP クライアントごとの規則・決まらないときの扱い）を表示する。
- * 操作の中身は CLI と同じ relay-ops.ts を使う。共有を広げる操作と、取り消しにくい操作は、画面の中で y/n を聞く。
+ * 操作の中身は CLI と同じ relay-ops/ を使う。共有を広げる操作と、取り消しにくい操作は、画面の中で y/n を聞く。
  * エージェントに範囲を任せる（delegation）のは主人だけなので、ここ（とTTYでの y/N）が入口になる。
  * プロジェクトのタブに、そのプロジェクトの範囲（共有先・共有方針・ディレクトリ）を、「連絡先」のタブに全体の範囲（接続要求の承認・グループのメンバー）を出す。
  * 外部のライブラリは使わない（CLI を依存なしで配るため）。
@@ -18,7 +18,7 @@
 import { emitKeypressEvents } from "node:readline";
 import type { DelegationScope, Note, RelayConnection, RelayState, ResolvedRelayAgent } from "@souieba/sdk";
 import { DEFAULT_PROJECT, accessFor, activeDelegations, scopeKey } from "@souieba/sdk";
-import { type Change, describeScope, parseTerm, projectLabel, relayOps } from "./relay-ops.ts";
+import { type Change, describeScope, parseTerm, projectLabel, relayOps } from "./relay-ops/index.ts";
 import type { relayParts } from "./relay.ts";
 
 type Key = { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean; sequence?: string };

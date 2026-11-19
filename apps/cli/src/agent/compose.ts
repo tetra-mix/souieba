@@ -1,6 +1,6 @@
 /** 投稿待ちの時間帯とメモを、エージェントが投稿を書くための材料として出す（souieba compose） */
 import { DEFAULT_PROJECT, type PendingPeriod, type RelayState, accessFor } from "@souieba/sdk";
-import { projectLabel } from "../relay-ops.ts";
+import { projectLabel } from "../relay-ops/index.ts";
 import { type AgentFlags, type AgentResult, context, fmt, hm, nextSteps, parsePeriod, pendingPeriods, print } from "./context.ts";
 
 /** 投稿待ちの時間帯と、その材料のメモを表示する。--skip で投稿しない時間帯を確定する */

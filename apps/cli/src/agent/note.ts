@@ -8,7 +8,7 @@ import {
   resolveRelayAgent,
 } from "@souieba/sdk";
 import { NeedsApprovalError, approvalMessage, relayParts } from "../relay.ts";
-import { OpError, projectLabel, relayOps } from "../relay-ops.ts";
+import { OpError, projectLabel, relayOps } from "../relay-ops/index.ts";
 import { sessionGuide } from "../integrations/shared/guide.ts";
 import { type AgentFlags, type AgentResult, context, out, parsePeriod, print, rewriteRequest, shq } from "./context.ts";
 

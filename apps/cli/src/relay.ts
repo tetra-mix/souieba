@@ -34,7 +34,7 @@ import {
   resolveProject,
   resolveRelayAgent,
 } from "@souieba/sdk";
-import { type Change, OpError, describeScope, parseScope, parseTerm, projectLabel, relayOps, requireProject, who } from "./relay-ops.ts";
+import { type Change, OpError, describeScope, parseScope, parseTerm, projectLabel, relayOps, requireProject, who } from "./relay-ops/index.ts";
 import { CLI_VERSION } from "./version.ts";
 
 export type RelayIo = {

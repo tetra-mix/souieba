@@ -1,7 +1,7 @@
 /** 1時間分の投稿を、Relay へ暗号化して送る（souieba publish） */
 import { periodOf } from "@souieba/core";
 import { DEFAULT_PROJECT, NoRecipientsError, type RelayPublishOptions } from "@souieba/sdk";
-import { projectLabel } from "../relay-ops.ts";
+import { projectLabel } from "../relay-ops/index.ts";
 import { type AgentContext, type AgentFlags, type AgentResult, context, fmt, hm, parsePeriod, print, rewriteRequest } from "./context.ts";
 
 /** periodArg: previous | current | 時間帯の開始時刻（ISO 8601） */
