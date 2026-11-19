@@ -7,7 +7,7 @@ import { ApiError } from "./errors.ts";
 import { isLoopback, isPrivateOrLoopback, normalizeIp } from "./net.ts";
 import { RELAY_PUBLIC_ROUTES, isLargeRelayBody, relayRoutes } from "./relay-routes.ts";
 
-export const VERSION = "2.1.0";
+export const VERSION = "2.2.0";
 
 export type Env = { Variables: { clientIp: string } };
 
