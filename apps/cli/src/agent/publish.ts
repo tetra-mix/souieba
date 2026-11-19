@@ -42,7 +42,7 @@ async function sendPost(
       return {
         ok: false,
         json: { ok: false, error: "no_recipients", denied: err.targets.denied, notConnected: err.targets.notConnected },
-        text: `souieba: ${err.message}。この時間帯は投稿しないことにしました。ユーザーへの回答のあとで、主人に souieba status で共有の設定を確かめるよう伝えてください。あなたが設定を変えてはいけません。`,
+        text: `souieba: ${err.message}。この時間帯は投稿しないことにしました。ユーザーへの回答のあとで、主人に souieba settings で共有の設定を確かめるよう伝えてください。あなたが設定を変えてはいけません。`,
       };
     }
     return rewriteRequest(err);

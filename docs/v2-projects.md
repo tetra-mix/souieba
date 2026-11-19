@@ -37,7 +37,7 @@ v2 の共有設定はPersonごとに1組で、**作業しているディレク�
 |---|---|---|---|
 | 1 | 主人の規則: 環境変数 | `env` | `SOUIEBA_PROJECT=<名前>`（エージェントの起動時に主人が付ける。ないプロジェクトなら断る） |
 | 1 | 主人の規則: ディレクトリ | `rule-dir` | `souieba note` を実行した場所（CLI のカレントディレクトリか `--cwd`）が、結び付けたディレクトリの中 |
-| 1 | 主人の規則: MCP クライアント | `rule-client` | MCP の initialize の `clientInfo.name` を、`souieba client set <名前> <プロジェクト>` で結び付けたもの |
+| 1 | 主人の規則: MCP クライアント | `rule-client` | MCP の initialize の `clientInfo.name` を、`souieba mcp-client set <名前> <プロジェクト>` で結び付けたもの |
 | 2 | 会話ごとの指定（pin） | `pin` | 主人が「この会話は仕事」と言ったときだけ。MCP は `souieba_project_pin`（その MCP の接続のあいだ）、CLI・フックは `souieba project pin <名前> --session <会話の ID>` |
 | 3 | 作業場所: 会話の作業ディレクトリ | `cwd` | フックが知らせた `cwd`（Claude Code・Codex のフックの入力。会話の ID ごとに覚える） |
 | 3 | 作業場所: MCP の roots | `roots` | roots に対応したクライアントの `roots/list`（file:// のもの） |

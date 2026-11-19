@@ -71,10 +71,10 @@ export const CATALOG: CommandSpec[] = [
   },
 
   // ---- relay: 見る ----
-  { name: "id", summary: "自分の ID（友人に伝えて、接続してもらう。同じPersonを使うクライアントで共通）", section: "relay-view" },
+  { name: "me", summary: "自分の ID（友人に伝えて、接続してもらう。同じPersonを使うクライアントで共通）", section: "relay-view" },
   { name: "lookup", args: "<ID>", summary: "ID が Relay にあるかを確かめる", section: "relay-view" },
   { name: "contacts", summary: "接続済みの相手・届いた接続要求・送った接続要求", section: "relay-view" },
-  { name: "status", summary: "設定の一覧（連絡先・グループ・アクセス権限・Policy・メモの振り分けの規則）", section: "relay-view" },
+  { name: "settings", summary: "設定の一覧（連絡先・グループ・アクセス権限・Policy・メモの振り分けの規則）", section: "relay-view" },
   { name: "inbox", summary: "受け取った近況（利用期限内）", section: "relay-view" },
   { name: "sent", summary: "送った近況の配送状態", section: "relay-view" },
   { name: "review", summary: "保留のメモと、推定でプロジェクトを決めたメモ", section: "relay-view" },
@@ -85,7 +85,7 @@ export const CATALOG: CommandSpec[] = [
   { name: "accept", args: "<Person ID> --name <呼び名>", summary: "届いた接続要求を承認する", section: "relay-change" },
   { name: "reject", args: "<Person ID>", summary: "届いた接続要求を断る", section: "relay-change" },
   {
-    name: "rename",
+    name: "nickname",
     args: "<相手> <新しい呼び名>",
     summary: "呼び名を変える（呼び名のない接続済みの相手に付けるのにも使う）",
     section: "relay-change",
@@ -105,7 +105,7 @@ export const CATALOG: CommandSpec[] = [
     section: "relay-change",
   },
   { name: "deny", args: "<相手|group:<グループ>> [--project <名前>]", summary: "共有しない", section: "relay-change" },
-  { name: "unset", args: "<相手|group:<グループ>> [--project <名前>]", summary: "個別の設定を消す", section: "relay-change" },
+  { name: "reset", args: "<相手|group:<グループ>> [--project <名前>]", summary: "個別の設定を消す（グループの設定があればそれに、なければ既定の「共有しない」に戻る）", section: "relay-change" },
   { name: "policy", args: "[--project <名前>]", summary: "共有方針（自然言語）を見る。エージェントが投稿前に読んで判断する", section: "relay-change" },
   { name: "policy set", args: "<方針の文章> [--project <名前>]", summary: "共有方針を書く", section: "relay-change" },
   { name: "policy clear", args: "[--project <名前>]", summary: "共有方針を消す", section: "relay-change" },
@@ -164,13 +164,13 @@ export const CATALOG: CommandSpec[] = [
   { name: "project rename", args: "<名前> <新しい名前>", summary: "名前を変える（既定は変えられない）", section: "relay-project" },
   { name: "project which", args: "[<ディレクトリ>]", summary: "そのディレクトリ（省略時はカレント）がどのプロジェクトか", section: "relay-project" },
   {
-    name: "client",
+    name: "mcp-client",
     args: "[list]",
     summary: "MCP のクライアント（Claude Desktop など）ごとに、メモを入れるプロジェクトの規則",
     section: "relay-project",
   },
-  { name: "client set", args: "<クライアント名> <プロジェクト>", summary: "規則を作る", section: "relay-project" },
-  { name: "client unset", args: "<クライアント名>", summary: "規則を消す", section: "relay-project" },
+  { name: "mcp-client set", args: "<クライアント名> <プロジェクト>", summary: "規則を作る", section: "relay-project" },
+  { name: "mcp-client unset", args: "<クライアント名>", summary: "規則を消す", section: "relay-project" },
   {
     name: "unresolved",
     args: "default|hold",

@@ -86,7 +86,7 @@ export async function tellResult(
   }
   for (const id of notices.unnamedPeers) {
     lines.push(
-      `souieba: 接続済みの ${id} にまだ呼び名がないため、この人からの近況を受け取れていません。ユーザーへの回答のあとで、主人に souieba rename ${id} <呼び名> を頼んでください。`,
+      `souieba: 接続済みの ${id} にまだ呼び名がないため、この人からの近況を受け取れていません。ユーザーへの回答のあとで、主人に souieba nickname ${id} <呼び名> を頼んでください。`,
     );
   }
   if (notices.settingsChanges.length > 0) {

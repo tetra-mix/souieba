@@ -81,7 +81,7 @@ describe("v2: Person単位のIDと共有", () => {
     const a = await souieba("alice", "", ["init", baseUrl, "--name", "alice"]);
     expect(a.code).toBe(0);
     const aliceId = idOf(a.out);
-    expect((await souieba("alice", "", ["id"])).out).toContain(aliceId);
+    expect((await souieba("alice", "", ["me"])).out).toContain(aliceId);
 
     const bobId = idOf((await souieba("bob", "", ["init", baseUrl, "--name", "bob"])).out);
     await owner("alice", "", ["connect", bobId], "ボブ");
@@ -145,7 +145,7 @@ describe("v2.1: メモのプロジェクトの決め方（CLI とフック）", 
     for (const d of [work, hobby, elsewhere]) mkdirSync(d, { recursive: true });
     await souieba("carol", "", ["init", baseUrl, "--name", "ClaudeC"]);
     const dave = idOf((await souieba("dave", "", ["init", baseUrl, "--name", "ClaudeD"])).out);
-    const carol = idOf((await souieba("carol", "", ["id"])).out);
+    const carol = idOf((await souieba("carol", "", ["me"])).out);
     await owner("carol", "", ["connect", dave], "デイブ");
     await owner("dave", "", ["accept", carol], "キャロル");
     await owner("carol", "", ["project", "add", "仕事", work]);
@@ -236,7 +236,7 @@ describe("v2.1: MCP のメモのプロジェクト（clientInfo・roots・会話
     mkdirSync(lab, { recursive: true });
     await souieba("erin", "", ["init", baseUrl, "--name", "Desktop"]);
     const frank = idOf((await souieba("frank", "", ["init", baseUrl, "--name", "F"])).out);
-    const erin = idOf((await souieba("erin", "", ["id"])).out);
+    const erin = idOf((await souieba("erin", "", ["me"])).out);
     await owner("erin", "", ["connect", frank], "フランク");
     await owner("frank", "", ["accept", erin], "エリン");
     await owner("erin", "", ["project", "add", "研究", lab]);
@@ -264,9 +264,9 @@ describe("v2.1: MCP のメモのプロジェクト（clientInfo・roots・会話
     };
 
     // クライアントの規則（主人が決める）。読書は誰にも共有しないので、既定から移しても広げない
-    expect((await souieba("erin", "", ["client", "set", "claude-ai", "読書"])).code).toBe(0);
+    expect((await souieba("erin", "", ["mcp-client", "set", "claude-ai", "読書"])).code).toBe(0);
     // 日記（フランクに共有）へのクライアントの規則は広げる操作
-    expect((await souieba("erin", "", ["client", "set", "cursor", "日記"])).code).toBe(3);
+    expect((await souieba("erin", "", ["mcp-client", "set", "cursor", "日記"])).code).toBe(3);
 
     const desktop = await start("claude-ai", []);
     try {

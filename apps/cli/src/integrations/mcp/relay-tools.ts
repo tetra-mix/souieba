@@ -48,14 +48,14 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
     {
       title: "共有の設定を見る",
       description:
-        "Relay の共有の設定を見る。view: status（連絡先・グループ・プロジェクトごとの共有先と共有方針・任せている範囲・メモの振り分けの規則）、contacts（接続済みの相手・届いた接続要求・送った接続要求）、projects（プロジェクトとディレクトリ・説明・推定で選べるか）、delegations（主人がエージェントに任せている範囲）、review（保留のメモと推定で決めたメモ）。いつ呼んでもよい。",
-      inputSchema: { view: z.enum(["status", "contacts", "projects", "delegations", "review"]).optional() },
+        "Relay の共有の設定を見る。view: settings（連絡先・グループ・プロジェクトごとの共有先と共有方針・任せている範囲・メモの振り分けの規則）、contacts（接続済みの相手・届いた接続要求・送った接続要求）、projects（プロジェクトとディレクトリ・説明・推定で選べるか）、delegations（主人がエージェントに任せている範囲）、review（保留のメモと推定で決めたメモ）。いつ呼んでもよい。",
+      inputSchema: { view: z.enum(["settings", "contacts", "projects", "delegations", "review"]).optional() },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     ({ view }) =>
       runRelay(
         flags,
-        view === "projects" ? { sub: "project", rest: ["list"] } : view === "delegations" ? { sub: "delegate", rest: ["list"] } : { sub: view ?? "status", rest: [] },
+        view === "projects" ? { sub: "project", rest: ["list"] } : view === "delegations" ? { sub: "delegate", rest: ["list"] } : { sub: view ?? "settings", rest: [] },
       ),
   );
 
@@ -64,18 +64,18 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
     {
       title: "接続と連絡先を変える",
       description:
-        "主人に頼まれたときに、接続を変える。connect（接続を要求。広げる）・accept（届いた接続要求を承認。広げる）・reject（断る）・rename（呼び名を変える）・disconnect（接続を解除）・block（ブロック）・unblock（ブロックを解除。広げる）。" +
+        "主人に頼まれたときに、接続を変える。connect（接続を要求。広げる）・accept（届いた接続要求を承認。広げる）・reject（断る）・nickname（呼び名を変える）・disconnect（接続を解除）・block（ブロック）・unblock（ブロックを解除。広げる）。" +
         WIDEN_RULE,
       inputSchema: {
-        action: z.enum(["connect", "accept", "reject", "rename", "disconnect", "block", "unblock"]),
+        action: z.enum(["connect", "accept", "reject", "nickname", "disconnect", "block", "unblock"]),
         person: z.string().max(80).describe("相手の Person ID（sb_...）か呼び名。connect・accept・reject・unblock は Person ID"),
-        name: z.string().max(80).optional().describe("connect・accept・rename のときの呼び名（主人が決めたもの）"),
+        name: z.string().max(80).optional().describe("connect・accept・nickname のときの呼び名（主人が決めたもの）"),
         confirm,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
     ({ action, person, name, confirm: yes }) =>
-      runRelay(flags, action === "rename" ? { sub: "rename", rest: [person, name ?? ""], yes } : { sub: action, rest: [person], name, yes }),
+      runRelay(flags, action === "nickname" ? { sub: "nickname", rest: [person, name ?? ""], yes } : { sub: action, rest: [person], name, yes }),
   );
 
   server.registerTool(
@@ -83,10 +83,10 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
     {
       title: "プロジェクトの共有先を変える",
       description:
-        "主人に頼まれたときに、プロジェクトの共有先を変える。allow（共有してよい。広げる）・deny（共有しない）・unset（個別の設定を消す。届く相手が増えるなら広げる）。target は呼び名か group:<グループ>。" +
+        "主人に頼まれたときに、プロジェクトの共有先を変える。allow（共有してよい。広げる）・deny（共有しない）・reset（個別の設定を消す。届く相手が増えるなら広げる）。target は呼び名か group:<グループ>。" +
         WIDEN_RULE,
       inputSchema: {
-        rule: z.enum(["allow", "deny", "unset"]),
+        rule: z.enum(["allow", "deny", "reset"]),
         target: z.string().max(80).describe("相手の呼び名か ID、または group:<グループの ID か名前>"),
         project,
         confirm,
@@ -167,8 +167,8 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
     },
     ({ action, name, dirs, new_name, copy_default, text: desc, client, confirm: yes }) => {
       if (action === "unresolved_default" || action === "unresolved_hold") return runRelay(flags, { sub: "unresolved", rest: [action.slice(11)], yes });
-      if (action === "client_set") return runRelay(flags, { sub: "client", rest: ["set", client ?? "", name ?? ""], yes });
-      if (action === "client_unset") return runRelay(flags, { sub: "client", rest: ["unset", client ?? ""], yes });
+      if (action === "client_set") return runRelay(flags, { sub: "mcp-client", rest: ["set", client ?? "", name ?? ""], yes });
+      if (action === "client_unset") return runRelay(flags, { sub: "mcp-client", rest: ["unset", client ?? ""], yes });
       if (action === "describe") return runRelay(flags, { sub: "project", rest: ["describe", name ?? "", desc ?? ""], yes });
       if (action === "inference_on" || action === "inference_off") return runRelay(flags, { sub: "project", rest: ["inference", name ?? "", action === "inference_on" ? "on" : "off"], yes });
       if (action === "which") {

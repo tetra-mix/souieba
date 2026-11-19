@@ -41,7 +41,7 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
   let pin: string | null = null;
   const server = new McpServer({ name: "souieba", version: CLI_VERSION }, { instructions: MCP_GUIDE });
 
-  /** initialize でクライアントが名乗った名前（主人の規則 souieba client set で使う） */
+  /** initialize でクライアントが名乗った名前（主人の規則 souieba mcp-client set で使う） */
   const clientName = () => server.server.getClientVersion()?.name ?? null;
   /** クライアントが roots に対応していれば、その作業フォルダ（file:// のものだけ）。時間がかかれば諦める */
   const roots = async (): Promise<string[]> => {

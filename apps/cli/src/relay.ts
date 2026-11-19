@@ -183,7 +183,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     io.log(delegated ? `${result}（主人に任された範囲での変更です。次の tell で主人に知らされます）` : result);
   };
   // 相手が承認して接続になった人を連絡先に入れてから、呼び名で引けるようにする（通信できなければ手元のまま）
-  if (["status", "rename", "disconnect", "block", "groups", "allow", "deny", "unset"].includes(sub)) {
+  if (["settings", "nickname", "disconnect", "block", "groups", "allow", "deny", "reset"].includes(sub)) {
     await p
       .transport()
       .syncContacts()
@@ -191,7 +191,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
   }
 
   switch (sub) {
-    case "id": {
+    case "me": {
       io.log(`ID: ${r.personId}`);
       io.log(`Relay: ${r.relayUrl}`);
       io.log("友人にこの ID を伝え、souieba connect <この ID> --name <呼び名> で接続を要求してもらってください。");
@@ -216,7 +216,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       for (const c of by("accepted")) {
         const contact = s.contacts[c.peer];
         const shared = Object.keys(s.projects).filter((pr) => accessFor(s, c.peer, pr).allowed).map(projectLabel);
-        io.log(`- ${contact ? contact.name : "（呼び名なし。souieba rename で付けてください）"}  ${c.peer}  共有: ${shared.length ? shared.join("、") : "なし"}`);
+        io.log(`- ${contact ? contact.name : "（呼び名なし。souieba nickname で付けてください）"}  ${c.peer}  共有: ${shared.length ? shared.join("、") : "なし"}`);
       }
       io.log("## 届いた接続要求（承認: souieba accept <ID> --name <呼び名>）");
       for (const c of by("incoming")) io.log(`- ${c.peer}（${c.createdAt}）`);
@@ -225,7 +225,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       if (blocked.length) io.log(`## ブロック中\n${blocked.map((b) => `- ${b}`).join("\n")}`);
       return;
     }
-    case "status": {
+    case "settings": {
       const s = p.state.load();
       io.log(`ID: ${r.personId}（Relay: ${r.relayUrl}）`);
       io.log(`どのプロジェクトにも決まらないメモ: ${s.unresolved === "hold" ? "保留（主人が振り分けるまで送らない）" : "既定のプロジェクトに入れる"}`);
@@ -282,8 +282,8 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       return run(ops.accept(need(rest[0], usageOf("accept")), a.name ?? ""));
     case "reject":
       return run(ops.reject(need(rest[0], usageOf("reject"))));
-    case "rename":
-      return run(ops.rename(need(rest[0], usageOf("rename")), rest.slice(1).join(" ")));
+    case "nickname":
+      return run(ops.rename(need(rest[0], usageOf("nickname")), rest.slice(1).join(" ")));
     case "disconnect":
     case "block":
       return run(ops.disconnect(need(rest[0], usageOf(sub)), { block: sub === "block" }));
@@ -309,8 +309,8 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     }
     case "allow":
     case "deny":
-    case "unset":
-      return run(ops.setAccess(need(rest[0], usageOf(sub)), sub === "unset" ? null : sub, a.project));
+    case "reset":
+      return run(ops.setAccess(need(rest[0], usageOf(sub)), sub === "reset" ? null : sub, a.project));
     case "policy": {
       const action = rest[0];
       if (action === undefined) {
@@ -390,7 +390,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       }
       throw new OpError(usageFamily("project"));
     }
-    case "client": {
+    case "mcp-client": {
       const [action, name, project] = rest;
       if (action === undefined || action === "list") {
         const s = p.state.load();
@@ -399,9 +399,9 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
         for (const [c, pr] of cl) io.log(`- ${c} → ${projectLabel(pr)}`);
         return;
       }
-      if (action === "set") return run(ops.clientRule(need(name, usageOf("client set")), need(project, usageOf("client set"))));
-      if (action === "unset") return run(ops.clientRule(need(name, usageOf("client unset")), null));
-      throw new OpError(usageFamily("client"));
+      if (action === "set") return run(ops.clientRule(need(name, usageOf("mcp-client set")), need(project, usageOf("mcp-client set"))));
+      if (action === "unset") return run(ops.clientRule(need(name, usageOf("mcp-client unset")), null));
+      throw new OpError(usageFamily("mcp-client"));
     }
     case "unresolved": {
       const v = rest[0];
