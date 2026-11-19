@@ -79,7 +79,7 @@ function buildContext(flags: AgentFlags, r: ResolvedRelayAgent) {
 }
 
 /**
- * 投稿待ちの（時間帯, プロジェクト）。共有先が空のプロジェクトのものを自動でスキップにして、数えない（docs/v2-projects.md §4）。
+ * 投稿待ちの（時間帯, プロジェクト）。共有先が空のプロジェクトのものを自動でスキップにして、数えない（docs/design/projects.md §4）。
  * ただし、まだどのプロジェクトでも誰にも共有していないとき（使い始め）は、設定を促すために残す
  */
 export function pendingPeriods(ctx: AgentContext, now: Date): PendingPeriod[] {

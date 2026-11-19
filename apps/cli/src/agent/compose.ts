@@ -27,8 +27,8 @@ export function composeResult(flags: AgentFlags): AgentResult {
 
 /**
  * compose の文面。（時間帯, プロジェクト）ごとに、そのプロジェクトの共有の境界（共有してよい相手・Policy）とメモを1つの塊で出す。
- * Policy の意味の判断はエージェントが行い、宛先の制限は CLI が機械的に行う（docs/architecture.md）。
- * 共有先が空のプロジェクトのメモは、材料にもしないよう出さない（docs/v2-projects.md §4）
+ * Policy の意味の判断はエージェントが行い、宛先の制限は CLI が機械的に行う（docs/design/post-flow.md）。
+ * 共有先が空のプロジェクトのメモは、材料にもしないよう出さない（docs/design/projects.md §4）
  */
 function composeText(flags: AgentFlags, pending: PendingPeriod[], s: RelayState): AgentResult {
   const next = nextSteps(flags);

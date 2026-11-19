@@ -92,7 +92,7 @@ export const LEGACY_MIGRATIONS: string[] = [
   );
   CREATE INDEX deliveries_recipient ON deliveries (recipient_user_id, told_at);
   `,
-  // 2: Friend → グループ、投稿本文 → E2EE の封筒。平文の投稿と Friend 関係は破棄する（docs/architecture.md）
+  // 2: Friend → グループ、投稿本文 → E2EE の封筒。平文の投稿と Friend 関係は破棄する
   `
   DROP TABLE deliveries;
   DROP TABLE posts;

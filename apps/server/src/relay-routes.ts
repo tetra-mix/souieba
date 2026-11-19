@@ -1,6 +1,6 @@
 /**
  * v2 の Relay の API（/v2/*）。端末の署名鍵でチャレンジに署名して得たセッショントークン（sou_r_）で認証する。
- * 設計: docs/architecture.md
+ * 設計: docs/design/relay-protocol.md
  */
 import { MAX_DEVICES_PER_PERSON, MAX_RELAY_RECIPIENTS, type RelayEnvelope, DAY_MS, HOUR_MS, MINUTE_MS } from "@souieba/core";
 import { type Context, Hono } from "hono";
@@ -146,7 +146,7 @@ export function relayRoutes(deps: { db: DB; config: Config; now: () => Date }) {
 
   authed.get("/me", (c) => c.json({ directory: relay.lookup(db, [me(c)])[0] ?? null, deviceId: sess(c).deviceId }));
 
-  // 公開鍵ディレクトリ。返すのは接続に要る鍵だけ（§5.1）
+  // 公開鍵ディレクトリ。返すのは接続に要る鍵だけ（docs/design/relay-protocol.md §3）
   authed.get("/persons/:id", (c) => {
     const e = relay.lookup(db, [c.req.param("id")])[0];
     if (!e) throw new ApiError(404, "not_found", "相手が見つかりません");

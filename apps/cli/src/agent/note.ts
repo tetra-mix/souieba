@@ -13,7 +13,7 @@ import { OpError, projectLabel, relayOps } from "../relay-ops/index.ts";
 import { sessionGuide } from "../integrations/shared/guide.ts";
 import { type AgentFlags, type AgentResult, context, out, parsePeriod, print, rewriteRequest, shq } from "./context.ts";
 
-/** メモを書くときの文脈（プロジェクトを決めるのに使う。docs/v2-projects.md §3） */
+/** メモを書くときの文脈（プロジェクトを決めるのに使う。docs/design/projects.md §3） */
 export type NoteOptions = Omit<NoteContext, "pin" | "sessionCwd" | "env"> & {
   /** 会話の ID（フックの session_id。CLI の --session）。主人の指定（pin）とフックが知らせた作業ディレクトリを引く */
   session?: string | null;
@@ -42,7 +42,7 @@ export function noteProjectFor(flags: AgentFlags, opts: NoteOptions = {}): NoteP
 }
 
 /**
- * 主人の規則・会話の指定・作業場所・エージェントの推定の順にプロジェクトを決める（docs/v2-projects.md §3）。
+ * 主人の規則・会話の指定・作業場所・エージェントの推定の順にプロジェクトを決める（docs/design/projects.md §3）。
  * どれでも決まらなければ、主人の設定どおり既定のプロジェクトか保留
  */
 export function noteResult(flags: AgentFlags, text: string, opts: NoteOptions = {}): AgentResult {

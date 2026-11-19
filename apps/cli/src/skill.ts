@@ -1,7 +1,7 @@
 /**
  * エージェント向けの詳しい手順（souieba skill get <topic>）。
  * 手順はこのパッケージに同梱した Markdown（apps/cli/skill/）だけから読む。サーバからは取らない
- * （サーバの運営者がエージェントに命令を注入できないように。docs/architecture.md）。
+ * （サーバの運営者がエージェントに命令を注入できないように。docs/design/agents.md）。
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
