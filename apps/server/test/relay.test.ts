@@ -316,6 +316,26 @@ describe("v2 Relay: 検索と接続", () => {
     expect(runRetention(h.db, h.clock.now).relay.requests).toBe(1);
   });
 
+  it("ブロックした相手の要求は受信の上限に数えない（見えない要求で枠を埋められない）", async () => {
+    const { h, member } = relayHarness();
+    const victim = await member();
+    const pest = await member();
+    await h.call("PUT", `/v2/blocks/${pest.personId}`, victim.token);
+    await h.call("POST", "/v2/connections", pest.token, { to: victim.personId });
+    // 見える要求を 99 件入れる。ブロックした相手の1件を数えると上限（100）に達して、100件目を断ってしまう
+    for (let i = 0; i < 99; i++) {
+      const other = generatePerson();
+      const ts = h.clock.now.toISOString();
+      h.db.run(sql`INSERT INTO relay_persons (person_id, person_key, created_at, updated_at) VALUES (${other.personId}, ${other.person.pub}, ${ts}, ${ts})`);
+      h.db.run(sql`INSERT INTO relay_person_connections (requester_id, recipient_id, status, created_at, updated_at) VALUES (${other.personId}, ${victim.personId}, 'pending', ${h.clock.now.toISOString()}, ${h.clock.now.toISOString()})`);
+    }
+    const late = await member();
+    expect((await h.call("POST", "/v2/connections", late.token, { to: victim.personId })).status).toBe(201);
+    // 見える要求が 100 件になったので、次は断る
+    const last = await member();
+    expect((await h.call("POST", "/v2/connections", last.token, { to: victim.personId })).status).toBe(409);
+  });
+
   it("自分自身や、登録されていない Agent には要求できない", async () => {
     const { h, member } = relayHarness();
     const a = await member();
@@ -367,6 +387,27 @@ describe("v2 Relay: メッセージの配送", () => {
     );
     await h.call("POST", "/v2/messages/ack", c.token, { messageIds: [body.messageId] });
     expect(h.db.get<{ body: string | null }>(sql`SELECT body FROM relay_person_messages WHERE id = ${body.messageId}`)?.body).toBeNull();
+  });
+
+  it("受け取られていない配送が上限を超える送信者は、それ以上送れない。受け取られると送れる", async () => {
+    const { h, member, connect, send, inbox } = relayHarness();
+    const a = await member();
+    const b = await member();
+    await connect(a, b);
+    const first = await send(a, [b]);
+    expect(first.status).toBe(201);
+    // 1通だけ本物を送ったうえで、残りの未配送を、上限ちょうどになるまで直接入れる
+    h.db.run(sql`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 9999)
+      INSERT INTO relay_device_deliveries (message_id, device_id, person_id, box) SELECT ${first.body.messageId}, 'dv_' || i, ${b.personId}, '{}' FROM n`);
+    const over = await send(a, [b]);
+    expect(over.status).toBe(409);
+    expect(over.body.error.code).toBe("too_many_undelivered");
+    // 相手が受け取ると、また送れる
+    const got = await inbox(b);
+    await h.call("POST", "/v2/messages/ack", b.token, { messageIds: got.map((g) => g.envelope.messageId) });
+    h.db.run(sql`UPDATE relay_device_deliveries SET delivered_at = ${h.clock.now.toISOString()} WHERE delivered_at IS NULL`);
+    expect((await send(a, [b])).status).toBe(201);
   });
 
   it("猶予期間中は届かず、そのあいだに送信者が取り消せる", async () => {

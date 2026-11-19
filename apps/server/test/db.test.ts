@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { createDb, migrate, pendingMigrations, schema } from "../src/db/index.ts";
+import { createDb, isEmptyDb, migrate, pendingMigrations, schema } from "../src/db/index.ts";
 import { NodeSqlStorage, openDb } from "../src/db/node.ts";
 import { LEGACY_MIGRATIONS } from "./fixtures/legacy-schema.ts";
 
@@ -129,5 +129,14 @@ describe("node:sqlite のトランザクション", () => {
     expect(storage.raw.isTransaction).toBe(false);
     // その後のトランザクションも普通に使える
     expect(storage.transactionSync(() => 1)).toBe(1);
+  });
+});
+
+describe("isEmptyDb", () => {
+  it("テーブルが1つもない DB だけを空とみなす（移行済みの DB は、v1 の表がなくても空ではない）", () => {
+    const { db } = openDb(":memory:");
+    expect(isEmptyDb(db)).toBe(true);
+    migrate(db);
+    expect(isEmptyDb(db)).toBe(false);
   });
 });

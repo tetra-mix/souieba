@@ -15,6 +15,8 @@ export type SouiebaAgentSdk = {
   hooks: { UserPromptSubmit: { hooks: ((input: unknown) => Promise<UserPromptSubmitOutput>)[]; timeout: number }[] };
   /** options.allowedTools に足す */
   allowedTools: string[];
+  /** options.disallowedTools に足す（allowedTools の範囲から、確認なしで実行させない操作を外す） */
+  disallowedTools: string[];
 };
 
 export declare function souieba(opts?: SouiebaOptions): SouiebaAgentSdk;

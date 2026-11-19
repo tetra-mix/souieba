@@ -8,11 +8,11 @@
  *   - Policy: 主人が自然言語で書いた共有方針（意味の判断は Agent が行う）
  *   - どのプロジェクトにも入らないディレクトリ（と、ディレクトリを持たない会話）は default プロジェクト
  * - 受信箱: 受け取って検証・復号した Narrative Message（利用期限まで）
- * どれも主人の判断で変えるもので、エージェントが自分の判断で変えないよう、変更は CLI で主人の確認を取る（apps/cli の relay コマンド）。
+ * どれも主人の判断で変えるもので、エージェントが自分の判断で変えないよう、変更は CLI で主人の確認を取る（apps/cli の変更コマンド）。
  */
 import { join } from "node:path";
 import { type NarrativeMessage, type RelayEnvelope, isPersonId, isValidDisplayName, DAY_MS } from "@souieba/core";
-import { readStateJson, writeSecretJson } from "./config.ts";
+import { readStateJson, setAsideUnreadable, writeSecretJson } from "./config.ts";
 import { withFileLock } from "./notes.ts";
 
 export type Contact = {
@@ -88,7 +88,7 @@ export type RelayState = {
   clients?: Record<string, string>;
   /** どのプロジェクトにも決まらなかったメモの扱い（既定は default） */
   unresolved?: UnresolvedMode;
-  /** 送った近況の、手元だけの記録（relay sent でプロジェクトと「推定」を出す。配送期限が過ぎたら消す） */
+  /** 送った近況の、手元だけの記録（souieba sent でプロジェクトと「推定」を出す。配送期限が過ぎたら消す） */
   sent?: Record<string, { project: string; inferred: boolean; at: string; until: string }>;
 };
 
@@ -191,8 +191,13 @@ export class RelayStateStore {
     return `${this.path}.lock`;
   }
 
+  /** 読めたら状態を、ファイルがない・読めないなら null */
+  private read(): RelayState | null {
+    return migrateRelayState(readStateJson<unknown>(this.path));
+  }
+
   load(): RelayState {
-    return migrateRelayState(readStateJson<unknown>(this.path)) ?? emptyState();
+    return this.read() ?? emptyState();
   }
 
   save(state: RelayState): void {
@@ -202,7 +207,12 @@ export class RelayStateStore {
   /** 読んで変えて書く。同時に動く別の souieba（フック・MCP・CLI）と変更を取り合わないよう、ロックを取る */
   update<T>(fn: (s: RelayState) => T): T {
     return withFileLock(this.lockPath, () => {
-      const s = this.load();
+      let s = this.read();
+      if (!s) {
+        // ファイルがあるのに読めない（壊れている・新しい版）ときは、空で上書きして消さないよう、脇へ移してから作り直す
+        setAsideUnreadable(this.path);
+        s = emptyState();
+      }
       const r = fn(s);
       this.save(s);
       return r;
@@ -380,9 +390,14 @@ export class RelayInboxStore {
     this.path = join(dir, "relay-inbox.json");
   }
 
-  load(): InboxFile {
+  /** 読めたら受信箱を、ファイルがない・読めないなら null */
+  private read(): InboxFile | null {
     const f = readStateJson<InboxFile>(this.path);
-    return f && f.v === 1 ? f : { v: 1, items: [], seen: {} };
+    return f && f.v === 1 ? f : null;
+  }
+
+  load(): InboxFile {
+    return this.read() ?? { v: 1, items: [], seen: {} };
   }
 
   save(f: InboxFile): void {
@@ -391,7 +406,11 @@ export class RelayInboxStore {
 
   update<T>(fn: (f: InboxFile) => T): T {
     return withFileLock(`${this.path}.lock`, () => {
-      const f = this.load();
+      let f = this.read();
+      if (!f) {
+        setAsideUnreadable(this.path);
+        f = { v: 1, items: [], seen: {} };
+      }
       const r = fn(f);
       this.save(f);
       return r;

@@ -64,8 +64,8 @@ type Session = { token: string; expiresAt: string; deviceId: string; relay: stri
  * Relay は信頼しない（鍵をすり替えたり、文字列にエージェントへの指示を混ぜたりしうる）。
  * Relay から来た文字列は、エージェントが読む出力に入りうるので、ここで形を確かめてから使う
  */
-function relayErrorMessage(status: number, message: string | undefined): string {
-  const m = message ? sanitizeContent(message).slice(0, 200) : "";
+function relayErrorMessage(status: number, message: unknown): string {
+  const m = typeof message === "string" && message ? sanitizeContent(message).slice(0, 200) : "";
   return m && findInstructionLike(m).length === 0 ? m : `Relay がエラーを返しました（HTTP ${status}）`;
 }
 
@@ -128,7 +128,7 @@ export class RelayHttp {
       const code = typeof data?.error?.code === "string" && /^[a-z_]{1,40}$/.test(data.error.code) ? data.error.code : "http_error";
       throw new SouiebaApiError(res.status, code, relayErrorMessage(res.status, data?.error?.message));
     }
-    if (data === undefined) throw new SouiebaApiError(res.status, "bad_response", `Relay の応答を読めませんでした（HTTP ${res.status}）`);
+    if (data === undefined || data === null || typeof data !== "object") throw new SouiebaApiError(res.status, "bad_response", `Relay の応答を読めませんでした（HTTP ${res.status}）`);
     return data as T;
   }
 

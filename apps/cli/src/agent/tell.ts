@@ -37,6 +37,14 @@ function writeStdout(s: string): Promise<void> {
  */
 export const TELL_EXTRAS_MS = 3_000;
 
+/** 先に終わったら、待ちのタイマーを残さない（残すと、出力のあともプロセスが生き残り、フックが毎回その分遅れる） */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ms);
+  });
+  return Promise.race([p.catch(() => null), timeout]).finally(() => clearTimeout(timer));
+}
 
 /**
  * tell の結果を、JSON と、エージェントが読む文面の両方で返す（souieba hook からも使う）。
@@ -70,10 +78,10 @@ export async function tellResult(
 
   // 同期しなかった（この Session で伝え済みなど）ときは、接続の一覧だけ取りに行く。時間がかかれば諦める
   if (!transport.hasConnections) {
-    await Promise.race([transport.syncContacts(true).catch(() => null), new Promise((r) => setTimeout(r, TELL_EXTRAS_MS))]);
+    await withTimeout(transport.syncContacts(true), TELL_EXTRAS_MS);
   }
   const notices = transport.takeNotices();
-  const update = await Promise.race([updateToNotify(now, () => true).catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), TELL_EXTRAS_MS))]);
+  const update = await withTimeout(updateToNotify(now, () => true), TELL_EXTRAS_MS);
   const pending = pendingPeriods(ctx, now).length;
   if (pending > 0) lines.push(pendingLine(flags, pending));
   if (state.outdated) lines.push(`souieba: ${state.outdated}。ユーザーへの回答のあとで、主人に更新を頼んでください。`);

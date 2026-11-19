@@ -120,7 +120,7 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   // チャレンジの署名には Relay の origin が入るので、クライアントが使う URL と同じにする
   const config = { ...loadConfig({ SOUIEBA_PUBLIC_URL: baseUrl, SOUIEBA_DATA_DIR: tmp }), logLevel: "error" as const, postGraceMs: 0 };
-  app = createApp({ db, config, now: () => now, random: () => 0, log: () => {}, remoteAddr: () => "127.0.0.1" });
+  app = createApp({ db, config, now: () => now, log: () => {}, remoteAddr: () => "127.0.0.1" });
 });
 afterAll(() => {
   server.close();

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generatePerson } from "@souieba/core";
@@ -12,6 +12,7 @@ import {
   contactFrom,
   emptyProject,
   emptyState,
+  RelayStateStore,
   SessionStore,
   migrateRelayState,
   resolveNoteProject,
@@ -185,5 +186,29 @@ describe("v2 のプロジェクト: メモ", () => {
     s.add("主人は工作をしていた", at("2026-10-05T12:20:00Z"), "趣味", "inferred");
     expect(s.move("趣味", { ts: "2026-10-05T12:20:00.000Z" }, at("2026-10-05T13:20:00Z"))).toBe(1);
     expect(s.all()[0]).toMatchObject({ project: "趣味", via: "owner" });
+  });
+});
+
+describe("読めない状態ファイルの扱い", () => {
+  it("壊れた状態ファイルは、上書きで消さず脇へ移してから作り直す", () => {
+    const dir = mkdtempSync(join(tmpdir(), "souieba-state-"));
+    const store = new RelayStateStore(dir);
+    writeFileSync(store.path, '{"v":3,"contacts":{');
+    // 読むだけでは何も変えない
+    expect(store.load().contacts).toEqual({});
+    expect(readFileSync(store.path, "utf8")).toBe('{"v":3,"contacts":{');
+    store.update((s) => void (s.unresolved = "hold"));
+    const aside = readdirSync(dir).filter((f) => f.startsWith("relay-state.json.unreadable-"));
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(dir, aside[0]!), "utf8")).toBe('{"v":3,"contacts":{');
+    expect(store.load().unresolved).toBe("hold");
+  });
+
+  it("新しい版（読めない版）の状態ファイルも、そのまま脇へ残す", () => {
+    const dir = mkdtempSync(join(tmpdir(), "souieba-state-"));
+    const store = new RelayStateStore(dir);
+    writeFileSync(store.path, JSON.stringify({ v: 4, contacts: { x: 1 } }));
+    store.update(() => undefined);
+    expect(readdirSync(dir).some((f) => f.startsWith("relay-state.json.unreadable-"))).toBe(true);
   });
 });

@@ -124,6 +124,17 @@ export function readStateJson<T>(path: string): T | null {
   }
 }
 
+/**
+ * 読めない（壊れている・知らない版の）状態ファイルを、上書きで失う前に脇へ移す。
+ * 連絡先や共有の設定を、書き込みのついでに空で上書きして消してしまわないため
+ */
+export function setAsideUnreadable(path: string): string | null {
+  if (!existsSync(path)) return null;
+  const aside = `${path}.unreadable-${new Date().toISOString().replace(/[^0-9]/g, "")}`;
+  renameSync(path, aside);
+  return aside;
+}
+
 /** トークンを含む JSON を、所有者だけが読める権限（600）で書く */
 export function writeSecretJson(path: string, value: unknown): void {
   writeSecretFile(path, `${JSON.stringify(value, null, 2)}\n`);

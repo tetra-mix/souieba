@@ -21,7 +21,6 @@ export type AppDeps = {
   db: DB;
   config: Config;
   now?: () => Date;
-  random?: () => number;
   /** 直前の接続元の IP。Node では接続情報、Workers では CF-Connecting-IP から取る */
   remoteAddr: (c: Context<Env>) => string;
   log?: (line: Record<string, unknown>) => void;

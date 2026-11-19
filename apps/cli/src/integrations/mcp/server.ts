@@ -6,7 +6,7 @@ import { MAX_NARRATIVE_FIELD_LENGTH, MAX_POST_LENGTH } from "@souieba/core";
  * MCP にはフックがないので、tell と note を呼ぶかどうかはモデルの判断に任される（instructions とツールの説明で促す）。
  * 伝えそびれを減らすため、souieba_note の結果にも近況を1件添える。メモを遅くしないよう同期と予約だけをし、
  * 伝えたことの記録（TOLD）は、次に souieba_tell が呼ばれたときにする（モデルが読み飛ばしても、予約の期限が切れれば受信箱に戻る）。
- * v1 のログイン・グループ・招待・Agent の登録などの主人の操作は出さない（届いた近況に命令が紛れ込んでも、エージェントに実行させないため）。
+ * ログイン・接続・共有設定の変更など、主人が決める操作は出さない（届いた近況に命令が紛れ込んでも、エージェントに実行させないため）。
  * v2（Relay）の共有の設定は、CLI と同じ2段階（広げる操作は confirm: true が要る）で出す（relay-tools.ts）。エージェントに範囲を任せる操作は出さない。
  * v2 のメモのプロジェクトは、主人の規則（クライアント名 clientInfo.name）・この会話の指定（souieba_project_pin。このプロセスの中だけ）・
  * クライアントの roots（roots/list）・エージェントの推定（souieba_note の project）の順に決める。エージェントが言う作業ディレクトリ（cwd）は使わない。

@@ -27,7 +27,7 @@ AI エージェントが主人の近況を一定の時間帯ごと（既定は1�
 packages/core     型・Tell 文テンプレート・Session 判定・秘密情報スキャナ・本文の正規化・署名・Person / 端末の鍵と HPKE とメッセージ形式
 packages/sdk      Souieba クライアント（SouiebaTransport / RelayTransport・ローカルのアクセス権限・プロジェクト・メモ / ~/.souieba/config.json）
 apps/server       Hono + Drizzle の Relay（/v2。セルフホストは node:sqlite、Workers は Durable Object の SQLite）と、バックアップ用の CLI（souieba-admin）
-apps/cli          CLI（npm の souieba。利用者用の init / relay / config / doctor、エージェント用の tell / note / compose / publish / skill get）と、エージェントごとのプラグイン・フック（src/integrations）
+apps/cli          CLI（npm の souieba。利用者用の init / connect / project / ui / config / doctor、エージェント用の tell / note / compose / publish / skill get）と、エージェントごとのプラグイン・フック（src/integrations）
 apps/site         紹介サイト（Astro Starlight）
 skills/souieba    Agent Skill（薄い SKILL.md。詳しい手順は CLI に同梱した apps/cli/skill/ から souieba skill get で取る）
 deploy/           セルフホストの compose（Caddy が HTTPS を終端する）
@@ -67,7 +67,7 @@ SOUIEBA_POST_GRACE_MINUTES=0 pnpm server
 ```bash
 scripts/v2-try.sh check                 # 一通りの流れを確かめる（途中で y/N を聞き、最後に TUI が開く。--yes なら聞かずに進める）
 scripts/v2-try.sh up                    # Relay を起動してアリスとボブのPersonを用意する
-scripts/v2-try.sh as bob -- relay ui   # ボブとして TUI を開く
+scripts/v2-try.sh as bob -- ui         # ボブとして TUI を開く
 scripts/v2-try.sh reset                 # 最初からにする
 ```
 

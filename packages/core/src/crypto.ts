@@ -31,7 +31,8 @@ function publicKey(kind: Kind, x: string): KeyObject {
 }
 
 export function isPublicKey(kind: Kind, x: unknown): x is string {
-  if (typeof x !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(x) || unb64(x).length !== 32) return false;
+  // 往復して同じ文字列に戻るものだけ（末尾の余りビットが違う、別の書き方の鍵を同じ鍵として扱わない）
+  if (typeof x !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(x) || unb64(x).length !== 32 || b64(unb64(x)) !== x) return false;
   try {
     publicKey(kind, x);
     return true;

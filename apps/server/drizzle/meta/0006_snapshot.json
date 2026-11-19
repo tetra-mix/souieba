@@ -1,0 +1,598 @@
+{
+  "version": "6",
+  "dialect": "sqlite",
+  "id": "a6cdd4c4-a857-4949-8a37-777573555cc6",
+  "prevId": "15f5d0df-4828-40fa-be8c-8f69feb61b3d",
+  "tables": {
+    "relay_device_challenges": {
+      "name": "relay_device_challenges",
+      "columns": {
+        "challenge": {
+          "name": "challenge",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "relay_device_challenges_expires": {
+          "name": "relay_device_challenges_expires",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "relay_device_challenges_device_id_relay_devices_device_id_fk": {
+          "name": "relay_device_challenges_device_id_relay_devices_device_id_fk",
+          "tableFrom": "relay_device_challenges",
+          "tableTo": "relay_devices",
+          "columnsFrom": [
+            "device_id"
+          ],
+          "columnsTo": [
+            "device_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "relay_device_deliveries": {
+      "name": "relay_device_deliveries",
+      "columns": {
+        "message_id": {
+          "name": "message_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "person_id": {
+          "name": "person_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "box": {
+          "name": "box",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "delivered_at": {
+          "name": "delivered_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "relay_device_deliveries_device": {
+          "name": "relay_device_deliveries_device",
+          "columns": [
+            "device_id",
+            "delivered_at"
+          ],
+          "isUnique": false
+        },
+        "relay_device_deliveries_person": {
+          "name": "relay_device_deliveries_person",
+          "columns": [
+            "person_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "relay_device_deliveries_message_id_relay_person_messages_id_fk": {
+          "name": "relay_device_deliveries_message_id_relay_person_messages_id_fk",
+          "tableFrom": "relay_device_deliveries",
+          "tableTo": "relay_person_messages",
+          "columnsFrom": [
+            "message_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "relay_device_deliveries_message_id_device_id_pk": {
+          "columns": [
+            "message_id",
+            "device_id"
+          ],
+          "name": "relay_device_deliveries_message_id_device_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "relay_device_sessions": {
+      "name": "relay_device_sessions",
+      "columns": {
+        "token_hash": {
+          "name": "token_hash",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "device_id": {
+          "name": "device_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "person_id": {
+          "name": "person_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "relay_device_sessions_expires": {
+          "name": "relay_device_sessions_expires",
+          "columns": [
+            "expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "relay_device_sessions_device_id_relay_devices_device_id_fk": {
+          "name": "relay_device_sessions_device_id_relay_devices_device_id_fk",
+          "tableFrom": "relay_device_sessions",
+          "tableTo": "relay_devices",
+          "columnsFrom": [
+            "device_id"
+          ],
+          "columnsTo": [
+            "device_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "relay_devices": {
+      "name": "relay_devices",
+      "columns": {
+        "device_id": {
+          "name": "device_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "person_id": {
+          "name": "person_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sign_key": {
+          "name": "sign_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "enc_key_version": {
+          "name": "enc_key_version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "cert": {
+          "name": "cert",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revocation": {
+          "name": "revocation",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "relay_devices_sign_key_unique": {
+          "name": "relay_devices_sign_key_unique",
+          "columns": [
+            "sign_key"
+          ],
+          "isUnique": true
+        },
+        "relay_devices_person": {
+          "name": "relay_devices_person",
+          "columns": [
+            "person_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "relay_devices_person_id_relay_persons_person_id_fk": {
+          "name": "relay_devices_person_id_relay_persons_person_id_fk",
+          "tableFrom": "relay_devices",
+          "tableTo": "relay_persons",
+          "columnsFrom": [
+            "person_id"
+          ],
+          "columnsTo": [
+            "person_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "relay_person_blocks": {
+      "name": "relay_person_blocks",
+      "columns": {
+        "blocker_id": {
+          "name": "blocker_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "blocked_id": {
+          "name": "blocked_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "relay_person_blocks_blocker_id_relay_persons_person_id_fk": {
+          "name": "relay_person_blocks_blocker_id_relay_persons_person_id_fk",
+          "tableFrom": "relay_person_blocks",
+          "tableTo": "relay_persons",
+          "columnsFrom": [
+            "blocker_id"
+          ],
+          "columnsTo": [
+            "person_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "relay_person_blocks_blocker_id_blocked_id_pk": {
+          "columns": [
+            "blocker_id",
+            "blocked_id"
+          ],
+          "name": "relay_person_blocks_blocker_id_blocked_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "relay_person_connections": {
+      "name": "relay_person_connections",
+      "columns": {
+        "requester_id": {
+          "name": "requester_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "recipient_id": {
+          "name": "recipient_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "relay_person_connections_recipient": {
+          "name": "relay_person_connections_recipient",
+          "columns": [
+            "recipient_id",
+            "status"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "relay_person_connections_requester_id_relay_persons_person_id_fk": {
+          "name": "relay_person_connections_requester_id_relay_persons_person_id_fk",
+          "tableFrom": "relay_person_connections",
+          "tableTo": "relay_persons",
+          "columnsFrom": [
+            "requester_id"
+          ],
+          "columnsTo": [
+            "person_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "relay_person_connections_recipient_id_relay_persons_person_id_fk": {
+          "name": "relay_person_connections_recipient_id_relay_persons_person_id_fk",
+          "tableFrom": "relay_person_connections",
+          "tableTo": "relay_persons",
+          "columnsFrom": [
+            "recipient_id"
+          ],
+          "columnsTo": [
+            "person_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "relay_person_connections_requester_id_recipient_id_pk": {
+          "columns": [
+            "requester_id",
+            "recipient_id"
+          ],
+          "name": "relay_person_connections_requester_id_recipient_id_pk"
+        }
+      },
+      "uniqueConstraints": {},
+      "checkConstraints": {
+        "relay_person_connections_status_check": {
+          "name": "relay_person_connections_status_check",
+          "value": "\"relay_person_connections\".\"status\" IN ('pending','accepted')"
+        }
+      }
+    },
+    "relay_person_messages": {
+      "name": "relay_person_messages",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sender_id": {
+          "name": "sender_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "sender_device": {
+          "name": "sender_device",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "body": {
+          "name": "body",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "visible_at": {
+          "name": "visible_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "delivery_expires_at": {
+          "name": "delivery_expires_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "relay_person_messages_sender": {
+          "name": "relay_person_messages_sender",
+          "columns": [
+            "sender_id",
+            "created_at"
+          ],
+          "isUnique": false
+        },
+        "relay_person_messages_expires": {
+          "name": "relay_person_messages_expires",
+          "columns": [
+            "delivery_expires_at"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "relay_person_messages_sender_id_relay_persons_person_id_fk": {
+          "name": "relay_person_messages_sender_id_relay_persons_person_id_fk",
+          "tableFrom": "relay_person_messages",
+          "tableTo": "relay_persons",
+          "columnsFrom": [
+            "sender_id"
+          ],
+          "columnsTo": [
+            "person_id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "relay_persons": {
+      "name": "relay_persons",
+      "columns": {
+        "person_id": {
+          "name": "person_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "person_key": {
+          "name": "person_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "relay_persons_person_key_unique": {
+          "name": "relay_persons_person_key_unique",
+          "columns": [
+            "person_key"
+          ],
+          "isUnique": true
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    }
+  },
+  "views": {},
+  "enums": {},
+  "_meta": {
+    "schemas": {},
+    "tables": {},
+    "columns": {}
+  },
+  "internal": {
+    "indexes": {}
+  }
+}

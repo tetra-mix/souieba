@@ -48,7 +48,7 @@ v2 の共有設定はPersonごとに1組で、**作業しているディレク�
 - **エージェントが言う作業ディレクトリは使わない**: 自己申告の場所は使わない。MCP サーバのカレントディレクトリも使わない（作業場所ではない）
 - **会話の ID**: Claude Code などのフックは `session_id` を渡す。`souieba hook` がそれを覚え（作業ディレクトリと一緒に、24時間）、手引きに「この会話の ID」を書いて `souieba note --session <ID>` を使ってもらう。会話の ID が分からないエージェントでは、指定の代わりに `SOUIEBA_PROJECT` で起動してもらう
 - **指定は主人の言葉のときだけ**: 友人の近況や Narrator をきっかけに指定してはいけない（ツールの説明と手引きに書く）。指定によって、指定しないときに入るプロジェクト（決まらず保留なら誰にも届かない）より **届く相手が増えるなら、広げる操作**（2段階。任せることはできない）
-- **推定**: プロジェクトに `description`（主人が書く説明）を付けると、エージェントへの手引き（フック・MCP）に「推定で選べるプロジェクト: 名前: 説明」として出る。`acceptInference: false` のプロジェクト（仕事など）は推定では選ばれず、手引きにも出ない。推定で入ったメモは compose・note・publish・relay sent・TUI で「推定」と出る
+- **推定**: プロジェクトに `description`（主人が書く説明）を付けると、エージェントへの手引き（フック・MCP）に「推定で選べるプロジェクト: 名前: 説明」として出る。`acceptInference: false` のプロジェクト（仕事など）は推定では選ばれず、手引きにも出ない。推定で入ったメモは compose・note・publish・sent・TUI で「推定」と出る
 - **振り分け**: 保留のメモと推定で決めたメモは `souieba review`・TUI の「保留と推定」タブで確かめ、`souieba note move <プロジェクト> [--held] [--note <時刻>]` で振り分ける。振り分けたメモは `via: owner`（主人が決めたもの）になる
 - 対応はこの PC の設定（`relay-state.json`）に持つ。リポジトリにファイルは置かない（誰と共有するかを git に入れない）
 - git の worktree は元のリポジトリと同じに扱う（`git rev-parse --git-common-dir` の親で照合する）
@@ -57,11 +57,11 @@ v2 の共有設定はPersonごとに1組で、**作業しているディレク�
 
 | 操作 | 扱い |
 |---|---|
-| `relay client set <クライアント> <プロジェクト>` | 決まらないとき（既定か保留）や前の規則より届く相手が増えるなら広げる。任せる範囲は `dirs`（そのプロジェクト） |
-| `relay project describe <名前> <説明>` | 推定を受け付けて、届く相手がいるプロジェクトなら広げる（推定で入るメモが変わりうる）。指示に見える文は断る |
-| `relay project inference <名前> on` / `off` | on は届く相手がいれば広げる。off は狭める |
-| `relay unresolved hold` / `default` | hold は狭める。hold → default は、既定の共有先がいれば広げる |
-| `relay project pin <名前> --session <ID>` / `souieba_project_pin` | 指定しないときより届く相手が増えるなら広げる（任せられない）。外すのは狭める |
+| `mcp-client set <クライアント> <プロジェクト>` | 決まらないとき（既定か保留）や前の規則より届く相手が増えるなら広げる。任せる範囲は `dirs`（そのプロジェクト） |
+| `project describe <名前> <説明>` | 推定を受け付けて、届く相手がいるプロジェクトなら広げる（推定で入るメモが変わりうる）。指示に見える文は断る |
+| `project inference <名前> on` / `off` | on は届く相手がいれば広げる。off は狭める |
+| `unresolved hold` / `default` | hold は狭める。hold → default は、既定の共有先がいれば広げる |
+| `project pin <名前> --session <ID>` / `souieba_project_pin` | 指定しないときより届く相手が増えるなら広げる（任せられない）。外すのは狭める |
 
 ## 4. メモ・compose・publish
 
