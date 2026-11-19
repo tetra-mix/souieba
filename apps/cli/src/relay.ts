@@ -183,7 +183,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     io.log(delegated ? `${result}（主人に任された範囲での変更です。次の tell で主人に知らされます）` : result);
   };
   // 相手が承認して接続になった人を連絡先に入れてから、呼び名で引けるようにする（通信できなければ手元のまま）
-  if (["settings", "nickname", "disconnect", "block", "groups", "allow", "deny", "reset"].includes(sub)) {
+  if (["status", "nickname", "disconnect", "block", "groups", "allow", "deny", "reset"].includes(sub)) {
     await p
       .transport()
       .syncContacts()
@@ -191,7 +191,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
   }
 
   switch (sub) {
-    case "me": {
+    case "id": {
       io.log(`ID: ${r.personId}`);
       io.log(`Relay: ${r.relayUrl}`);
       io.log("友人にこの ID を伝え、souieba connect <この ID> --name <呼び名> で接続を要求してもらってください。");
@@ -225,7 +225,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       if (blocked.length) io.log(`## ブロック中\n${blocked.map((b) => `- ${b}`).join("\n")}`);
       return;
     }
-    case "settings": {
+    case "status": {
       const s = p.state.load();
       io.log(`ID: ${r.personId}（Relay: ${r.relayUrl}）`);
       io.log(`どのプロジェクトにも決まらないメモ: ${s.unresolved === "hold" ? "保留（主人が振り分けるまで送らない）" : "既定のプロジェクトに入れる"}`);

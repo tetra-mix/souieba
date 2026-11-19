@@ -134,7 +134,7 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
     const aliceId = /ID: (sb_[a-z2-7]{32})/.exec(initA.out)![1]!;
     const initB = await souieba("bob", "init", baseUrl, "--name", "ClaudeB");
     const bobId = /ID: (sb_[a-z2-7]{32})/.exec(initB.out)![1]!;
-    expect((await souieba("alice", "me")).out).toContain(aliceId);
+    expect((await souieba("alice", "id")).out).toContain(aliceId);
 
     // 2. 接続の要求は共有を広げるので、--yes がなければ変更の内容を出して止まる（何も変えない）
     const byAgent = await souieba("alice", "connect", bobId, "--name", "ボブ");
@@ -239,26 +239,26 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
 
     // 送った側は配送状態を確かめられる
     expect((await souieba("alice", "sent")).out).toContain("ボブ: 受信済み");
-    const status = await souieba("alice", "settings");
+    const status = await souieba("alice", "status");
     expect(status.out).toContain("ボブ（共有可）");
   });
 
   it("共有を狭める操作は確認なしで実行でき、エージェントがしたことは次の tell で知らせる", { timeout: 60_000 }, async () => {
     const r = await souieba("alice", "deny", "ボブ");
     expect(r.code).toBe(0);
-    expect((await souieba("alice", "settings")).out).not.toContain("ボブ（共有可）");
+    expect((await souieba("alice", "status")).out).not.toContain("ボブ（共有可）");
     expect((await souieba("alice", "tell")).out).toContain("ボブ（sb_");
     // 広げる操作（allow）は --yes が要る
     expect((await souieba("alice", "allow", "ボブ")).code).toBe(3);
     expect((await souieba("alice", "allow", "ボブ", "--yes")).code).toBe(0);
-    expect((await souieba("alice", "settings")).out).toContain("ボブ（共有可）");
+    expect((await souieba("alice", "status")).out).toContain("ボブ（共有可）");
   });
 
   it("プロジェクトごとの共有先: worktree も同じプロジェクトになり、そのプロジェクトの相手にだけ届く", { timeout: 180_000 }, async () => {
     // キャロルと接続する（アリスはボブと既定のプロジェクトで共有している）
     const initC = await souieba("carol", "init", baseUrl, "--name", "ClaudeC");
     const carolId = /ID: (sb_[a-z2-7]{32})/.exec(initC.out)![1]!;
-    const aliceId = /ID: (sb_[a-z2-7]{32})/.exec((await souieba("alice", "me")).out)![1]!;
+    const aliceId = /ID: (sb_[a-z2-7]{32})/.exec((await souieba("alice", "id")).out)![1]!;
     await owner("alice", ["connect", carolId], "キャロル");
     await owner("carol", ["accept", aliceId], "アリス");
 

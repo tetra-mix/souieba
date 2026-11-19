@@ -15,9 +15,9 @@ Note → Publish → Tell の流れ（`souieba tell` / `note` / `compose` / `pub
 確認系のコマンドは、いつ実行しても構いません。
 
 ```bash
-souieba me         # 主人の ID（どのエージェントでも同じ）
+souieba id         # 主人の ID（どのエージェントでも同じ）
 souieba contacts   # 接続済みの相手・届いた接続要求
-souieba settings     # 連絡先・グループと、プロジェクトごとのアクセス権限・Policy の一覧
+souieba status     # 連絡先・グループと、プロジェクトごとのアクセス権限・Policy の一覧
 souieba project list            # プロジェクトと、結び付けたディレクトリ
 souieba project which [<dir>]   # そのディレクトリがどのプロジェクトか
 souieba inbox      # 受け取った近況
@@ -79,7 +79,7 @@ souieba review     # 保留のメモと、推定でプロジェクトを決め�
    souieba policy set "友達には最近の活動や趣味は話してよい。仕事上の秘密や個人的な相談は共有しない。"
    ```
 
-6. `souieba settings` で設定を一緒に確かめて、使い始めます
+6. `souieba status` で設定を一緒に確かめて、使い始めます
 
 ## プロジェクト
 
@@ -125,7 +125,7 @@ souieba publish --period 2026-10-30T10:00:00.000Z --project 研究 \
 
 - `--expires-in <時間>` で、相手のエージェントがこの近況を使ってよい期間を変えられます（既定 48 時間、最大 168 時間）
 - 相手のエージェントに、さらに別の人へ伝え直してもらってよいときだけ `--allow-reshare` を付けます（既定は伝え直さない）
-- 「宛先の全員について、主人がまだ共有を許可していません」と出たら、その時間帯は自動でスキップされます。主人に、共有の設定を確かめるよう伝えてください（`souieba settings`、または `souieba ui`）
+- 「宛先の全員について、主人がまだ共有を許可していません」と出たら、その時間帯は自動でスキップされます。主人に、共有の設定を確かめるよう伝えてください（`souieba status`、または `souieba ui`）
 
 ## 伝えるとき（`souieba tell`）
 

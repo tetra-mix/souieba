@@ -48,14 +48,14 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
     {
       title: "共有の設定を見る",
       description:
-        "Relay の共有の設定を見る。view: settings（連絡先・グループ・プロジェクトごとの共有先と共有方針・任せている範囲・メモの振り分けの規則）、contacts（接続済みの相手・届いた接続要求・送った接続要求）、projects（プロジェクトとディレクトリ・説明・推定で選べるか）、delegations（主人がエージェントに任せている範囲）、review（保留のメモと推定で決めたメモ）。いつ呼んでもよい。",
-      inputSchema: { view: z.enum(["settings", "contacts", "projects", "delegations", "review"]).optional() },
+        "Relay の共有の設定を見る。view: status（連絡先・グループ・プロジェクトごとの共有先と共有方針・任せている範囲・メモの振り分けの規則）、contacts（接続済みの相手・届いた接続要求・送った接続要求）、projects（プロジェクトとディレクトリ・説明・推定で選べるか）、delegations（主人がエージェントに任せている範囲）、review（保留のメモと推定で決めたメモ）。いつ呼んでもよい。",
+      inputSchema: { view: z.enum(["status", "contacts", "projects", "delegations", "review"]).optional() },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     ({ view }) =>
       runRelay(
         flags,
-        view === "projects" ? { sub: "project", rest: ["list"] } : view === "delegations" ? { sub: "delegate", rest: ["list"] } : { sub: view ?? "settings", rest: [] },
+        view === "projects" ? { sub: "project", rest: ["list"] } : view === "delegations" ? { sub: "delegate", rest: ["list"] } : { sub: view ?? "status", rest: [] },
       ),
   );
 

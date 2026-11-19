@@ -71,10 +71,10 @@ export const CATALOG: CommandSpec[] = [
   },
 
   // ---- relay: 見る ----
-  { name: "me", summary: "自分の ID（友人に伝えて、接続してもらう。同じPersonを使うクライアントで共通）", section: "relay-view" },
+  { name: "id", summary: "自分の ID（友人に伝えて、接続してもらう。同じPersonを使うクライアントで共通）", section: "relay-view" },
   { name: "lookup", args: "<ID>", summary: "ID が Relay にあるかを確かめる", section: "relay-view" },
   { name: "contacts", summary: "接続済みの相手・届いた接続要求・送った接続要求", section: "relay-view" },
-  { name: "settings", summary: "設定の一覧（連絡先・グループ・アクセス権限・Policy・メモの振り分けの規則）", section: "relay-view" },
+  { name: "status", summary: "設定の一覧（連絡先・グループ・アクセス権限・Policy・メモの振り分けの規則）", section: "relay-view" },
   { name: "inbox", summary: "受け取った近況（利用期限内）", section: "relay-view" },
   { name: "sent", summary: "送った近況の配送状態", section: "relay-view" },
   { name: "review", summary: "保留のメモと、推定でプロジェクトを決めたメモ", section: "relay-view" },

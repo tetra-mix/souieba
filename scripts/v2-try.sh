@@ -50,7 +50,7 @@ start_server() {
 }
 
 person_id() {
-  as "$1" -- me 2>/dev/null | grep -oE 'sb_[a-z2-7]{32}' | head -1
+  as "$1" -- id 2>/dev/null | grep -oE 'sb_[a-z2-7]{32}' | head -1
 }
 
 # ensure_person <人> <内部名>
@@ -160,7 +160,7 @@ EOF
     out2="$(as bob -- tell 2>&1)"
     echo "$out2" | grep -q "ソロキャンプ" && ng "ボブが同じ近況をもう一度伝えた: $out2" || ok "ボブ: 同じPersonなので、同じ近況は2回伝えない"
     as alice -- sent | grep -q "ボブ: 受信済み" && ok "アリス: sent で受信済みが見える" || ng "sent"
-    { echo "--- ボブの tell ---"; echo "$out"; echo "--- アリスの settings ---"; as alice -- settings; } >>"$LOG"
+    { echo "--- ボブの tell ---"; echo "$out"; echo "--- アリスの status ---"; as alice -- status; } >>"$LOG"
 
     log ""
     if [ ${NG} -eq 0 ]; then log "すべて OK"; else log "NG が ${NG} 件あります"; fi

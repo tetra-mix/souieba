@@ -12,7 +12,7 @@
 
 ```bash
 souieba init https://souieba.ryouma1128.workers.dev
-souieba me
+souieba id
 ```
 
 友人とはPerson IDを交換し、接続と共有を設定します。詳しくは `souieba skill get relay` を参照してください。設定と秘密鍵は `~/.souieba/config.json` に保存されます。別のPersonを使う場合は `SOUIEBA_HOME` を分けます。

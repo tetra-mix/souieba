@@ -61,6 +61,6 @@ export async function doctorCommand(): Promise<void> {
     if (advice) console.log(advice);
   }
   const quiet = { log, interactive: false, ask: async () => false, now: testableNow };
-  await runRelay({ sub: "me", rest: [], raw: ["me"] }, quiet);
+  await runRelay({ sub: "id", rest: [], raw: ["id"] }, quiet);
   await runRelay({ sub: "contacts", rest: [], raw: ["contacts"] }, quiet);
 }
