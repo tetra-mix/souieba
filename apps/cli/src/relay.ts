@@ -80,7 +80,7 @@ export async function ttyAsk(summary: string): Promise<boolean> {
 
 export const isInteractive = () => !!process.stdin.isTTY && !!process.stdout.isTTY;
 
-export const RELAY_USAGE = `使い方: souieba relay <command>（v2: Relay 経由で、人ごとの ID で共有する。始めるには souieba init <Relay の URL>）
+export const RELAY_USAGE = `使い方: souieba relay <command>（Relay 経由で、人ごとの Person ID で共有する。始めるには souieba init <Relay の URL>）
 
   id                                      自分の ID（友人に伝えて、接続してもらう。同じPersonを使うクライアントで共通）
   lookup <ID>                             ID が Relay にあるかを確かめる
@@ -132,7 +132,7 @@ export const RELAY_USAGE = `使い方: souieba relay <command>（v2: Relay 経�
 
 function requireRelayAgent(): ResolvedRelayAgent {
   const r = resolveRelayAgent();
-  if (!r) throw new Error("v2 のPersonがありません。souieba init <Relay の URL> を実行してください");
+  if (!r) throw new Error("Person がありません。souieba init <Relay の URL> を実行してください");
   return r;
 }
 
@@ -197,7 +197,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     return;
   }
   if (sub === "init") {
-    io.log("v2 はPerson単位です。souieba init <Relay の URL> [--name <内部名>] で始めてください。");
+    io.log("Person がありません。souieba init <Relay の URL> で始めてください。");
     return;
   }
 
@@ -330,18 +330,18 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       return;
     }
     case "connect":
-      return run(ops.connect(need(rest[0], "souieba relay connect <Agent ID> --name <呼び名>"), a.name ?? ""));
+      return run(ops.connect(need(rest[0], "souieba relay connect <Person ID> --name <呼び名>"), a.name ?? ""));
     case "accept":
-      return run(ops.accept(need(rest[0], "souieba relay accept <Agent ID> --name <呼び名>"), a.name ?? ""));
+      return run(ops.accept(need(rest[0], "souieba relay accept <Person ID> --name <呼び名>"), a.name ?? ""));
     case "reject":
-      return run(ops.reject(need(rest[0], "souieba relay reject <Agent ID>")));
+      return run(ops.reject(need(rest[0], "souieba relay reject <Person ID>")));
     case "rename":
       return run(ops.rename(need(rest[0], "souieba relay rename <相手> <新しい呼び名>"), rest.slice(1).join(" ")));
     case "disconnect":
     case "block":
       return run(ops.disconnect(need(rest[0], `souieba relay ${sub} <相手>`), { block: sub === "block" }));
     case "unblock":
-      return run(ops.unblock(need(rest[0], "souieba relay unblock <Agent ID>")));
+      return run(ops.unblock(need(rest[0], "souieba relay unblock <Person ID>")));
     case "groups": {
       const [action, ...args] = rest;
       if (action === undefined || action === "list") {

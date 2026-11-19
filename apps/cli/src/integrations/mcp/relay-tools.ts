@@ -49,9 +49,9 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
   server.registerTool(
     "souieba_relay_status",
     {
-      title: "v2 の共有の設定を見る",
+      title: "共有の設定を見る",
       description:
-        "v2（Relay）の設定を見る。view: status（連絡先・グループ・プロジェクトごとの共有先と共有方針・任せている範囲・メモの振り分けの規則）、contacts（接続済みの相手・届いた接続要求・送った接続要求）、projects（プロジェクトとディレクトリ・説明・推定で選べるか）、delegations（主人がエージェントに任せている範囲）、review（保留のメモと推定で決めたメモ）。いつ呼んでもよい。",
+        "Relay の共有の設定を見る。view: status（連絡先・グループ・プロジェクトごとの共有先と共有方針・任せている範囲・メモの振り分けの規則）、contacts（接続済みの相手・届いた接続要求・送った接続要求）、projects（プロジェクトとディレクトリ・説明・推定で選べるか）、delegations（主人がエージェントに任せている範囲）、review（保留のメモと推定で決めたメモ）。いつ呼んでもよい。",
       inputSchema: { view: z.enum(["status", "contacts", "projects", "delegations", "review"]).optional() },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -71,14 +71,14 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
         WIDEN_RULE,
       inputSchema: {
         action: z.enum(["connect", "accept", "reject", "rename", "disconnect", "block", "unblock"]),
-        agent: z.string().max(80).describe("相手の ID（sb_...）か呼び名。connect・accept・reject・unblock は ID"),
+        person: z.string().max(80).describe("相手の Person ID（sb_...）か呼び名。connect・accept・reject・unblock は Person ID"),
         name: z.string().max(80).optional().describe("connect・accept・rename のときの呼び名（主人が決めたもの）"),
         confirm,
       },
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
     },
-    ({ action, agent, name, confirm: yes }) =>
-      runRelay(flags, action === "rename" ? { sub: "rename", rest: [agent, name ?? ""], yes } : { sub: action, rest: [agent], name, yes }),
+    ({ action, person, name, confirm: yes }) =>
+      runRelay(flags, action === "rename" ? { sub: "rename", rest: [person, name ?? ""], yes } : { sub: action, rest: [person], name, yes }),
   );
 
   server.registerTool(

@@ -50,7 +50,7 @@ function newDevice(person: PersonKeys, now: Date): DeviceIdentity & { entry: Dev
 export async function initCommand(a: { url?: string; name?: string }, io: PersonIo): Promise<void> {
   const cfg = loadClientConfig();
   if (cfg.person) {
-    throw new Error(`v2 のPerson ID（${cfg.person.personId}）はもうあります。別のPersonを作るときは SOUIEBA_HOME を変えてください`);
+    throw new Error(`Person ID（${cfg.person.personId}）はもうあります。別のPersonを作るときは SOUIEBA_HOME を変えてください`);
   }
   const url = a.url;
   if (!url) throw new Error("souieba init <Relay の URL> [--name <内部名>]");
@@ -72,7 +72,7 @@ export async function initCommand(a: { url?: string; name?: string }, io: Person
     devices: { [name]: dev.entry },
   };
   saveClientConfig(cfg);
-  io.log(`v2 の ID を作り、${relayUrl} に登録しました。`);
+  io.log(`Person ID を作り、${relayUrl} に登録しました。`);
   io.log(`ID: ${person.personId}（このPCの同じPersonを使うクライアントで共通です。友人にはこのIDを伝えます）`);
   io.log(`内部転送端末: ${name}（通常の操作では指定不要です）`);
   io.log("次に:");

@@ -111,7 +111,7 @@ function pendingPeriods(ctx: ReturnType<typeof anyContext>, now: Date): PendingP
 /** 初期化されたPersonの実行環境を返す */
 function anyContext(flags: AgentFlags) {
   const r = resolveRelayAgent();
-  if (!r) throw new Error("v2 のPersonがありません。souieba init <Relay の URL> を実行してください");
+  if (!r) throw new Error("Person がありません。souieba init <Relay の URL> を実行してください");
   return relayContext(flags, r);
 }
 
@@ -234,7 +234,7 @@ export function inferenceHint(flags: AgentFlags): string | null {
  */
 export async function noteMove(flags: AgentFlags, to: string, opts: { from?: string; periodStart?: string; yes?: boolean; held?: boolean; ts?: string }): Promise<void> {
   const r = resolveRelayAgent();
-  if (!r) throw new Error("v2 のPersonがありません。souieba init <Relay の URL> を実行してください");
+  if (!r) throw new Error("Person がありません。souieba init <Relay の URL> を実行してください");
   const parts = relayParts(r, flags.now);
   const ops = relayOps({ parts, selfId: r.personId, now: flags.now });
   const periodStart = opts.periodStart ? parsePeriod(opts.periodStart).periodStart : undefined;
