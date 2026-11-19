@@ -1,12 +1,16 @@
+import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   closeSync,
   existsSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
   statSync,
   unlinkSync,
+  writeSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { MAX_POST_AGE_MS, MINUTE_MS, floorTo, sanitizeContent, scanSecrets } from "@souieba/core";
@@ -64,20 +68,19 @@ function sleepSync(ms: number): void {
 /**
  * ロックファイルを作れた1つのプロセスだけが fn を実行する（note と compose が同時に動いても行を失わないように）。
  * 持ち主が落ちて残ったロックは、LOCK_STALE_MS たったら奪う。
+ * ロックの中身は持ち主ごとの印で、手放すときは自分の印のときだけ消す（奪われたあとに、別の持ち主のロックを消さないため）。
  */
 export function withFileLock<T>(lockPath: string, fn: () => T): T {
   mkdirSync(dirname(lockPath), { recursive: true, mode: 0o700 });
+  const mine = randomUUID();
   for (;;) {
     let fd: number;
     try {
       fd = openSync(lockPath, "wx", 0o600);
+      writeSync(fd, mine);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      try {
-        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
-      } catch {
-        // 待っている間に消えた。すぐに取り直す
-      }
+      reclaimStale(lockPath, mine);
       sleepSync(LOCK_RETRY_MS);
       continue;
     }
@@ -86,11 +89,34 @@ export function withFileLock<T>(lockPath: string, fn: () => T): T {
     } finally {
       closeSync(fd);
       try {
-        unlinkSync(lockPath);
+        if (readFileSync(lockPath, "utf8") === mine) unlinkSync(lockPath);
       } catch {
         // 古いとみなされて奪われていた
       }
     }
+  }
+}
+
+/**
+ * 古くなったロックを片づける。確かめてから消すあいだに、別のプロセスが新しいロックを作っていても、それを消さないよう、
+ * まず自分だけの名前へ rename で取り上げ（1つのプロセスだけが成功する）、取り上げたものが本当に古いときだけ捨てる。
+ * 新しいロックを取り上げてしまったときは、元の場所が空いていれば返す
+ */
+function reclaimStale(lockPath: string, mine: string): void {
+  try {
+    if (Date.now() - statSync(lockPath).mtimeMs <= LOCK_STALE_MS) return;
+    const taken = `${lockPath}.stale-${mine}`;
+    renameSync(lockPath, taken);
+    try {
+      if (Date.now() - statSync(taken).mtimeMs > LOCK_STALE_MS) return;
+      linkSync(taken, lockPath);
+    } catch {
+      // 返せなかった（別のプロセスが先にロックを取った）。そのまま捨てる
+    } finally {
+      unlinkSync(taken);
+    }
+  } catch {
+    // 待っている間に消えた・別のプロセスが先に片づけた。すぐに取り直す
   }
 }
 
