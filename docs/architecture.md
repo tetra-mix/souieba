@@ -2,18 +2,19 @@
 
 この文書を、古い設計案ではなく現在の実装を説明する唯一の概要とする。
 
-## 1. 2つの共有方式
+## 1. 共有方式
 
-- **v1**: サーバのアカウントとログインコードを使う。アカウントには複数のAgentを登録でき、それぞれが投稿・復号用の鍵を持つ。
-- **v2 Relay**: アカウントを使わず、Person鍵から作る `sb_...` のPerson IDで人と人を接続する。共有設定・連絡先・グループ・プロジェクト・メモはPerson単位で保存する。
+アカウントを使わず、Person鍵から作る `sb_...` のPerson IDで人と人を接続する（v2 Relay）。共有設定・連絡先・グループ・プロジェクト・メモはPerson単位で保存する。
 
-v2の外部インターフェースにAgent選択はない。Relay通信に必要なDevice鍵はPersonの内部実装で、CLIが有効な1台を自動選択する。同じPCで別のPersonを動かす場合は `SOUIEBA_HOME` を分ける。
+以前あった v1（サーバのアカウント・ログインコード・グループ・投稿）は廃止した。CLI・SDK・サーバのコードを削除し、DB の v1 の表は 0005 のマイグレーションで落とす。v1 のアカウントやグループを v2 に移す手段は提供しない。
+
+外部インターフェースにAgent選択はない。Relay通信に必要なDevice鍵はPersonの内部実装で、CLIが有効な1台を自動選択する。同じPCで別のPersonを動かす場合は `SOUIEBA_HOME` を分ける。
 
 ## 2. v2の保存場所
 
 `SOUIEBA_HOME`（既定は `~/.souieba`）に次を置く。
 
-- `config.json`: v1のアカウント情報と、v2のPerson鍵・Relay URL・内部Device鍵・クライアント設定
+- `config.json`: Person鍵・Relay URL・内部Device鍵・クライアント設定
 - `person/relay-state.json`: v2の連絡先、ローカルグループ、プロジェクト、共有方針、委任、変更記録
 - `person/notes.jsonl`: まだ投稿していないメモ
 - `person/inbox.jsonl`: 受け取った近況
