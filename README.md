@@ -160,11 +160,22 @@ docker compose up -d
 
 1つのインスタンスを Durable Object 1個（SQLite）で動かします。アプリはセルフホストと同じで、Worker は入口の検査とレート制限だけを行います（[構成](docs/architecture.md)）。
 
+デプロイは、main に入ったサーバの変更を GitHub Actions（`.github/workflows/server.yml`）が行います。型・テスト・生成物（マイグレーションと Worker の型）を確かめ、通ったらデプロイして、`/healthz` で応答を確かめます。
+
+最初に、リポジトリの Settings で次を用意します。
+1. Environments に `cloudflare-workers` を作る（Deployment branches は `main` だけにする。必要なら Required reviewers も付ける）
+2. その Environment の secret に、`CLOUDFLARE_API_TOKEN`（Workers の編集権限を持つ API トークン）と `CLOUDFLARE_ACCOUNT_ID` を入れる
+
+手元から行う場合は、次のとおりです。
+
 ```bash
 cd apps/server
 # wrangler.toml の SOUIEBA_PUBLIC_URL を自分の URL に変え、routes（自分のドメイン）を足す
 npx wrangler deploy
 ```
+
+- DB のマイグレーションは、デプロイのあと最初のリクエストで Durable Object が適用します。表を落とすような破壊的な変更は、PITR で戻せることを確かめてから main に入れます
+- 生成物（`drizzle/`・`migrations.gen.ts`・`worker-configuration.d.ts`）を作り直し忘れていないかは、`./scripts/check-generated.sh` で確かめられます（CI でも走ります）
 
 - 今の設定は `*.workers.dev`（`https://souieba.ryouma1128.workers.dev`）で公開しています。workers.dev では WAF のレート制限ルールを使えないので、Worker の中のレート制限だけで守ります。自分のドメインに移すときは `workers_dev = false` にして routes を足し、下の WAF を設定してください（接続先URLの変更には別途対応が必要です）
 - 認証なしの POST（端末の登録・認証の開始など）には、WAF のレート制限ルールを IP 単位でかけることを推奨します。Worker 側でも IP ごとに、全体で 1分 120 回、認証なしの POST は 1分 10 回までに制限しています（`[[ratelimits]]`）。Durable Object の中の制限はメモリ上にあり、Durable Object が入れ替わると数え直しになるためです

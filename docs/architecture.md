@@ -40,7 +40,7 @@ Tellのセッション間隔・再通知間隔・更新確認は `souieba config
 ## 5. デプロイ
 
 - セルフホスト: `apps/server` のNode/HonoサーバをDocker Composeで動かし、CaddyなどでHTTPSを終端する。
-- Cloudflare Workers: `apps/server/wrangler.toml` のWorkerとDurable Object SQLiteを使う。`pnpm --filter @souieba/server cf-typegen` でWorker型を更新し、`pnpm --filter @souieba/server deploy:worker` でデプロイする。
+- Cloudflare Workers: `apps/server/wrangler.toml` のWorkerとDurable Object SQLiteを使う。main への push で `.github/workflows/server.yml` がデプロイする。手元からは `pnpm --filter @souieba/server deploy:worker`。`wrangler.toml` を変えたら `pnpm --filter @souieba/server cf-typegen` でWorker型を更新する。
 - 公開するRelayはHTTPS必須。サーバ上の管理操作は、DBを直接開く `souieba-admin backup`（バックアップ）だけで、管理用のAPIやトークンはない。
 
 ## 6. 変更時の確認

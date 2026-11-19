@@ -1,0 +1,61 @@
+name: Server
+
+# main に入ったサーバ（Relay）の変更を、Cloudflare Workers にデプロイする。
+# 手順は README の「Cloudflare Workers」。デプロイには Environment「cloudflare-workers」の次の secret が要る:
+#   CLOUDFLARE_API_TOKEN   Workers の編集権限を持つ API トークン
+#   CLOUDFLARE_ACCOUNT_ID  Cloudflare のアカウント ID
+# DB のマイグレーションは、デプロイしたあと最初のリクエストで Durable Object が自動で適用する（apps/server/src/worker.ts）。
+# 破壊的なマイグレーション（表を落とすもの）は、デプロイ前に Durable Object の PITR で戻せることを確かめてから main に入れる。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/server/**"
+      - "packages/core/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/server.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同時に2つデプロイしない。実行中のデプロイは途中で止めない（Worker が中途半端な状態になるのを避ける）
+concurrency:
+  group: server-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # 手動実行でも、main 以外のブランチは本番にデプロイしない
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: cloudflare-workers
+      url: https://souieba.ryouma1128.workers.dev
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # デプロイの前に、型・テスト・生成物（マイグレーションと Worker の型）を確かめる。落ちたらデプロイしない
+      - run: pnpm typecheck
+      - run: pnpm exec vitest run apps/server packages/core
+      - run: ./scripts/check-generated.sh
+      - name: Cloudflare Workers にデプロイ
+        run: pnpm --filter @souieba/server deploy:worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # デプロイした Worker が応答するか。マイグレーションに失敗していると、ここで 5xx になる
+      - name: 動作確認（/healthz）
+        run: |
+          url=$(sed -nE 's/^SOUIEBA_PUBLIC_URL = "(.*)"/\1/p' apps/server/wrangler.toml)
+          test -n "$url"
+          curl --fail --silent --show-error --retry 5 --retry-delay 5 --retry-all-errors "$url/healthz"
