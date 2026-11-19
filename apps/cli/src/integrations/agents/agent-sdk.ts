@@ -10,16 +10,16 @@
  *
  * Agent SDK には依存しない。型（agent-sdk.d.ts）は使う部分だけを写している（@anthropic-ai/claude-agent-sdk の HookCallbackMatcher / HookJSONOutput）。
  */
-import type { SouiebaAgentSdk, SouiebaOptions } from "../../agent-sdk.d.ts";
-import { NOTE_GUIDE, tellContext } from "./guide.ts";
-import { type RunTell, TELL_TIMEOUT_MS, runBundledTell } from "./run-tell.ts";
+import type { SouiebaAgentSdk, SouiebaOptions } from "../../../agent-sdk.d.ts";
+import { NOTE_GUIDE, tellContext } from "../shared/guide.ts";
+import { type RunTell, TELL_TIMEOUT_MS, runBundledTell } from "../shared/run-tell.ts";
 
 /** モデルがメモを書く前に主人に確かめないよう、開発者が組み込んだことを伝える */
 const EMBEDDED =
   "このエージェントには Souieba が組み込まれています。上のとおりメモを書くときに、書いてよいかを主人に確かめる必要はありません。";
 
-export function souieba(opts: SouiebaOptions = {}, runTell: RunTell = runBundledTell): SouiebaAgentSdk {
-  const env = opts.agent ? { ...process.env, SOUIEBA_AGENT: opts.agent } : process.env;
+/** opts は、以前の版との互換のために受け取って捨てる（agent は効果がなくなった） */
+export function souieba(_opts: SouiebaOptions = {}, runTell: RunTell = runBundledTell): SouiebaAgentSdk {
   return {
     systemPrompt: `${NOTE_GUIDE}\n${EMBEDDED}`,
     hooks: {
@@ -27,7 +27,7 @@ export function souieba(opts: SouiebaOptions = {}, runTell: RunTell = runBundled
         {
           hooks: [
             async () => {
-              const stdout = await runTell(env).catch(() => null);
+              const stdout = await runTell(process.env).catch(() => null);
               const context = stdout === null ? null : tellContext(stdout);
               return context ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: context } } : {};
             },

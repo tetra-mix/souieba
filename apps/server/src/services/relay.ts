@@ -25,9 +25,11 @@ import {
   verifyRecipientGroup,
   verifyRevocation,
   verifyText,
+  CLOCK_SKEW_MS,
+  DAY_MS,
 } from "@souieba/core";
 import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
-import { newToken, sha256 } from "../crypto.ts";
+import { newRelayToken, sha256 } from "../crypto.ts";
 import { type DB, MAX_BOUND_PARAMS, chunks } from "../db/index.ts";
 import {
   relayDeviceChallenges,
@@ -44,13 +46,12 @@ import { ApiError, badRequest, conflict, forbidden, notFound } from "../errors.t
 export const CHALLENGE_TTL_MS = 2 * 60_000;
 export const SESSION_TTL_MS = 60 * 60_000;
 /** 送信時刻のずれの許容範囲 */
-export const CLOCK_SKEW_MS = 10 * 60_000;
 /** 1人が受け取れる未処理の接続要求の上限（スパム対策） */
 export const MAX_PENDING_INCOMING = 100;
 /** 1人が出せる承認待ちの要求の上限（多くの宛先に要求をばらまけないように） */
 export const MAX_PENDING_OUTGOING = 50;
 /** 承認も拒否もされない要求は、この期間で消す */
-export const PENDING_TTL_MS = 14 * 86_400_000;
+export const PENDING_TTL_MS = 14 * DAY_MS;
 /** 1人がブロックできる相手の上限 */
 export const MAX_BLOCKS = 500;
 /** 1回の受信で返すメッセージの上限 */
@@ -189,7 +190,7 @@ export function openSession(
   if (!verifyText(device.signKey, authSigningText(relayOrigin, input.personId, input.deviceId, input.challenge), input.sig)) {
     throw new ApiError(401, "unauthorized", "認証に失敗しました");
   }
-  const token = newToken("relay");
+  const token = newRelayToken();
   const expiresAt = iso(new Date(now.getTime() + SESSION_TTL_MS));
   db.insert(relayDeviceSessions)
     .values({ tokenHash: sha256(token), deviceId: input.deviceId, personId: input.personId, expiresAt, createdAt: iso(now) })

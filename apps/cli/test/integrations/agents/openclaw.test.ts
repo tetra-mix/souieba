@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { NOTE_GUIDE, tellContext } from "../../src/integrations/guide.ts";
-import { type RunTell, createPlugin } from "../../src/integrations/openclaw.ts";
+import { NOTE_GUIDE, tellContext } from "../../../src/integrations/shared/guide.ts";
+import { type RunTell, createPlugin } from "../../../src/integrations/agents/openclaw.ts";
 
 type Handler = (event: unknown, ctx: { trigger?: string }) => Promise<{ prependContext?: string; appendSystemContext?: string }>;
 
 /** OpenClaw がプラグインを読み込むときと同じ形で register を呼び、登録されたフックを返す */
-function load(runTell: RunTell, pluginConfig?: unknown) {
+function load(runTell: RunTell) {
   const hooks = new Map<string, Handler>();
-  createPlugin(runTell).register({ pluginConfig, on: (name, handler) => void hooks.set(name, handler) });
+  createPlugin(runTell).register({ on: (name, handler) => void hooks.set(name, handler) });
   return hooks.get("before_prompt_build")!;
 }
 
@@ -53,16 +53,10 @@ describe("OpenClaw プラグイン", () => {
     expect(await load(async () => Promise.reject(new Error("x")))({}, { trigger: "user" })).toEqual({ appendSystemContext: NOTE_GUIDE });
   });
 
-  it("設定の agent を SOUIEBA_AGENT として tell に渡す", async () => {
-    let agent: string | undefined;
-    const hook = load(async (env) => ((agent = env.SOUIEBA_AGENT), ""), { agent: "OpenClaw" });
-    await hook({}, { trigger: "user" });
-    expect(agent).toBe("OpenClaw");
-  });
-
   it("設定の検証", () => {
     const { safeParse } = createPlugin(async () => null).configSchema;
     expect(safeParse(undefined).success).toBe(true);
+    // 以前の版の agent は、効果はないが、書いたままでも読み込める
     expect(safeParse({ agent: "OpenClaw" }).success).toBe(true);
     expect(safeParse({ agent: 1 }).success).toBe(false);
     expect(safeParse({ other: "x" }).success).toBe(false);

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   closeSync,
@@ -6,14 +5,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { HOUR_MS, MAX_POST_AGE_MS, floorToHour, sanitizeContent, scanSecrets } from "@souieba/core";
-import { readStateJson, souiebaHome, writeSecretJson } from "./config.ts";
+import { MAX_POST_AGE_MS, MINUTE_MS, floorTo, sanitizeContent, scanSecrets } from "@souieba/core";
+import { readStateJson, resolveClientSettings, souiebaHome, writeSecretFile, writeSecretJson } from "./config.ts";
 
 /**
  * メモのプロジェクトをどこから決めたか（docs/v2-projects.md §3）。
@@ -109,8 +106,11 @@ export class NotesStore {
   private readonly notesPath: string;
   private readonly periodsPath: string;
   private readonly lockPath: string;
+  /** 投稿の時間帯の長さ。省略すると、CLI の設定（post-interval）を読む */
+  private readonly intervalMs: number;
 
-  constructor(agentKey: string, dir: string = join(souiebaHome(), "agents", agentKey)) {
+  constructor(agentKey: string, dir: string = join(souiebaHome(), "agents", agentKey), intervalMs?: number) {
+    this.intervalMs = intervalMs ?? resolveClientSettings().postIntervalMs;
     this.notesPath = join(dir, "notes.jsonl");
     this.periodsPath = join(dir, "periods.json");
     this.lockPath = join(dir, "notes.lock");
@@ -146,7 +146,7 @@ export class NotesStore {
     const start = Date.parse(periodStart);
     return this.all().filter((n) => {
       const t = Date.parse(n.ts);
-      return t >= start && t < start + HOUR_MS;
+      return t >= start && t < start + this.intervalMs;
     });
   }
 
@@ -172,7 +172,7 @@ export class NotesStore {
       .sort((a, b) => a.start - b.start || Number(b.project === DEFAULT) - Number(a.project === DEFAULT) || a.project.localeCompare(b.project))
       .map(({ start, project, notes }) => ({
         periodStart: new Date(start).toISOString(),
-        periodEnd: new Date(start + HOUR_MS).toISOString(),
+        periodEnd: new Date(start + this.intervalMs).toISOString(),
         project,
         notes,
       }));
@@ -180,10 +180,10 @@ export class NotesStore {
 
   /** メモの時間帯が、確定済みで投稿できる古さなら、その開始時刻 */
   private openPeriod(n: Note, now: Date): number | null {
-    const start = floorToHour(new Date(n.ts)).getTime();
+    const start = floorTo(new Date(n.ts), this.intervalMs).getTime();
     // サーバは48時間より古い期間を受け付けないので、少し余裕を持たせる
-    const oldest = now.getTime() - MAX_POST_AGE_MS + 10 * 60_000;
-    return start >= floorToHour(now).getTime() || start < oldest ? null : start;
+    const oldest = now.getTime() - MAX_POST_AGE_MS + 10 * MINUTE_MS;
+    return start >= floorTo(now, this.intervalMs).getTime() || start < oldest ? null : start;
   }
 
   mark(periodStart: string, state: "published" | "skipped", project: string = DEFAULT): void {
@@ -206,7 +206,7 @@ export class NotesStore {
     return this.all().filter((n) => {
       if (Date.parse(n.ts) < cutoff) return false;
       if (isHeld(n)) return true;
-      return n.via === "inferred" && !done[periodKey(floorToHour(new Date(n.ts)).getTime(), noteProject(n))];
+      return n.via === "inferred" && !done[periodKey(floorTo(new Date(n.ts), this.intervalMs).getTime(), noteProject(n))];
     });
   }
 
@@ -216,13 +216,13 @@ export class NotesStore {
    * 現在の時間帯のメモも対象。付け替えた件数を返す
    */
   move(to: string, opts: { from?: string; periodStart?: string; held?: boolean; ts?: string }, now: Date): number {
-    const want = opts.periodStart ? floorToHour(new Date(opts.periodStart)).getTime() : null;
+    const want = opts.periodStart ? floorTo(new Date(opts.periodStart), this.intervalMs).getTime() : null;
     return withFileLock(this.lockPath, () => {
       const done = this.readPeriods().done;
       const notes = this.all();
       let moved = 0;
       for (const n of notes) {
-        const start = floorToHour(new Date(n.ts)).getTime();
+        const start = floorTo(new Date(n.ts), this.intervalMs).getTime();
         if (start < now.getTime() - MAX_POST_AGE_MS) continue;
         if (want !== null && start !== want) continue;
         if (opts.ts !== undefined && n.ts !== opts.ts) continue;
@@ -267,14 +267,12 @@ export class NotesStore {
 
   /** 途中で落ちても元のファイルが残るよう、一時ファイルに書いてから置き換える */
   private rewrite(notes: Note[]): void {
-    const tmp = `${this.notesPath}.${process.pid}.${randomUUID()}.tmp`;
-    writeFileSync(tmp, notes.map((n) => `${JSON.stringify(n)}\n`).join(""), { mode: 0o600 });
-    renameSync(tmp, this.notesPath);
+    writeSecretFile(this.notesPath, notes.map((n) => `${JSON.stringify(n)}\n`).join(""));
   }
 
   /** 48時間より古いメモと記録を消す。消すものがなければ書き直さない */
   prune(now: Date): void {
-    const cutoff = now.getTime() - MAX_POST_AGE_MS - HOUR_MS;
+    const cutoff = now.getTime() - MAX_POST_AGE_MS - this.intervalMs;
     withFileLock(this.lockPath, () => {
       const lines = this.lines();
       const keep = this.all().filter((n) => Date.parse(n.ts) >= cutoff);

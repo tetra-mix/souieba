@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import {
   type CreatePostInput,
+  DEFAULT_POST_INTERVAL_MS,
   DEFAULT_SESSION_GAP_MS,
   DEFAULT_TELL_INTERVAL_MS,
   type SessionState,
@@ -18,6 +19,8 @@ export type SouiebaOptions = {
   statePath?: string;
   stateKey?: string;
   sessionGapMs?: number;
+  /** 投稿の時間帯の長さ。省略すると1時間 */
+  postIntervalMs?: number;
   maxTellsPerSession?: number;
   /** 同じ Session の途中でも、前の Tell からこれだけたてば次の1件を伝える */
   tellIntervalMs?: number;
@@ -35,6 +38,7 @@ export class Souieba {
   private readonly gapMs: number;
   private readonly maxTells: number;
   private readonly tellIntervalMs: number;
+  private readonly postIntervalMs: number;
   private readonly now: () => Date;
   private readonly onError: (op: string, err: unknown) => void;
   private state: SessionState | null;
@@ -45,6 +49,7 @@ export class Souieba {
     this.gapMs = opts.sessionGapMs ?? DEFAULT_SESSION_GAP_MS;
     this.maxTells = opts.maxTellsPerSession ?? 1;
     this.tellIntervalMs = opts.tellIntervalMs ?? DEFAULT_TELL_INTERVAL_MS;
+    this.postIntervalMs = opts.postIntervalMs ?? DEFAULT_POST_INTERVAL_MS;
     this.now = opts.now ?? (() => new Date());
     this.onError = opts.onError ?? (() => {});
     this.state = readStateJson<SessionState>(this.statePath);
@@ -64,7 +69,7 @@ export class Souieba {
 
   publish(input: Omit<CreatePostInput, "periodStart" | "periodEnd"> & { period?: "current" | "previous" }) {
     const { period = "previous", ...rest } = input;
-    return this.transport.publish({ ...periodOf(this.now(), period), ...rest });
+    return this.transport.publish({ ...periodOf(this.now(), period, this.postIntervalMs), ...rest });
   }
 
   sync() {

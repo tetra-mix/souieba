@@ -7,7 +7,7 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "agent": { "type": "string", "description": "Souieba に登録した Agent の名前（同じ PC に複数の Agent がある場合）" }
+      "agent": { "type": "string", "deprecated": true, "description": "効果はありません（以前の版との互換のために受け付けます）" }
     }
   }
 }

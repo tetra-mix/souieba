@@ -15,6 +15,7 @@ import {
   diffieHellman,
   generateKeyPairSync,
 } from "node:crypto";
+import { b64, unb64 } from "./base64.ts";
 
 const KEM_ID = 0x0020; // DHKEM(X25519, HKDF-SHA256)
 const KDF_ID = 0x0001; // HKDF-SHA256
@@ -63,8 +64,6 @@ function labeledExpand(suite: Buffer, prk: Buffer, label: string, info: Buffer, 
   return expand(prk, Buffer.concat([i2osp(length, 2), VERSION_LABEL, suite, bytes(label), info]), length);
 }
 
-const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64url");
-const unb64 = (s: string) => Buffer.from(s, "base64url");
 
 function x25519Public(raw: Buffer): KeyObject {
   return createPublicKey({ key: { kty: "OKP", crv: "X25519", x: b64(raw) }, format: "jwk" });

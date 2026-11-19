@@ -22,6 +22,27 @@ describe("NotesStore", () => {
     expect(p[0]!.notes.map((n) => n.text)).toEqual(["主人はAPIを設計していた", "主人はテストを書いていた"]);
   });
 
+  it("投稿の間隔を30分にすると、30分ごとの時間帯にまとめる", () => {
+    const s = new NotesStore("agt", mkdtempSync(join(tmpdir(), "souieba-notes-")), 30 * 60_000);
+    s.add("主人はAPIを設計していた", at("2026-10-05T12:10:00Z"));
+    s.add("主人はテストを書いていた", at("2026-10-05T12:40:00Z"));
+    s.add("主人は休憩していた", at("2026-10-05T14:05:00Z"));
+    const p = s.pending(at("2026-10-05T14:20:00Z"));
+    expect(p.map((x) => [x.periodStart, x.periodEnd])).toEqual([
+      ["2026-10-05T12:00:00.000Z", "2026-10-05T12:30:00.000Z"],
+      ["2026-10-05T12:30:00.000Z", "2026-10-05T13:00:00.000Z"],
+    ]);
+  });
+
+  it("投稿の間隔を2時間にすると、確定していない時間帯のメモは含めない", () => {
+    const s = new NotesStore("agt", mkdtempSync(join(tmpdir(), "souieba-notes-")), 2 * 60 * 60_000);
+    s.add("主人はAPIを設計していた", at("2026-10-05T11:10:00Z"));
+    s.add("主人はテストを書いていた", at("2026-10-05T13:10:00Z"));
+    const p = s.pending(at("2026-10-05T14:20:00Z"));
+    expect(p.map((x) => x.periodStart)).toEqual(["2026-10-05T10:00:00.000Z", "2026-10-05T12:00:00.000Z"]);
+    expect(s.pending(at("2026-10-05T13:20:00Z")).map((x) => x.periodStart)).toEqual(["2026-10-05T10:00:00.000Z"]);
+  });
+
   it("投稿・スキップした時間帯は pending から消える", () => {
     const s = store();
     s.add("主人はAPIを設計していた", at("2026-10-05T12:10:00Z"));

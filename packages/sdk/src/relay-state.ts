@@ -11,7 +11,7 @@
  * どれも主人の判断で変えるもので、エージェントが自分の判断で変えないよう、変更は CLI で主人の確認を取る（apps/cli の relay コマンド）。
  */
 import { join } from "node:path";
-import { type NarrativeMessage, type RelayEnvelope, isPersonId, isValidDisplayName } from "@souieba/core";
+import { type NarrativeMessage, type RelayEnvelope, isPersonId, isValidDisplayName, DAY_MS } from "@souieba/core";
 import { readStateJson, writeSecretJson } from "./config.ts";
 import { withFileLock } from "./notes.ts";
 
@@ -404,7 +404,7 @@ export class RelayInboxStore {
    */
   static prune(f: InboxFile, now: Date): void {
     const t = now.toISOString();
-    const dayAgo = new Date(now.getTime() - 86_400_000).toISOString();
+    const dayAgo = new Date(now.getTime() - DAY_MS).toISOString();
     f.items = f.items.filter((i) => i.message.useExpiresAt > t && !(i.toldAt && i.toldAt < dayAgo));
     for (const [id, exp] of Object.entries(f.seen)) if (exp <= t) delete f.seen[id];
     f.held = (f.held ?? []).filter((h) => typeof h.envelope?.deliveryExpiresAt === "string" && h.envelope.deliveryExpiresAt > t).slice(-MAX_HELD);

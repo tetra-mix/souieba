@@ -2,7 +2,10 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # ワークフローと、共通の手順（.github/actions/*）の両方
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     target-branch: dev

@@ -15,10 +15,10 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
 import { type KeyPair, generateEncryptionKey, generateSigningKey, isPublicKey, signText, verifyText } from "./crypto.ts";
 import { HPKE_SUITE, HpkeError, hpkeOpen, hpkeSeal, isUsableX25519Key } from "./hpke.ts";
+import { DAY_MS, MINUTE_MS } from "./period.ts";
 import { MAX_POST_LENGTH, MIN_TELL_CONTENT_LENGTH, findInstructionLike, sanitizeContent } from "./sanitize.ts";
+import { b64, unb64 } from "./base64.ts";
 
-const b64 = (b: Uint8Array) => Buffer.from(b).toString("base64url");
-const unb64 = (s: string) => Buffer.from(s, "base64url");
 
 // ---- Identity（人と端末） ----
 
@@ -214,7 +214,10 @@ export const MAX_MESSAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** 既定の配送期限（Relay が未配送のまま持つ期間） */
 export const DEFAULT_DELIVERY_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 /** 既定の利用期限（受信側が Tell に使ってよい期間）。v1 の Tell の対象期間（48時間）に合わせる */
-export const DEFAULT_USE_TTL_MS = 48 * 60 * 60 * 1000;
+/** 時計のずれを許す幅。メッセージの作成時刻が、受け取った時刻とこれ以上ずれていたら受け付けない（Relay と受信側で共通） */
+export const CLOCK_SKEW_MS = 10 * MINUTE_MS;
+
+export const DEFAULT_USE_TTL_MS = 2 * DAY_MS;
 /** 1つのメッセージの宛先の上限 */
 export const MAX_RELAY_RECIPIENTS = 50;
 
@@ -235,7 +238,7 @@ export type NarrativeMessage = {
   useExpiresAt: string;
   /** 受信側の Agent が他の人へ伝え直してよいか */
   reshare: Reshare;
-  /** 近況の時間帯（Note → Publish の1時間）。ないこともある */
+  /** 近況の時間帯（Note → Publish の単位。既定は1時間）。ないこともある */
   periodStart?: string;
   periodEnd?: string;
 };

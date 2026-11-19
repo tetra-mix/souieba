@@ -4,7 +4,7 @@
  * 返すのは {"context": "..."} の JSON だけで、素の文章は無視される。文脈は主人の発言の後ろに足される。
  * cron の実行は extra.platform が "cron" になる。
  */
-import type { HookAdapter } from "./hook.ts";
+import type { HookAdapter } from "../hook/adapter.ts";
 
 export const hermes: HookAdapter = {
   isOwnerTurn: (input) => (input as { extra?: { platform?: unknown } } | null)?.extra?.platform !== "cron",

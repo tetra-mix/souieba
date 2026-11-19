@@ -17,7 +17,7 @@
 - `config.json`: Person鍵・Relay URL・内部Device鍵・クライアント設定
 - `person/relay-state.json`: v2の連絡先、ローカルグループ、プロジェクト、共有方針、委任、変更記録
 - `person/notes.jsonl`: まだ投稿していないメモ
-- `person/inbox.jsonl`: 受け取った近況
+- `person/relay-inbox.json`: 受け取った近況
 - `person/devices/<deviceId>/`: 内部DeviceのRelayセッションと会話セッション
 
 Personの秘密鍵を含むため、設定ファイルとPersonディレクトリは所有者だけが読める権限で扱う。
@@ -40,8 +40,8 @@ Tellのセッション間隔・再通知間隔・更新確認は `souieba config
 ## 5. デプロイ
 
 - セルフホスト: `apps/server` のNode/HonoサーバをDocker Composeで動かし、CaddyなどでHTTPSを終端する。
-- Cloudflare Workers: `apps/server/wrangler.toml` のWorkerとDurable Object SQLiteを使う。`pnpm --filter @souieba/server cf-typegen` でWorker型を更新し、`pnpm --filter @souieba/server deploy` でデプロイする。
-- 公開するRelayはHTTPS必須。管理操作は管理者CLIと管理者トークンで行い、一般クライアントへ管理APIを渡さない。
+- Cloudflare Workers: `apps/server/wrangler.toml` のWorkerとDurable Object SQLiteを使う。main への push で `.github/workflows/server.yml` がデプロイする。手元からは `pnpm --filter @souieba/server deploy:worker`。`wrangler.toml` を変えたら `pnpm --filter @souieba/server cf-typegen` でWorker型を更新する。
+- 公開するRelayはHTTPS必須。サーバ上の管理操作は、DBを直接開く `souieba-admin backup`（バックアップ）だけで、管理用のAPIやトークンはない。
 
 ## 6. 変更時の確認
 
@@ -52,3 +52,11 @@ pnpm --filter @souieba/site build
 ```
 
 v2の動作確認は `scripts/v2-try.sh check --yes` を使う。人物ごとに `SOUIEBA_HOME` を分け、内部Device名や `SOUIEBA_AGENT` を使って切り替えない。
+
+## 7. CLI のコードの構成（apps/cli/src）
+
+- `main.ts`: 引数を読んで、`commands/` のコマンドに振り分けるだけ。ヘルプは `commands/usage.ts`
+- `commands/`: コマンドごとの実装。`agent.ts`（エージェントが呼ぶ tell・note・compose・publish・hook・mcp）、`person.ts`（主人が使う init・relay・doctor）、`config.ts`、`skill.ts`
+- `agent/`: エージェント用コマンドの本体。`context.ts`（Person の実行環境・出力）、`note.ts`、`compose.ts`、`publish.ts`、`tell.ts`
+- `relay.ts`・`relay-tui.ts`・`relay-ops/`: 共有の設定。`relay-ops/` の操作は CLI・TUI・MCP で共通（`contacts.ts`・`access.ts`・`projects.ts`・`delegation.ts`）
+- `integrations/`: エージェントごとの組み込み。`agents/`（エージェントごとに1ファイル: `claude-code.ts`・`codex.ts`・`hermes.ts` はフックのアダプタ、`openclaw.ts` はプラグイン、`agent-sdk.ts`）、`hook/`（フックの共通部分）、`mcp/`、`shared/`（どれでも使う文面と tell の実行）

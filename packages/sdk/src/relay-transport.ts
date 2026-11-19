@@ -7,6 +7,7 @@
  * 受信箱は1つなので、伝えるのは1回だけ（先に tell した会話）。
  */
 import {
+  CLOCK_SKEW_MS,
   type CreatePostInput,
   DEFAULT_DELIVERY_TTL_MS,
   HPKE_SUITE,
@@ -51,7 +52,6 @@ import {
 import type { SouiebaTransport } from "./transport.ts";
 
 /** 作成時刻が未来にずれていてよい範囲 */
-const FUTURE_SKEW_MS = 10 * 60_000;
 const MIN_TTL_MS = 60 * 60_000;
 const DEFAULT_LEASE_SEC = 600;
 
@@ -390,7 +390,7 @@ export class RelayTransport implements SouiebaTransport {
     if (seen[env.messageId]) return { ok: false, reason: "replay" };
     const t = now.getTime();
     if (Date.parse(env.deliveryExpiresAt) <= t) return { ok: false, reason: "expired" };
-    if (!(Date.parse(env.createdAt) <= t + FUTURE_SKEW_MS)) return { ok: false, reason: "bad_time" };
+    if (!(Date.parse(env.createdAt) <= t + CLOCK_SKEW_MS)) return { ok: false, reason: "bad_time" };
     let raw: unknown;
     try {
       raw = openRelayMessage(env, me);

@@ -45,13 +45,26 @@ describe.skipIf(process.platform === "win32")("設定ファイルの権限", () 
     expect(mode(configPath())).toBe(0o600);
   });
 
+  it("投稿の間隔（post-interval）を読む。既定は1時間で、正しくない値は断る", () => {
+    delete process.env.SOUIEBA_POST_INTERVAL_MIN;
+    expect(resolveClientSettings({ client: {} }).postIntervalMs).toBe(3_600_000);
+    expect(resolveClientSettings({ client: { postIntervalMinutes: 30 } }).postIntervalMs).toBe(1_800_000);
+    expect(() => resolveClientSettings({ client: { postIntervalMinutes: 7 } })).toThrow(/1日/);
+    process.env.SOUIEBA_POST_INTERVAL_MIN = "120";
+    try {
+      expect(resolveClientSettings({ client: { postIntervalMinutes: 30 } }).postIntervalMs).toBe(7_200_000);
+    } finally {
+      delete process.env.SOUIEBA_POST_INTERVAL_MIN;
+    }
+  });
+
   it("クライアント設定の間隔を読み、環境変数で一時的に上書きできる", () => {
     saveClientConfig({ client: { sessionGapMinutes: 0, tellIntervalMinutes: 2, updateCheck: false } });
-    expect(resolveClientSettings()).toEqual({ sessionGapMs: 0, tellIntervalMs: 120_000, updateCheck: false });
+    expect(resolveClientSettings()).toEqual({ sessionGapMs: 0, tellIntervalMs: 120_000, postIntervalMs: 3_600_000, updateCheck: false });
 
     process.env.SOUIEBA_SESSION_GAP_MIN = "3";
     process.env.SOUIEBA_TELL_INTERVAL_MIN = "0";
     process.env.SOUIEBA_NO_UPDATE_CHECK = "1";
-    expect(resolveClientSettings()).toEqual({ sessionGapMs: 180_000, tellIntervalMs: 0, updateCheck: false });
+    expect(resolveClientSettings()).toEqual({ sessionGapMs: 180_000, tellIntervalMs: 0, postIntervalMs: 3_600_000, updateCheck: false });
   });
 });

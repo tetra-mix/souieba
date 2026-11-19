@@ -134,18 +134,18 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
     const aliceId = /ID: (sb_[a-z2-7]{32})/.exec(initA.out)![1]!;
     const initB = await souieba("bob", "init", baseUrl, "--name", "ClaudeB");
     const bobId = /ID: (sb_[a-z2-7]{32})/.exec(initB.out)![1]!;
-    expect((await souieba("alice", "relay", "id")).out).toContain(aliceId);
+    expect((await souieba("alice", "id")).out).toContain(aliceId);
 
     // 2. 接続の要求は共有を広げるので、--yes がなければ変更の内容を出して止まる（何も変えない）
-    const byAgent = await souieba("alice", "relay", "connect", bobId, "--name", "ボブ");
+    const byAgent = await souieba("alice", "connect", bobId, "--name", "ボブ");
     expect(byAgent.code).toBe(3);
     expect(byAgent.out).toContain("主人の承認が必要");
     expect(byAgent.out).toContain(`${bobId} に接続を要求し、呼び名を「ボブ」にします`);
-    expect(byAgent.out).toContain(`souieba relay connect ${bobId} --name ボブ --yes`);
-    expect((await souieba("alice", "relay", "contacts")).out).not.toContain(bobId);
+    expect(byAgent.out).toContain(`souieba connect ${bobId} --name ボブ --yes`);
+    expect((await souieba("alice", "contacts")).out).not.toContain(bobId);
 
     // 主人が会話で同意したので、エージェントが --yes を付けて実行する
-    const approved = await souieba("alice", "relay", "connect", bobId, "--name", "ボブ", "--yes");
+    const approved = await souieba("alice", "connect", bobId, "--name", "ボブ", "--yes");
     expect(approved.code).toBe(0);
     expect(approved.out).toContain("接続を要求しました");
 
@@ -238,27 +238,27 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
     expect(tell.out).toContain("伝え直さないでください");
 
     // 送った側は配送状態を確かめられる
-    expect((await souieba("alice", "relay", "sent")).out).toContain("ボブ: 受信済み");
-    const status = await souieba("alice", "relay", "status");
+    expect((await souieba("alice", "sent")).out).toContain("ボブ: 受信済み");
+    const status = await souieba("alice", "status");
     expect(status.out).toContain("ボブ（共有可）");
   });
 
   it("共有を狭める操作は確認なしで実行でき、エージェントがしたことは次の tell で知らせる", { timeout: 60_000 }, async () => {
-    const r = await souieba("alice", "relay", "deny", "ボブ");
+    const r = await souieba("alice", "deny", "ボブ");
     expect(r.code).toBe(0);
-    expect((await souieba("alice", "relay", "status")).out).not.toContain("ボブ（共有可）");
+    expect((await souieba("alice", "status")).out).not.toContain("ボブ（共有可）");
     expect((await souieba("alice", "tell")).out).toContain("ボブ（sb_");
     // 広げる操作（allow）は --yes が要る
-    expect((await souieba("alice", "relay", "allow", "ボブ")).code).toBe(3);
-    expect((await souieba("alice", "relay", "allow", "ボブ", "--yes")).code).toBe(0);
-    expect((await souieba("alice", "relay", "status")).out).toContain("ボブ（共有可）");
+    expect((await souieba("alice", "allow", "ボブ")).code).toBe(3);
+    expect((await souieba("alice", "allow", "ボブ", "--yes")).code).toBe(0);
+    expect((await souieba("alice", "status")).out).toContain("ボブ（共有可）");
   });
 
   it("プロジェクトごとの共有先: worktree も同じプロジェクトになり、そのプロジェクトの相手にだけ届く", { timeout: 180_000 }, async () => {
     // キャロルと接続する（アリスはボブと既定のプロジェクトで共有している）
     const initC = await souieba("carol", "init", baseUrl, "--name", "ClaudeC");
     const carolId = /ID: (sb_[a-z2-7]{32})/.exec(initC.out)![1]!;
-    const aliceId = /ID: (sb_[a-z2-7]{32})/.exec((await souieba("alice", "relay", "id")).out)![1]!;
+    const aliceId = /ID: (sb_[a-z2-7]{32})/.exec((await souieba("alice", "id")).out)![1]!;
     await owner("alice", ["connect", carolId], "キャロル");
     await owner("carol", ["accept", aliceId], "アリス");
 
@@ -275,14 +275,14 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
     mkdirSync(join(wt, "src"), { recursive: true });
 
     // 共有先が空のプロジェクトを作るのは狭める操作（ボブに届いていたこのディレクトリのメモが、誰にも届かなくなる）
-    const add = await souieba("alice", "relay", "project", "add", "研究", repo);
+    const add = await souieba("alice", "project", "add", "研究", repo);
     expect(add.code).toBe(0);
-    expect((await souieba("alice", "relay", "project", "which", join(wt, "src"))).out).toContain("プロジェクト「研究」");
+    expect((await souieba("alice", "project", "which", join(wt, "src"))).out).toContain("プロジェクト「研究」");
     // プロジェクトの共有先に足すのは広げる操作
-    expect((await souieba("alice", "relay", "allow", "キャロル", "--project", "研究")).code).toBe(3);
-    expect((await souieba("alice", "relay", "allow", "キャロル", "--project", "研究", "--yes")).code).toBe(0);
+    expect((await souieba("alice", "allow", "キャロル", "--project", "研究")).code).toBe(3);
+    expect((await souieba("alice", "allow", "キャロル", "--project", "研究", "--yes")).code).toBe(0);
     // Policy の変更は、改行を含む全文が次の tell で知らされる
-    expect((await souieba("alice", "relay", "policy", "set", "実装の進み具合は話してよい。", "--project", "研究", "--yes")).code).toBe(0);
+    expect((await souieba("alice", "policy", "set", "実装の進み具合は話してよい。", "--project", "研究", "--yes")).code).toBe(0);
     const notice = await souieba("alice", "tell");
     expect(notice.out).toContain("プロジェクト「研究」で、共有方針を次の内容にします: 実装の進み具合は話してよい。");
 
@@ -325,11 +325,11 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
     expect(tb.out).not.toContain("パーサ");
 
     // ディレクトリを外す・プロジェクトを消すと、このディレクトリのメモは既定（ボブ）に届くようになるので、広げる操作
-    const rm = await souieba("alice", "relay", "project", "dir", "remove", "研究", repo);
+    const rm = await souieba("alice", "project", "dir", "remove", "研究", repo);
     expect(rm.code).toBe(3);
     expect(rm.out).toContain("共有する相手が増えます");
     expect(rm.out).toContain("ボブ");
-    const del = await souieba("alice", "relay", "project", "delete", "研究");
+    const del = await souieba("alice", "project", "delete", "研究");
     expect(del.code).toBe(3);
 
     // まだ送っていないメモの付け替えも、届く相手が増えるなら承認が要る
@@ -369,48 +369,48 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
 
   it("任せる範囲: 任せるのは主人だけ。範囲の中は確認なしで実行され tell で知らされ、範囲の外・期限切れは確認が要る", { timeout: 180_000 }, async () => {
     // エージェントは任せられない（--yes を付けても）。終了コード 4 で、何も変えない
-    const byAgent = await souieba("alice", "relay", "delegate", "grant", "audience", "--project", "研究", "--yes");
+    const byAgent = await souieba("alice", "delegate", "grant", "audience", "--project", "研究", "--yes");
     expect(byAgent.code).toBe(4);
     expect(byAgent.out).toContain("主人が自分でしかできません");
-    expect((await souieba("alice", "relay", "delegate")).out).toContain("なし");
+    expect((await souieba("alice", "delegate")).out).toContain("なし");
 
     // 主人が端末で y と答えると任せられる
     await owner("alice", ["delegate", "grant", "audience"], undefined, { project: "研究", term: "24h" });
-    expect((await souieba("alice", "relay", "delegate", "list")).out).toContain("プロジェクト「研究」の共有先");
+    expect((await souieba("alice", "delegate", "list")).out).toContain("プロジェクト「研究」の共有先");
 
     // 範囲の中の広げる操作は --yes なしで実行される
-    const inside = await souieba("alice", "relay", "allow", "ボブ", "--project", "研究");
+    const inside = await souieba("alice", "allow", "ボブ", "--project", "研究");
     expect(inside.code).toBe(0);
     expect(inside.out).toContain("任された範囲での変更");
     // 範囲の外（同じプロジェクトの共有方針・ほかのプロジェクトの共有先）は、これまでどおり確認が要る
-    expect((await souieba("alice", "relay", "policy", "set", "何でも話してよい", "--project", "研究")).code).toBe(3);
-    expect((await souieba("alice", "relay", "allow", "キャロル")).code).toBe(3);
+    expect((await souieba("alice", "policy", "set", "何でも話してよい", "--project", "研究")).code).toBe(3);
+    expect((await souieba("alice", "allow", "キャロル")).code).toBe(3);
     // 任せた範囲での変更も、次の tell で知らせる
     const told = await souieba("alice", "tell");
     expect(told.out).toContain("（任せた範囲での変更）プロジェクト「研究」で、ボブ（sb_");
 
     // 期限が切れたら、また確認が要る
     now = new Date(now.getTime() + 25 * 3_600_000);
-    expect((await souieba("alice", "relay", "deny", "ボブ", "--project", "研究")).code).toBe(0);
-    expect((await souieba("alice", "relay", "allow", "ボブ", "--project", "研究")).code).toBe(3);
-    expect((await souieba("alice", "relay", "delegate")).out).toContain("期限切れ");
+    expect((await souieba("alice", "deny", "ボブ", "--project", "研究")).code).toBe(0);
+    expect((await souieba("alice", "allow", "ボブ", "--project", "研究")).code).toBe(3);
+    expect((await souieba("alice", "delegate")).out).toContain("期限切れ");
 
     // 取り消すのは狭める操作なので、エージェントからもできる
     await owner("alice", ["delegate", "grant", "audience"], undefined, { project: "研究", term: "forever" });
-    expect((await souieba("alice", "relay", "delegate")).out).toContain("期限なし");
-    expect((await souieba("alice", "relay", "delegate", "revoke", "audience", "--project", "研究")).code).toBe(0);
-    expect((await souieba("alice", "relay", "delegate")).out).toContain("なし（");
-    expect((await souieba("alice", "relay", "unset", "ボブ", "--project", "研究")).code).toBe(0);
+    expect((await souieba("alice", "delegate")).out).toContain("期限なし");
+    expect((await souieba("alice", "delegate", "revoke", "audience", "--project", "研究")).code).toBe(0);
+    expect((await souieba("alice", "delegate")).out).toContain("なし（");
+    expect((await souieba("alice", "reset", "ボブ", "--project", "研究")).code).toBe(0);
 
     // 名前の変更は狭める扱い。メモ・任せた範囲も付いていく。既定は変えられない
     await owner("alice", ["delegate", "grant", "policy"], undefined, { project: "研究" });
     await souieba("alice", "note", "--cwd", join(tmp, "lab"), "主人は研究の図を描いていた");
-    const ren = await souieba("alice", "relay", "project", "rename", "研究", "ラボ");
+    const ren = await souieba("alice", "project", "rename", "研究", "ラボ");
     expect(ren.code).toBe(0);
-    expect((await souieba("alice", "relay", "project", "rename", "default", "x")).code).toBe(1);
-    expect((await souieba("alice", "relay", "project", "list")).out).toContain("- ラボ:");
-    expect((await souieba("alice", "relay", "delegate")).out).toContain("プロジェクト「ラボ」の共有方針");
-    expect((await souieba("alice", "relay", "project", "which", join(tmp, "lab"))).out).toContain("プロジェクト「ラボ」");
+    expect((await souieba("alice", "project", "rename", "default", "x")).code).toBe(1);
+    expect((await souieba("alice", "project", "list")).out).toContain("- ラボ:");
+    expect((await souieba("alice", "delegate")).out).toContain("プロジェクト「ラボ」の共有方針");
+    expect((await souieba("alice", "project", "which", join(tmp, "lab"))).out).toContain("プロジェクト「ラボ」");
     now = new Date(now.getTime() + 3_600_000);
     const comp = await souieba("alice", "compose");
     expect(comp.out).toContain("プロジェクト: ラボ");
@@ -419,7 +419,7 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
     // 共有先が空のプロジェクトは、compose で自動でスキップする（数えず、メモも出さない）
     const work = join(tmp, "work");
     mkdirSync(work, { recursive: true });
-    expect((await souieba("alice", "relay", "project", "add", "仕事", work)).code).toBe(0);
+    expect((await souieba("alice", "project", "add", "仕事", work)).code).toBe(0);
     await souieba("alice", "note", "--cwd", work, "主人は社外秘の見積もりを作っていた");
     now = new Date(now.getTime() + 3_600_000);
     const c2 = await souieba("alice", "compose");
@@ -501,7 +501,7 @@ describe("v2 の流れ（CLI をサブプロセスで実行）", () => {
   });
 
   it("TUI は端末でないと起動しない", { timeout: 60_000 }, async () => {
-    const r = await souieba("alice", "relay", "ui");
+    const r = await souieba("alice", "ui");
     expect(r.code).toBe(1);
     expect(r.out).toContain("端末で実行してください");
   });

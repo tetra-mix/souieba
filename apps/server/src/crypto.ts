@@ -7,8 +7,14 @@ function randomBytes(n: number): Uint8Array {
 
 export const sha256 = sha256Hex;
 
-const TOKEN_PREFIX = { relay: "r" } as const;
+/** セッショントークンの形。入口（edge.ts）と認証（relay-routes.ts）で同じ判定を使う */
+const RELAY_TOKEN_RE = /^Bearer\s+(sou_r_[A-Za-z0-9_-]+)$/;
 
-export function newToken(kind: keyof typeof TOKEN_PREFIX): string {
-  return `sou_${TOKEN_PREFIX[kind]}_${Buffer.from(randomBytes(32)).toString("base64url")}`;
+export function newRelayToken(): string {
+  return `sou_r_${Buffer.from(randomBytes(32)).toString("base64url")}`;
+}
+
+/** Authorization ヘッダから、セッショントークンを取り出す。形が違えば null */
+export function bearerToken(header: string | null | undefined): string | null {
+  return RELAY_TOKEN_RE.exec(header ?? "")?.[1] ?? null;
 }

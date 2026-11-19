@@ -4,12 +4,12 @@
  * config.json の client.updateCheck=false または SOUIEBA_NO_UPDATE_CHECK を設定すると確かめない。
  */
 import { join } from "node:path";
-import { compareVersions } from "@souieba/core";
+import { compareVersions, DAY_MS } from "@souieba/core";
 import { readStateJson, resolveClientSettings, souiebaHome, writeSecretJson } from "@souieba/sdk";
 import { CLI_VERSION } from "./version.ts";
 
-const CHECK_INTERVAL_MS = 24 * 3_600_000;
-const NOTIFY_INTERVAL_MS = 24 * 3_600_000;
+const CHECK_INTERVAL_MS = DAY_MS;
+const NOTIFY_INTERVAL_MS = DAY_MS;
 const FETCH_TIMEOUT_MS = 2_000;
 
 type UpdateCache = { checkedAt?: string; latest?: string | null; notifiedVersion?: string; notifiedAt?: string };
