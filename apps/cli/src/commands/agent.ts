@@ -2,6 +2,7 @@
 import * as agentCmd from "../agent/index.ts";
 import { HOOK_TARGETS, hookOutput, isHookTarget } from "../integrations/hook/index.ts";
 import { NeedsApprovalError } from "../relay.ts";
+import { usageOf } from "./catalog.ts";
 import { type CommandContext, readStdin } from "./context.ts";
 
 export async function tellCommand({ flags, values }: CommandContext): Promise<void> {
@@ -9,7 +10,7 @@ export async function tellCommand({ flags, values }: CommandContext): Promise<vo
 }
 
 export async function hookCommand({ sub, flags }: CommandContext): Promise<void> {
-  if (!isHookTarget(sub)) throw new Error(`souieba hook <${HOOK_TARGETS.join("|")}>`);
+  if (!isHookTarget(sub)) throw new Error(usageOf("hook", { hooks: HOOK_TARGETS.join("|") }));
   const stdin = process.stdin.isTTY ? "" : await readStdin();
   const output = await hookOutput(
     sub,
@@ -35,7 +36,7 @@ export async function toldCommand({ cmd, sub, flags }: CommandContext): Promise<
 export async function noteCommand({ sub, rest, flags, values }: CommandContext): Promise<void> {
   if (sub === "move") {
     const to = rest[0];
-    if (!to) throw new Error("souieba note move <移す先のプロジェクト> [--from <プロジェクト>] [--period <開始時刻>]");
+    if (!to) throw new Error(usageOf("note move"));
     try {
       await agentCmd.noteMove(flags, to, { from: values.from, periodStart: values.period, yes: values.yes, held: values.held, ts: values.note });
     } catch (err) {
@@ -46,7 +47,7 @@ export async function noteCommand({ sub, rest, flags, values }: CommandContext):
     return;
   }
   const text = [sub, ...rest].filter(Boolean).join(" ");
-  if (!text) throw new Error("souieba note <メモ>");
+  if (!text) throw new Error(usageOf("note"));
   agentCmd.note(flags, text, {
     cwd: values.cwd ?? process.cwd(),
     session: values.session ?? process.env.SOUIEBA_SESSION ?? null,

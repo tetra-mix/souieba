@@ -1,5 +1,6 @@
 import { SKILL_TOPICS, installedSkills, isSkillTopic, skillText, skillVersionAdvice } from "../skill.ts";
 import { CLI_VERSION } from "../version.ts";
+import { usageOf } from "./catalog.ts";
 import type { CommandContext } from "./context.ts";
 
 /** souieba skill get <topic> | skill list */
@@ -15,6 +16,6 @@ export function skillCommand({ sub, rest }: CommandContext): void {
   } else if (sub === "list" || sub === undefined) {
     for (const [t, d] of Object.entries(SKILL_TOPICS)) console.log(`${t}\t${d}`);
   } else {
-    throw new Error(`souieba skill get <${Object.keys(SKILL_TOPICS).join("|")}>`);
+    throw new Error(`${usageOf("skill get")}（topic: ${Object.keys(SKILL_TOPICS).join(" / ")}）`);
   }
 }

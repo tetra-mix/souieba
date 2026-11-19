@@ -22,6 +22,8 @@ import {
 } from "@souieba/sdk";
 import { CLI_VERSION } from "./version.ts";
 
+import { usageOf } from "./commands/catalog.ts";
+
 export type PersonIo = { log: (line: string) => void; now: () => Date };
 
 /** セッショントークンを平文で流さないよう、http は手元で動かす開発用（localhost / 127.0.0.1）だけにする */
@@ -53,7 +55,7 @@ export async function initCommand(a: { url?: string; name?: string }, io: Person
     throw new Error(`Person ID（${cfg.person.personId}）はもうあります。別のPersonを作るときは SOUIEBA_HOME を変えてください`);
   }
   const url = a.url;
-  if (!url) throw new Error("souieba init <Relay の URL> [--name <内部名>]");
+  if (!url) throw new Error(usageOf("init"));
   const relayUrl = relayOrigin(url);
   const name = requireDeviceName(cfg, a.name ?? "relay");
   const now = io.now();
