@@ -1,8 +1,8 @@
-// souieba/agent-sdk の型（実装は src/integrations/agent-sdk.ts）。
+// souieba/agent-sdk の型（実装は src/integrations/agent-sdk/index.ts）。
 // @anthropic-ai/claude-agent-sdk の query() の options にそのまま渡せる形にしている。
 
 export type SouiebaOptions = {
-  /** 同じ PC で複数のエージェントが Souieba を使うときの、このエージェントの名前（SOUIEBA_AGENT） */
+  /** 効果はありません。Souieba は Person 単位で動くため、エージェントの名前を選ぶ仕組みはなくなりました */
   agent?: string;
 };
 

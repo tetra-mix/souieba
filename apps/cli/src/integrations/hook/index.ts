@@ -2,21 +2,15 @@
  * souieba hook <エージェント>: エージェントのフックから、主人の発言ごとに呼ぶ。
  * tell の結果とメモの手引きを、そのエージェントが文脈として受け取れる形で出力する。
  * スキルだけだと tell や note を実行するかがモデルの判断に任されるため、フックで毎回確実に渡す。
- * エージェントごとの違い（入力の読み方・出力の形）は、それぞれのファイルの HookAdapter に閉じ込める。
+ * エージェントごとの違い（入力の読み方・出力の形）は、それぞれのディレクトリの HookAdapter（adapter.ts）に閉じ込める。
  *
  * どんな失敗でも終了コード 0 で終わる（Claude Code の UserPromptSubmit は終了コード 2 で主人の発言を止めてしまうため）。
  */
-import { claudeCode } from "./claude-code.ts";
-import { codex } from "./codex.ts";
-import { NOTE_GUIDE, tellContext } from "./guide.ts";
-import { hermes } from "./hermes.ts";
-
-export type HookAdapter = {
-  /** フックの入力（標準入力の JSON。読めなければ null）から、主人の発言で始まった実行かを判断する。cron などでは tell しない */
-  isOwnerTurn(input: unknown): boolean;
-  /** エージェントに渡す文脈を、そのエージェントのフックの出力の形にする */
-  format(context: string): string;
-};
+import { claudeCode } from "../claude-code/index.ts";
+import { codex } from "../codex/index.ts";
+import { hermes } from "../hermes/index.ts";
+import { NOTE_GUIDE, tellContext } from "../shared/guide.ts";
+import type { HookAdapter } from "./adapter.ts";
 
 const ADAPTERS = { "claude-code": claudeCode, codex, hermes } satisfies Record<string, HookAdapter>;
 

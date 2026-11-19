@@ -27,7 +27,7 @@ import {
   Souieba,
   SouiebaApiError,
 } from "@souieba/sdk";
-import { NOTHING_TO_TELL, sessionGuide } from "./integrations/guide.ts";
+import { NOTHING_TO_TELL, sessionGuide } from "./integrations/shared/guide.ts";
 import { NeedsApprovalError, approvalMessage, relayParts } from "./relay.ts";
 import { OpError, projectLabel, relayOps } from "./relay-ops.ts";
 import { updateAdvice, updateToNotify } from "./update-check.ts";

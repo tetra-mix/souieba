@@ -7,7 +7,7 @@ import {
   loadClientConfig,
   saveClientConfig,
 } from "@souieba/sdk";
-import { HOOK_TARGETS, hookOutput, isHookTarget } from "./integrations/hook.ts";
+import { HOOK_TARGETS, hookOutput, isHookTarget } from "./integrations/hook/index.ts";
 import { initCommand } from "./person.ts";
 import { SKILL_TOPICS, installedSkills, isSkillTopic, skillText, skillVersionAdvice } from "./skill.ts";
 import { latestVersion, newerThanCurrent, updateAdvice } from "./update-check.ts";
@@ -140,7 +140,7 @@ async function main(argv: string[]) {
     case "mcp":
       // 未ログインなどは起動時に止めず、ツールの結果として返す（エージェントが主人に原因を伝えられるように）
       // MCP の SDK は大きいので、ほかのコマンド（発言ごとに呼ばれるフックなど）の起動を遅くしないよう、ここでだけ読み込む
-      await (await import("./integrations/mcp.ts")).runMcpServer(flags);
+      await (await import("./integrations/mcp/server.ts")).runMcpServer(flags);
       break;
     case "told":
     case "release": {

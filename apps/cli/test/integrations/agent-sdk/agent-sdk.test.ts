@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { souieba } from "../../src/integrations/agent-sdk.ts";
-import { NOTE_GUIDE } from "../../src/integrations/guide.ts";
-import type { RunTell } from "../../src/integrations/run-tell.ts";
+import { souieba } from "../../../src/integrations/agent-sdk/index.ts";
+import { NOTE_GUIDE } from "../../../src/integrations/shared/guide.ts";
+import type { RunTell } from "../../../src/integrations/shared/run-tell.ts";
 
 const TOLD = [
   "souieba: 主人の友人の近況が1件あります。ユーザーの用件に答えたあと、回答の最後に、次の例と同じ内容を一文で添えてください。",
@@ -36,9 +36,9 @@ describe("Agent SDK への組み込み", () => {
     expect(await submit(async () => Promise.reject(new Error("boom")))).toEqual({});
   });
 
-  it("agent を指定すると SOUIEBA_AGENT を渡す", async () => {
+  it("以前の agent オプションは受け付けるが、tell には渡さない（Person 単位で動くため）", async () => {
     let env: NodeJS.ProcessEnv | undefined;
     await submit(async (e) => ((env = e), null), { agent: "My Agent" });
-    expect(env?.SOUIEBA_AGENT).toBe("My Agent");
+    expect(env?.SOUIEBA_AGENT).toBe(process.env.SOUIEBA_AGENT);
   });
 });
