@@ -42,12 +42,12 @@
     "prepack": "npm run build"
   },
   "devDependencies": {
-    "@hono/node-server": "^1",
+    "@hono/node-server": "^2",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "@souieba/core": "workspace:*",
     "@souieba/sdk": "workspace:*",
     "@souieba/server": "workspace:*",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "openclaw": {
     "extensions": [

@@ -11,6 +11,6 @@
   },
   "devDependencies": {
     "@souieba/server": "workspace:*",
-    "@hono/node-server": "^1"
+    "@hono/node-server": "^2"
   }
 }
