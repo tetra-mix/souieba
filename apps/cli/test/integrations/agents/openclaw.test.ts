@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { NOTE_GUIDE, tellContext } from "../../../src/integrations/shared/guide.ts";
-import { type RunTell, createPlugin } from "../../../src/integrations/openclaw/index.ts";
+import { type RunTell, createPlugin } from "../../../src/integrations/agents/openclaw.ts";
 
 type Handler = (event: unknown, ctx: { trigger?: string }) => Promise<{ prependContext?: string; appendSystemContext?: string }>;
 

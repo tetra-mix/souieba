@@ -1,4 +1,4 @@
-// souieba/agent-sdk の型（実装は src/integrations/agent-sdk/index.ts）。
+// souieba/agent-sdk の型（実装は src/integrations/agents/agent-sdk.ts）。
 // @anthropic-ai/claude-agent-sdk の query() の options にそのまま渡せる形にしている。
 
 export type SouiebaOptions = {

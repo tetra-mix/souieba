@@ -59,4 +59,4 @@ v2の動作確認は `scripts/v2-try.sh check --yes` を使う。人物ごとに
 - `commands/`: コマンドごとの実装。`agent.ts`（エージェントが呼ぶ tell・note・compose・publish・hook・mcp）、`person.ts`（主人が使う init・relay・doctor）、`config.ts`、`skill.ts`
 - `agent/`: エージェント用コマンドの本体。`context.ts`（Person の実行環境・出力）、`note.ts`、`compose.ts`、`publish.ts`、`tell.ts`
 - `relay.ts`・`relay-tui.ts`・`relay-ops/`: 共有の設定。`relay-ops/` の操作は CLI・TUI・MCP で共通（`contacts.ts`・`access.ts`・`projects.ts`・`delegation.ts`）
-- `integrations/`: エージェントごとの組み込み。`claude-code/`・`codex/`・`hermes/`（フックのアダプタ）、`openclaw/`（プラグイン）、`agent-sdk/`、`mcp/`、フックの共通部分 `hook/`、どれでも使う文面と tell の実行 `shared/`
+- `integrations/`: エージェントごとの組み込み。`agents/`（エージェントごとに1ファイル: `claude-code.ts`・`codex.ts`・`hermes.ts` はフックのアダプタ、`openclaw.ts` はプラグイン、`agent-sdk.ts`）、`hook/`（フックの共通部分）、`mcp/`、`shared/`（どれでも使う文面と tell の実行）

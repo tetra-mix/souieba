@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { souieba } from "../../../src/integrations/agent-sdk/index.ts";
+import { souieba } from "../../../src/integrations/agents/agent-sdk.ts";
 import { NOTE_GUIDE } from "../../../src/integrations/shared/guide.ts";
 import type { RunTell } from "../../../src/integrations/shared/run-tell.ts";
 

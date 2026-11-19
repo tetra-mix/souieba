@@ -2,13 +2,13 @@
  * souieba hook <エージェント>: エージェントのフックから、主人の発言ごとに呼ぶ。
  * tell の結果とメモの手引きを、そのエージェントが文脈として受け取れる形で出力する。
  * スキルだけだと tell や note を実行するかがモデルの判断に任されるため、フックで毎回確実に渡す。
- * エージェントごとの違い（入力の読み方・出力の形）は、それぞれのディレクトリの HookAdapter（adapter.ts）に閉じ込める。
+ * エージェントごとの違い（入力の読み方・出力の形）は、agents/ の各ファイルの HookAdapter（型は adapter.ts）に閉じ込める。
  *
  * どんな失敗でも終了コード 0 で終わる（Claude Code の UserPromptSubmit は終了コード 2 で主人の発言を止めてしまうため）。
  */
-import { claudeCode } from "../claude-code/index.ts";
-import { codex } from "../codex/index.ts";
-import { hermes } from "../hermes/index.ts";
+import { claudeCode } from "../agents/claude-code.ts";
+import { codex } from "../agents/codex.ts";
+import { hermes } from "../agents/hermes.ts";
 import { NOTE_GUIDE, tellContext } from "../shared/guide.ts";
 import type { HookAdapter } from "./adapter.ts";
 
