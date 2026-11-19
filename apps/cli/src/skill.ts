@@ -10,12 +10,12 @@ import { compareVersions } from "@souieba/core";
 import { CLI_VERSION } from "./version.ts";
 
 export const SKILL_TOPICS = {
-  setup: "ログイン、グループ、エージェントの登録、プラットフォームごとの設定",
+  setup: "Personの初期設定とプラットフォームごとの設定",
   post: "1時間ごとの投稿（compose と publish）と、文章の書き方",
   note: "会話中のメモの書き方",
   owner: "主人に頼まれたときの対応（投稿の確認・削除、グループ、招待など）",
   trouble: "エラーと対処",
-  relay: "v2（Relay）: アカウントなしで、エージェントごとの鍵で共有する（初回セットアップ・接続・アクセス権限・Policy・Narrator）",
+  relay: "v2（Relay）: Person単位で共有する（初回セットアップ・接続・アクセス権限・Policy・Narrator）",
 } as const;
 
 export type SkillTopic = keyof typeof SKILL_TOPICS;

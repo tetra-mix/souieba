@@ -9,7 +9,19 @@ Souieba は、Agent Skills（`SKILL.md`）に対応し、この PC でシェル�
 スキルを入れるだけでも使えますが、近況を確かめたりメモを残したりするかどうかは、そのときのエージェントの判断に任されます。
 プラグインやフックも入れておくと、あなたが話しかけるたびに確実に動くようになります。
 
-ここでいうエージェントの設定は、v1ではサーバのアカウントに登録するAgentを指します。Relay版（v2）はPerson単位で動くため、エージェントごとの登録・選択はありません。同じPC上のエージェントは同じPersonを使い、別のPersonにしたいときだけ `SOUIEBA_HOME` を分けて `souieba init` します。
+Souieba は Person 単位で動くため、エージェントごとの登録・選択はありません。同じ PC 上のエージェントは同じ Person を使い、別の Person にしたいときだけ `SOUIEBA_HOME` を分けて `souieba init` します。
+
+Tellの間隔など、CLIの動作設定は `config.json` を直接編集せず、次のコマンドで変更できます。分単位で、`0`も指定できます。
+
+```bash
+souieba config
+souieba config set session-gap 0
+souieba config set tell-interval 0
+souieba config set update-check off
+souieba config unset tell-interval
+```
+
+`SOUIEBA_SESSION_GAP_MIN`、`SOUIEBA_TELL_INTERVAL_MIN`、`SOUIEBA_NO_UPDATE_CHECK` を設定すると、設定ファイルより優先されます。
 
 ## 対応状況
 
@@ -153,7 +165,7 @@ Agent SDK は `settingSources` を省くと、`~/.claude` などの設定（フ�
   </TabItem>
 <TabItem label="MCP クライアント">
 
-Claude Desktop など、シェルを使えない MCP クライアントでは、`souieba mcp` を MCP サーバとして登録します。v1では先に `souieba agent add "Claude Desktop"`、Relay版（v2）では `souieba init <RelayのURL>` を実行しておきます。
+Claude Desktop など、シェルを使えない MCP クライアントでは、`souieba mcp` を MCP サーバとして登録します。先に `souieba init <RelayのURL>` を実行しておきます。
 Claude Desktop なら、設定の「開発者」から開ける `claude_desktop_config.json` に次を足して、アプリを再起動します。
 
 ```json
@@ -182,16 +194,6 @@ MCP にはフックがないため、ツールを呼ぶかどうかはエージ�
   </TabItem>
 </Tabs>
 
-## v1で同じPCに複数のAgentを登録する場合
+## 複数のエージェントで使う
 
-エージェントごとに `souieba agent add <名前>` で登録し、それぞれのエージェントに自分の名前を教えます。
-
-- Claude Code / Codex / Hermes Agent — 環境変数 `SOUIEBA_AGENT` に名前を設定します（Claude Code なら `~/.claude/settings.json` の `env`）
-- OpenClaw — スキルとプラグインの両方に名前を渡します
-
-```json5
-{
-  skills: { entries: { souieba: { env: { SOUIEBA_AGENT: "OpenClaw" } } } },
-  plugins: { entries: { souieba: { config: { agent: "OpenClaw" } } } },
-}
-```
+同じ設定ディレクトリを使うエージェントは、同じPersonを共有します。別のPersonを使う場合は `SOUIEBA_HOME` を分けて初期化してください。

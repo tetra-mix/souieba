@@ -3,19 +3,11 @@
  * 出力はエージェントが読む前提で、そのまま次の行動が分かる文面にする。
  */
 import { join } from "node:path";
-import { type DirectoryUser, type TellNarrative, formatTellText, isValidDisplayName, periodOf, validateTellText } from "@souieba/core";
+import { type TellNarrative, formatTellText, isValidDisplayName, periodOf, validateTellText } from "@souieba/core";
 import {
-  AgentWatch,
-  E2eeTransport,
-  HttpTransport,
   InstructionLikePostError,
-  MemberWatch,
-  type NamedGroup,
-  type NewMember,
-  displayGroupName,
   NarrativeRejectedError,
   NoRecipientsError,
-  NotesStore,
   PostTooLongError,
   type RelayPublishOptions,
   type ResolvedRelayAgent,
@@ -28,13 +20,12 @@ import {
   type NoteVia,
   accessFor,
   resolveNoteProject,
+  resolveClientSettings,
   resolveRelayAgent,
   SecretInNoteError,
   SecretInPostError,
   Souieba,
   SouiebaApiError,
-  resolveAgent,
-  souiebaHome,
 } from "@souieba/sdk";
 import { NOTHING_TO_TELL, sessionGuide } from "./integrations/guide.ts";
 import { NeedsApprovalError, approvalMessage, relayParts } from "./relay.ts";
@@ -43,7 +34,6 @@ import { updateAdvice, updateToNotify } from "./update-check.ts";
 import { CLI_VERSION } from "./version.ts";
 
 export type AgentFlags = {
-  agent?: string;
   json: boolean;
   debug: boolean;
   now: () => Date;
@@ -72,48 +62,9 @@ function nextSteps(flags: AgentFlags) {
 /** プロジェクトの名前をコマンドに入れるとき（名前は表示名と同じ規則なので、空白などを含むときだけ囲む） */
 const shq = (a: string) => (/^[^\s'"$`\\!*?;&|<>(){}[\]#~=%]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`);
 
-function context(flags: AgentFlags) {
-  const a = resolveAgent(flags.agent);
-  const dir = join(souiebaHome(), "agents", a.agentId);
-  if (!a.keys || !a.userId) {
-    throw new Error(`Agent「${a.name}」の鍵がありません（E2EE に対応する前に登録した Agent です）。souieba doctor で確認してください`);
-  }
-  /** tell は失敗しても黙って続けるが、CLI が古くて断られたことだけは主人に伝える */
-  const state: { outdated: string | null } = { outdated: null };
-  const debug = (msg: string) => {
-    if (flags.debug) console.error(`[souieba] ${msg}`);
-  };
-  const transport = new E2eeTransport(new HttpTransport({ baseUrl: a.serverUrl, token: a.token, clientVersion: CLI_VERSION }), {
-    userId: a.userId,
-    agentId: a.agentId,
-    keys: a.keys,
-    onReject: (postId, reason) => debug(`${postId} を受け取りませんでした（${reason}）`),
-  });
-  const souieba = new Souieba({
-    transport,
-    statePath: join(dir, "session.json"),
-    // 未設定なら SDK の既定（DEFAULT_SESSION_GAP_MS・DEFAULT_TELL_INTERVAL_MS）に任せる
-    sessionGapMs: process.env.SOUIEBA_SESSION_GAP_MIN ? Number(process.env.SOUIEBA_SESSION_GAP_MIN) * 60_000 : undefined,
-    tellIntervalMs: process.env.SOUIEBA_TELL_INTERVAL_MIN ? Number(process.env.SOUIEBA_TELL_INTERVAL_MIN) * 60_000 : undefined,
-    now: flags.now,
-    onError: (op, err) => {
-      if (err instanceof SouiebaApiError && err.code === "client_outdated") state.outdated = err.message;
-      if (flags.debug) console.error(`[souieba] ${op} 失敗: ${err instanceof Error ? err.message : err}`);
-    },
-  });
-  return {
-    agent: a,
-    transport,
-    souieba,
-    state,
-    notes: new NotesStore(a.agentId, dir),
-    watch: new AgentWatch(join(dir, "known_agents.json")),
-    memberWatch: new MemberWatch(join(dir, "known_members.json")),
-  };
-}
-
-/** v2（Relay）のPersonのとき。Note・Session・Tell の扱いは v1 と同じで、送受信だけが Relay 経由になる */
+/** RelayのPersonに対するNote・Session・Tellの実行環境 */
 function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
+  const settings = resolveClientSettings();
   const parts = relayParts(r, flags.now);
   const state: { outdated: string | null } = { outdated: null };
   const transport = parts.transport({
@@ -125,8 +76,8 @@ function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
     transport,
     // 会話の Session（tell の間隔）は端末ごと。受信箱と TOLD は人ごとに1つなので、同じ近況を2つの端末で伝えることはない
     statePath: join(parts.deviceDir, "session.json"),
-    sessionGapMs: process.env.SOUIEBA_SESSION_GAP_MIN ? Number(process.env.SOUIEBA_SESSION_GAP_MIN) * 60_000 : undefined,
-    tellIntervalMs: process.env.SOUIEBA_TELL_INTERVAL_MIN ? Number(process.env.SOUIEBA_TELL_INTERVAL_MIN) * 60_000 : undefined,
+    sessionGapMs: settings.sessionGapMs,
+    tellIntervalMs: settings.tellIntervalMs,
     now: flags.now,
     onError: (op, err) => {
       // Relay は信頼しないので、Relay の文面ではなく手元の決まった文を出す
@@ -145,7 +96,7 @@ function relayContext(flags: AgentFlags, r: ResolvedRelayAgent) {
  */
 function pendingPeriods(ctx: ReturnType<typeof anyContext>, now: Date): PendingPeriod[] {
   const pending = ctx.notes.pending(now);
-  if (ctx.mode !== "relay" || pending.length === 0) return pending;
+  if (pending.length === 0) return pending;
   const s = ctx.transport.localState();
   const audience = (pr: string) => Object.keys(s.contacts).some((id) => accessFor(s, id, pr).allowed);
   if (!Object.keys(s.projects).some(audience)) return pending;
@@ -157,10 +108,11 @@ function pendingPeriods(ctx: ReturnType<typeof anyContext>, now: Date): PendingP
   });
 }
 
-/** v1のAgentとv2のPersonを見分けて、Note・Session・Tellに共通の部分を返す */
+/** 初期化されたPersonの実行環境を返す */
 function anyContext(flags: AgentFlags) {
   const r = resolveRelayAgent();
-  return r ? relayContext(flags, r) : { mode: "v1" as const, ...context(flags) };
+  if (!r) throw new Error("v2 のPersonがありません。souieba init <Relay の URL> を実行してください");
+  return relayContext(flags, r);
 }
 
 const fmt = new Intl.DateTimeFormat("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -205,7 +157,6 @@ const VIA_LABEL: Record<NoteVia, string> = {
 /** v2 で、このメモのプロジェクトを決める。会話の ID があれば、主人の指定とフックが知らせた作業ディレクトリを使う */
 export function noteProjectFor(flags: AgentFlags, opts: NoteOptions = {}): NoteProjectChoice | null {
   const ctx = anyContext(flags);
-  if (ctx.mode !== "relay") return null;
   const now = flags.now();
   const sess = opts.session ? ctx.parts.sessions.get(opts.session, now) : null;
   return resolveNoteProject(ctx.transport.localState(), {
@@ -259,12 +210,11 @@ export function noteResult(flags: AgentFlags, text: string, opts: NoteOptions = 
 }
 
 /**
- * フックから: v2のPersonなら、この会話の作業ディレクトリを覚えて、会話のIDの手引きを返す。v1のAgentなら null
+ * フックから、この会話の作業ディレクトリを覚えて、会話のIDの手引きを返す。
  * （作業ディレクトリはフックが知らせたもので、エージェントが言うものではない）
  */
 export function hookSession(flags: AgentFlags, sess: { id: string; cwd: string | null }): string | null {
   const ctx = anyContext(flags);
-  if (ctx.mode !== "relay") return null;
   ctx.parts.sessions.touch(sess.id, sess.cwd, flags.now());
   return sessionGuide(sess.id, inferenceHint(flags));
 }
@@ -272,7 +222,6 @@ export function hookSession(flags: AgentFlags, sess: { id: string; cwd: string |
 /** エージェントが推定に使える、プロジェクトの一覧（説明つき。推定で選べないものは出さない）。なければ null */
 export function inferenceHint(flags: AgentFlags): string | null {
   const ctx = anyContext(flags);
-  if (ctx.mode !== "relay") return null;
   const s = ctx.transport.localState();
   const list = Object.values(s.projects).filter((p) => p.name !== DEFAULT_PROJECT && p.acceptInference !== false);
   if (list.length === 0) return null;
@@ -285,7 +234,7 @@ export function inferenceHint(flags: AgentFlags): string | null {
  */
 export async function noteMove(flags: AgentFlags, to: string, opts: { from?: string; periodStart?: string; yes?: boolean; held?: boolean; ts?: string }): Promise<void> {
   const r = resolveRelayAgent();
-  if (!r) throw new Error("note move は v2 の端末だけで使えます（v1 にはプロジェクトがありません）");
+  if (!r) throw new Error("v2 のPersonがありません。souieba init <Relay の URL> を実行してください");
   const parts = relayParts(r, flags.now);
   const ops = relayOps({ parts, selfId: r.personId, now: flags.now });
   const periodStart = opts.periodStart ? parsePeriod(opts.periodStart).periodStart : undefined;
@@ -369,21 +318,7 @@ export function composeResult(flags: AgentFlags): AgentResult {
   notes.prune(now);
   const pending = pendingPeriods(ctx, now);
   if (pending.length === 0) return { ok: true, json: { pending }, text: "souieba: 投稿待ちの時間帯はありません。" };
-  if (ctx.mode === "relay") return relayCompose(flags, pending, ctx.transport.localState());
-
-  const next = nextSteps(flags);
-  const lines = [
-    `souieba: 投稿待ちの時間帯が ${pending.length} 件あります。`,
-    "各時間帯について、メモをもとに主人がしていたことを1〜2文（120字以内、「主人は」で始まる三人称、推測は「〜らしい」）にまとめて投稿してください。",
-    "秘密情報・住所・金融情報・他人の個人情報・主人が「内緒」と言ったことは書かないでください。意味のある内容がなければスキップしてください。",
-  ];
-  for (const p of pending) {
-    lines.push("", `## ${fmt.format(new Date(p.periodStart))}〜${hm.format(new Date(p.periodEnd))}`);
-    for (const n of p.notes) lines.push(`- ${hm.format(new Date(n.ts))} ${n.text}`);
-    lines.push(next.publish(p.periodStart));
-    lines.push(next.skip(p.periodStart));
-  }
-  return { ok: true, json: { pending }, text: lines.join("\n") };
+  return relayCompose(flags, pending, ctx.transport.localState());
 }
 
 /**
@@ -466,26 +401,11 @@ export async function publishResult(
   const ctx = anyContext(flags);
   const now = flags.now();
   const period = periodArg === "previous" || periodArg === "current" ? periodOf(now, periodArg) : parsePeriod(periodArg);
-  if (ctx.mode === "relay") {
-    const project = narrative.project ?? DEFAULT_PROJECT;
-    if (!ctx.transport.localState().projects[project]) {
-      return { ok: false, json: { ok: false, error: "unknown_project" }, text: `souieba: プロジェクト「${project}」はありません。souieba compose が示した --project を使ってください。` };
-    }
-    return relayPublish(flags, ctx, period, content, { ...narrative, project });
+  const project = narrative.project ?? DEFAULT_PROJECT;
+  if (!ctx.transport.localState().projects[project]) {
+    return { ok: false, json: { ok: false, error: "unknown_project" }, text: `souieba: プロジェクト「${project}」はありません。souieba compose が示した --project を使ってください。` };
   }
-  const { transport, notes } = ctx;
-  let r;
-  try {
-    r = await transport.publish({ ...period, content });
-  } catch (err) {
-    return rewriteRequest(err);
-  }
-  notes.mark(period.periodStart, "published");
-  return {
-    ok: true,
-    json: { ok: true, ...r, ...period },
-    text: `souieba: ${r.created ? "投稿" : "上書き"}しました（${fmt.format(new Date(period.periodStart))}〜の1時間、${hm.format(new Date(r.visibleAt))} からグループのメンバーに公開）。`,
-  };
+  return relayPublish(flags, ctx, period, content, { ...narrative, project });
 }
 
 async function relayPublish(
@@ -575,105 +495,7 @@ export async function tellResult(
   reserve: boolean,
   onHead?: (head: string) => Promise<void>,
 ): Promise<{ json: unknown; text: string }> {
-  const any = anyContext(flags);
-  if (any.mode === "relay") return relayTellResult(flags, any, reserve, onHead);
-  const { agent, souieba, notes, transport, watch, memberWatch, state } = any;
-  const now = flags.now();
-  souieba.beginTurn();
-  const c = await souieba.pickTellCandidate();
-
-  let text: string | null = null;
-  if (c) {
-    const t = formatTellText(c.owner.displayName, c.content);
-    if (validateTellText(t, c.owner.displayName) !== null) {
-      await souieba.release(c.postId);
-    } else if (reserve || (await souieba.markAsTold(c.postId))) {
-      text = t;
-    }
-  }
-  const lines: string[] = [];
-  if (text && c) {
-    lines.push(...tellLines(c.postId, text));
-    if (reserve) lines.push(`伝えたら souieba told ${c.postId}、伝えなかったら souieba release ${c.postId} を実行してください。`);
-  } else {
-    lines.push(NOTHING_TO_TELL);
-  }
-  await onHead?.(lines.join("\n"));
-
-  const pending = notes.pending(now).length;
-  // 主人のアカウントに Agent が増えていたら知らせる（User トークンが漏れて、他人に足された可能性があるため）。
-  // グループ名を復号し、まだ封を持っていないメンバーの Agent に封をし直す（新しく入った人が名前を読めるように）。
-  // どれも並べて実行し、TELL_EXTRAS_MS で打ち切る。打ち切ったあとに届いた結果は記録しない（知らせないまま既知にしないため）
-  let expired = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<void>((resolve) => {
-    timer = setTimeout(() => {
-      expired = true;
-      resolve();
-    }, TELL_EXTRAS_MS);
-  });
-  const within = <T>(p: Promise<T>, fallback: T) => Promise.race([p.catch(() => fallback), deadline.then(() => fallback)]);
-  const [newAgents, nameIssue, newMembers, update] = await Promise.all([
-    within(
-      transport.ownAgents().then((own) => (expired ? [] : watch.check(own))),
-      [],
-    ),
-    within(transport.displayNameIssue(), null),
-    within(
-      Promise.all([transport.users(), transport.groupNames().catch(() => [])]).then(([users, groups]) =>
-        expired ? [] : newGroupMembers(memberWatch, users, agent.userId!, groups),
-      ),
-      [],
-    ),
-    // npm に新しい版が出ていれば、主人に更新を勧めてもらう（問い合わせは1日1回、知らせるのも1日1回）
-    within(
-      updateToNotify(now, () => !expired),
-      null,
-    ),
-  ]);
-  clearTimeout(timer);
-
-  const issueName = nameIssue ? contextName(nameIssue.name) : null;
-  const json = {
-    tell: text && c ? { postId: c.postId, text, friend: c.owner.displayName, reserved: reserve } : null,
-    pendingPeriods: pending,
-    newAgents: newAgents.map((a) => ({ id: a.id, name: contextName(a.name), createdAt: a.createdAt })),
-    outdated: state.outdated,
-    displayNameIssue: nameIssue ? { ...nameIssue, name: issueName } : null,
-    newMembers,
-    update: update ? { current: CLI_VERSION, latest: update } : null,
-  };
-  if (pending > 0) lines.push(pendingLine(flags, pending));
-  if (state.outdated) {
-    lines.push(`souieba: ${state.outdated}。ユーザーへの回答のあとで、主人に更新を頼んでください。`);
-  } else if (update) {
-    lines.push(`souieba: ${updateAdvice(update)}。ユーザーへの回答のあとで、主人に更新を勧めてください。あなたが実行してはいけません。`);
-  }
-  if (nameIssue) {
-    const why =
-      nameIssue.issue === "invalid"
-        ? "使えない文字か表現（絵文字・記号・命令に見える言葉など）が含まれているため、友人のエージェントに近況が届きません"
-        : "同じグループの人と同じ表示名のため、友人から見分けられません";
-    lines.push(
-      `souieba: 主人の表示名${issueName ? `「${issueName}」` : ""}は、${why}。ユーザーへの回答のあとで、主人に souieba profile --name <新しい表示名> で変更を頼んでください。`,
-    );
-  }
-  for (const a of newAgents) {
-    const name = contextName(a.name);
-    lines.push(
-      `souieba: 主人のアカウントに新しい Agent${name ? `「${name}」` : ""}（${a.id}、${fmt.format(new Date(a.createdAt))} に登録）が追加されました。` +
-        `ユーザーへの回答のあとで、このことを主人に伝えてください。心当たりがなければ、主人が souieba agent revoke ${a.id} を実行すれば止められます。あなたが実行してはいけません。`,
-    );
-  }
-  for (const m of newMembers) {
-    const who = m.displayName ? `${m.displayName}さん（@${m.handle}）` : `@${m.handle}`;
-    const where = m.groupName ? `グループ「${m.groupName}」` : "主人のグループ";
-    lines.push(
-      `souieba: ${where}に ${who} が加わりました。主人の近況はこの人にも届きます。ユーザーへの回答のあとで、このことを主人に伝えてください。` +
-        `心当たりがなければ、主人が souieba groups remove ${m.groupId} ${m.handle} を実行すれば外せます（グループの作成者だけができます。それ以外の人は作成者に相談してください）。あなたが実行してはいけません。`,
-    );
-  }
-  return { json, text: lines.join("\n") };
+  return relayTellResult(flags, anyContext(flags), reserve, onHead);
 }
 
 /** v2 の tell。伝える近況のほかに、届いた接続要求・呼び名のない相手・鍵の更新を知らせる（どれも主人が判断する） */
@@ -823,23 +645,6 @@ function contextName(name: string | null): string | null {
  * 主人のグループに新しく入った人。表示名とグループ名は他人が付けたもので、この出力はエージェント（LLM）が読むので、
  * 規則に合わないものは出さない（handle はサーバが英小文字・数字・_ に限っているが、ここでも確かめる）。
  */
-function newGroupMembers(watch: MemberWatch, users: DirectoryUser[], userId: string, groups: NamedGroup[]) {
-  const added: NewMember[] = watch.check(users, userId);
-  if (added.length === 0) return [];
-  const names = new Map(groups.map((g) => [g.id, g.name]));
-  return added
-    .filter((m) => HANDLE_RE.test(m.user.handle))
-    .map((m) => {
-      return {
-        groupId: m.groupId,
-        groupName: contextName(displayGroupName(names.get(m.groupId) ?? null)),
-        userId: m.user.id,
-        handle: m.user.handle,
-        displayName: contextName(m.user.displayName),
-      };
-    });
-}
-
 export async function told(flags: AgentFlags, postId: string): Promise<void> {
   const ok = await anyContext(flags).souieba.markAsTold(postId);
   out(flags, { ok }, ok ? "souieba: 伝えたことを記録しました。" : "souieba: 記録できませんでした（予約の期限切れか、通信できません）。");

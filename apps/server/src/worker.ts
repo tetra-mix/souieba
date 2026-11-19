@@ -18,7 +18,7 @@ export type WorkerEnv = {
   /** Workers の Rate Limiting。wrangler.toml の [[ratelimits]] で設定する（なければ警告を出して使わない） */
   RATE_LIMITER?: RateLimit;
   /**
-   * 認証なしの POST（招待コードの使用・ブートストラップ）用の、より厳しい制限。
+   * 認証なしの POST（端末の登録・認証の開始など）用の、より厳しい制限。
    * Durable Object の中の制限はメモリ上にあり、Durable Object が入れ替わると数え直しになるので、入口でも数える
    */
   AUTH_RATE_LIMITER?: RateLimit;
@@ -35,8 +35,6 @@ function workerConfig(env: WorkerEnv): Config {
     ...vars,
     // https は Cloudflare が終端し、送信元は CF-Connecting-IP で分かるので、X-Forwarded-For は使わない
     SOUIEBA_TRUST_PROXY: "none",
-    // サーバ上でコマンドを実行できないので、管理は admin API で行う
-    SOUIEBA_ADMIN_API: "on",
   });
 }
 
@@ -59,7 +57,7 @@ export class SouiebaInstance extends DurableObject<WorkerEnv> {
   }
 
   retention() {
-    return runRetention(this.db, new Date(), this.config.postRetentionMs);
+    return runRetention(this.db, new Date());
   }
 }
 

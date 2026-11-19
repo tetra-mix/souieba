@@ -8,7 +8,6 @@ describe("起動時の安全確認", () => {
     const c = loadConfig(base);
     expect(c).toMatchObject({ bind: "127.0.0.1", trustProxy: "loopback", publicUrl: "https://souieba.example.com" });
     expect(c.postGraceMs).toBe(10 * 60_000);
-    expect(c.postRetentionMs).toBe(30 * 86_400_000);
   });
 
   it("リバースプロキシの裏で全アドレスで待ち受けられる", () => {

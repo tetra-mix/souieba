@@ -106,6 +106,33 @@ describe("v2: Person単位のIDと共有", () => {
     now = new Date("2026-11-01T12:30:00Z");
     expect((await souieba("bob", "", ["tell"])).out).toContain("カメラ");
 
+    // MCPからのメモ・投稿も、CLIと同じPersonの共有設定を使う。
+    const startMcp = async () => {
+      const client = new Client({ name: "test", version: "1.0.0" });
+      await client.connect(new StdioClientTransport({
+        command: TSX, args: [CLI, "mcp"], stderr: "ignore",
+        env: { ...(process.env as Record<string, string>), SOUIEBA_HOME: join(tmp, "alice"), SOUIEBA_NOW: now.toISOString(), SOUIEBA_NO_UPDATE_CHECK: "1" },
+      }));
+      return client;
+    };
+    const call = async (client: Client, name: string, args: Record<string, unknown> = {}) => {
+      const result = (await client.callTool({ name, arguments: args })) as CallToolResult;
+      expect(result.isError).not.toBe(true);
+      return result.content.map((c) => c.type === "text" ? c.text : "").join("\n");
+    };
+    const first = await startMcp();
+    try {
+      expect(await call(first, "souieba_note", { text: "主人は公園を散歩していた" })).toContain("メモしました");
+    } finally { await first.close(); }
+    now = new Date("2026-11-01T13:05:00Z");
+    const later = await startMcp();
+    try {
+      const composed = await call(later, "souieba_compose");
+      expect(composed).toContain("主人は公園を散歩していた");
+      expect(await call(later, "souieba_publish", { period: "2026-11-01T12:00:00.000Z", content: "主人は公園を散歩していた。" })).toContain("送りました");
+    } finally { await later.close(); }
+    expect((await souieba("bob", "", ["tell"])).out).toContain("公園を散歩");
+
     expect((await souieba("alice", "", ["init", baseUrl])).out).toContain("もうあります");
   });
 });

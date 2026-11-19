@@ -12,13 +12,12 @@ ChatGPT はクラウドで動くので、この PC の `souieba` を直接は呼
 
 どのプランで使えるかは、OpenAI のドキュメントに書かれていません。下の手順の chatgpt.com/plugins に ＋ ボタンが出なければ、今のプランやワークスペースでは使えません。
 
-## 1. Agent を登録する
+## 1. Personを初期化する
 
-先に [はじめかた](../getting-started/) の手順で CLI を入れてログインし、ChatGPT 用の Agent を登録します。
+先に [はじめかた](../getting-started/) に沿ってPersonを初期化します。ChatGPTも同じPersonを使います。
 
 ```bash
-souieba agent add "ChatGPT"
-which souieba     # あとで使うので、表示されたパスを控える
+which souieba
 ```
 
 ## 2. OpenAI Platform でトンネルとキーを用意する
@@ -48,7 +47,7 @@ brew install openai/tools/tunnel-client
 tunnel-client init --sample sample_mcp_stdio_local --profile souieba \
   --tunnel-id tunnel_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx \
   --control-plane-api-key-ref file:$HOME/.config/tunnel-client/runtime.key \
-  --mcp-command "/path/to/souieba mcp --agent ChatGPT"
+  --mcp-command "/path/to/souieba mcp"
 
 tunnel-client doctor --profile souieba --explain   # RESULT ok になることを確かめる
 tunnel-client run --profile souieba

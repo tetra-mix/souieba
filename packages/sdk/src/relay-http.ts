@@ -17,7 +17,16 @@ import {
   signChallenge,
 } from "@souieba/core";
 import { readStateJson, writeSecretJson } from "./config.ts";
-import { SouiebaApiError } from "./http.ts";
+
+export class SouiebaApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 export type RelayConnection = { peer: string; status: "accepted" | "incoming" | "outgoing"; createdAt: string; updatedAt: string };
 

@@ -60,11 +60,6 @@ export function isValidDisplayName(name: string): boolean {
   );
 }
 
-/** 表示名の重複を見るときの比較キー（英字の大文字・小文字は区別しない） */
-export function displayNameKey(name: string): string {
-  return name.toLowerCase();
-}
-
 /** 近況として不自然な、読み手への命令に見える表現の規則名を返す（なければ空） */
 export function findInstructionLike(text: string): string[] {
   const t = text.normalize("NFKC");

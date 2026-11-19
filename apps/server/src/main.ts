@@ -28,7 +28,7 @@ async function main() {
   }
 
   const retention = () => {
-    const r = runRetention(db, new Date(), config.postRetentionMs);
+    const r = runRetention(db, new Date());
     console.log(JSON.stringify({ level: "info", msg: "retention", ...r }));
   };
   retention();

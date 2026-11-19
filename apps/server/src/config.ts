@@ -6,32 +6,13 @@ const EnvSchema = z.object({
   SOUIEBA_BIND: z.string().default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
   SOUIEBA_TRUST_PROXY: z.enum(["loopback", "private", "none"]).default("loopback"),
-  SOUIEBA_INSTANCE_NAME: z.string().min(1).default("Souieba"),
   SOUIEBA_DATA_DIR: z.string().default("/data"),
-  SOUIEBA_INVITE_BY: z.enum(["member", "admin"]).default("member"),
-  SOUIEBA_GROUP_CREATE_BY: z.enum(["member", "admin"]).default("member"),
   SOUIEBA_POST_GRACE_MINUTES: z.coerce.number().int().min(0).default(10),
-  SOUIEBA_POST_RETENTION_DAYS: z.coerce.number().int().min(3).default(30),
   SOUIEBA_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  SOUIEBA_ADMIN_API: z.enum(["off", "on"]).default("off"),
-  SOUIEBA_BOOTSTRAP_TOKEN: z.string().min(24, "24文字以上にしてください").optional(),
-  SOUIEBA_MAX_USERS: z.coerce.number().int().min(1).default(500),
-  SOUIEBA_MAX_GROUP_MEMBERS: z.coerce.number().int().min(2).default(50),
-  SOUIEBA_MAX_GROUPS_PER_USER: z.coerce.number().int().min(1).default(20),
-  SOUIEBA_MAX_AGENTS_PER_USER: z.coerce.number().int().min(1).default(5),
   /** v2 の Relay（/v2/*）。open なら誰でもPersonを登録できる（アカウントは要らない）。off なら閉じる */
   SOUIEBA_RELAY: z.enum(["open", "off"]).default("open"),
   SOUIEBA_MAX_RELAY_AGENTS: z.coerce.number().int().min(1).default(1000),
 });
-
-/** 1つのインスタンスに複数の集まりを載せるので、1つのグループや1人が資源を使い切らないようにする */
-export type Limits = {
-  maxUsers: number;
-  maxGroupMembers: number;
-  maxGroupsPerUser: number;
-  /** 1人が持てる有効な Agent の数。投稿の宛先の数（MAX_RECIPIENTS）に収まるようにする */
-  maxAgentsPerUser: number;
-};
 
 export type Config = {
   publicUrl: string;
@@ -39,47 +20,14 @@ export type Config = {
   port: number;
   /** X-Forwarded-For を信頼する直前の接続元。private は Docker のブリッジ上のリバースプロキシ用 */
   trustProxy: "loopback" | "private" | "none";
-  instanceName: string;
   dataDir: string;
-  /** グループへの招待: member ならメンバー全員、admin なら owner だけ */
-  inviteBy: "member" | "admin";
-  groupCreateBy: "member" | "admin";
   postGraceMs: number;
-  postRetentionMs: number;
   logLevel: "debug" | "info" | "warn" | "error";
-  /** HTTP の admin API（/v1/admin/*）。セルフホストでは既定で閉じ、souieba-admin で DB を直接操作する */
-  adminApi: boolean;
-  /** 最初の admin を作るための秘密。admin が1人もいないあいだだけ使える */
-  bootstrapToken: string | null;
-  limits: Limits;
   /** v2 の Relay（docs/architecture.md） */
   relay: { enabled: boolean; maxAgents: number };
 };
 
 export class ConfigError extends Error {}
-
-const LimitsEnvSchema = EnvSchema.pick({
-  SOUIEBA_MAX_USERS: true,
-  SOUIEBA_MAX_GROUP_MEMBERS: true,
-  SOUIEBA_MAX_GROUPS_PER_USER: true,
-  SOUIEBA_MAX_AGENTS_PER_USER: true,
-});
-
-/** 上限だけを読む（SOUIEBA_PUBLIC_URL を持たない souieba-admin のローカル実行でも、サーバと同じ上限で検査するため） */
-export function loadLimits(env: Record<string, string | undefined> = process.env): Limits {
-  const parsed = LimitsEnvSchema.safeParse(env);
-  if (!parsed.success) throw new ConfigError(`設定が不正です:\n  ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("\n  ")}`);
-  return limitsFrom(parsed.data);
-}
-
-function limitsFrom(e: z.infer<typeof LimitsEnvSchema>): Limits {
-  return {
-    maxUsers: e.SOUIEBA_MAX_USERS,
-    maxGroupMembers: e.SOUIEBA_MAX_GROUP_MEMBERS,
-    maxGroupsPerUser: e.SOUIEBA_MAX_GROUPS_PER_USER,
-    maxAgentsPerUser: e.SOUIEBA_MAX_AGENTS_PER_USER,
-  };
-}
 
 /**
  * 環境変数を検証する。サーバはインターネットに公開する前提で、通信路は https にする。
@@ -104,16 +52,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     bind: e.SOUIEBA_BIND,
     port: e.PORT,
     trustProxy: e.SOUIEBA_TRUST_PROXY,
-    instanceName: e.SOUIEBA_INSTANCE_NAME,
     dataDir: e.SOUIEBA_DATA_DIR,
-    inviteBy: e.SOUIEBA_INVITE_BY,
-    groupCreateBy: e.SOUIEBA_GROUP_CREATE_BY,
     postGraceMs: e.SOUIEBA_POST_GRACE_MINUTES * 60_000,
-    postRetentionMs: e.SOUIEBA_POST_RETENTION_DAYS * 86_400_000,
     logLevel: e.SOUIEBA_LOG_LEVEL,
-    adminApi: e.SOUIEBA_ADMIN_API === "on",
-    bootstrapToken: e.SOUIEBA_BOOTSTRAP_TOKEN ?? null,
-    limits: limitsFrom(e),
     relay: { enabled: e.SOUIEBA_RELAY === "open", maxAgents: e.SOUIEBA_MAX_RELAY_AGENTS },
   };
 }
