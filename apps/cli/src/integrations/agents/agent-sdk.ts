@@ -37,5 +37,7 @@ export function souieba(_opts: SouiebaOptions = {}, runTell: RunTell = runBundle
       ],
     },
     allowedTools: ["Bash(souieba note *)"],
+    // note move は主人の振り分けにあたるので、確認なしでは実行させない（deny は allow より優先される）
+    disallowedTools: ["Bash(souieba note move *)"],
   };
 }

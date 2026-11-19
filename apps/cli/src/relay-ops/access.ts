@@ -87,6 +87,8 @@ export function accessOps({ ctx, load, mutation }: OpsEnv) {
       const t = text.trim();
       if (!t) throw new OpError("共有方針の文章を指定してください");
       if (t.length > MAX_POLICY_LENGTH) throw new OpError(`共有方針は ${MAX_POLICY_LENGTH} 文字までにしてください`);
+      // 端末への表示や、エージェントが読む出力にそのまま入るので、改行以外の制御文字（ターミナルの制御シーケンスを含む）は断る
+      if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/.test(t)) throw new OpError("共有方針に、使えない制御文字が含まれています");
       const s = load();
       const pr = requireProject(s, project).name;
       return mutation(

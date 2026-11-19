@@ -71,7 +71,7 @@ export function resolveProject(state: RelayState, opts: { cwd?: string | null; e
   const forced = (opts.env ?? process.env).SOUIEBA_PROJECT?.trim();
   if (forced) {
     const p = findProject(state, forced);
-    if (!p) throw new RelayStateError(`SOUIEBA_PROJECT のプロジェクト「${forced}」はありません（souieba relay project list で確かめられます）`);
+    if (!p) throw new RelayStateError(`SOUIEBA_PROJECT のプロジェクト「${forced}」はありません（souieba project list で確かめられます）`);
     return { project: p.name, via: "env", dir: null };
   }
   if (!opts.cwd) return { project: DEFAULT_PROJECT, via: "default", dir: null };
@@ -125,12 +125,6 @@ function dirMatch(state: RelayState, dir: string | null | undefined): { project:
   return m.dir ? { project: m.project, dir: m.dir } : null;
 }
 
-/** 推定を受け付けるプロジェクトか（acceptInference が false なら受け付けない） */
-export function acceptsInference(state: RelayState, name: string): boolean {
-  const p = findProject(state, name);
-  return !!p && p.acceptInference !== false;
-}
-
 /**
  * メモのプロジェクトを決める。先に当てはまったものを使う:
  * 1. 主人の規則: SOUIEBA_PROJECT（環境変数）・ディレクトリ（souieba note を実行した場所）・MCP クライアント
@@ -144,7 +138,7 @@ export function resolveNoteProject(state: RelayState, ctx: NoteContext = {}): No
   const forced = (ctx.env ?? process.env).SOUIEBA_PROJECT?.trim();
   if (forced) {
     const p = findProject(state, forced);
-    if (!p) throw new RelayStateError(`SOUIEBA_PROJECT のプロジェクト「${forced}」はありません（souieba relay project list で確かめられます）`);
+    if (!p) throw new RelayStateError(`SOUIEBA_PROJECT のプロジェクト「${forced}」はありません（souieba project list で確かめられます）`);
     return { project: p.name, via: "env" };
   }
   const d = dirMatch(state, ctx.cwd);

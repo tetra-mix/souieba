@@ -20,6 +20,7 @@ describe("Agent SDK への組み込み", () => {
     expect(s.systemPrompt).toContain(NOTE_GUIDE);
     expect(s.systemPrompt).toContain("確かめる必要はありません");
     expect(s.allowedTools).toEqual(["Bash(souieba note *)"]);
+    expect(s.disallowedTools).toEqual(["Bash(souieba note move *)"]);
   });
 
   it("主人の発言ごとに tell を実行し、結果を additionalContext で渡す", async () => {

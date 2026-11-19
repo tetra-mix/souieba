@@ -38,17 +38,27 @@ const RULES: { rule: string; pattern: RegExp }[] = [
   { rule: "long_base64", pattern: /(?=[A-Za-z0-9+/_-]*\d)(?=[A-Za-z0-9+/_-]*[A-Z])(?=[A-Za-z0-9+/_-]*[a-z])[A-Za-z0-9+/_-]{40,}={0,2}/g },
 ];
 
+/** ゼロ幅文字・双方向制御文字など、見えないが文字列を分断できるもの */
+const INVISIBLE = /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g;
+
+/**
+ * 全角の記号（＠・＝など）や、間に入れた見えない文字で検出を避けられないよう、
+ * 元の文字列と、NFKC で正規化して見えない文字を除いた文字列の両方を調べる
+ */
 export function scanSecrets(text: string): Finding[] {
+  const folded = text.normalize("NFKC").replace(INVISIBLE, "");
+  const targets = folded === text ? [text] : [text, folded];
   const findings: Finding[] = [];
-  for (const { rule, pattern } of RULES) {
-    for (const m of text.matchAll(pattern)) findings.push({ rule, match: m[0] });
+  const seen = new Set<string>();
+  for (const target of targets) {
+    for (const { rule, pattern } of RULES) {
+      for (const m of target.matchAll(pattern)) {
+        const key = `${rule}\u0000${m[0]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        findings.push({ rule, match: m[0] });
+      }
+    }
   }
   return findings;
-}
-
-/** 検出した部分を伏せ字にする（活動ログの記録時に使う） */
-export function maskSecrets(text: string): string {
-  let out = text;
-  for (const { pattern } of RULES) out = out.replace(pattern, "[REDACTED]");
-  return out;
 }

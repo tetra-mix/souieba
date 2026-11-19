@@ -41,5 +41,3 @@ export function relayOps(ctx: OpsContext) {
   const env = createEnv(ctx);
   return { ...contactOps(env), ...accessOps(env), ...projectOps(env), ...delegationOps(env) };
 }
-
-export type RelayOps = ReturnType<typeof relayOps>;

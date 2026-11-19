@@ -37,7 +37,6 @@ export function harness(opts: { config?: Partial<Config>; remoteAddr?: string } 
     db,
     config: testConfig(opts.config),
     now: () => now,
-    random: () => 0,
     remoteAddr: () => ip,
     log: () => {},
   });

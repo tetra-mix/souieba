@@ -19,14 +19,23 @@ export class PostTooLongError extends Error {
   }
 }
 
+/** 秘密情報の可能性があれば断る。元の文字列と、正規化したあとの両方を調べる */
+export function assertNoSecrets(...raws: (string | undefined)[]): void {
+  const rules = new Set<string>();
+  for (const raw of raws) {
+    if (!raw) continue;
+    for (const f of [...scanSecrets(raw), ...scanSecrets(sanitizeContent(raw))]) rules.add(f.rule);
+  }
+  if (rules.size > 0) throw new SecretInPostError([...rules]);
+}
+
 /**
  * 送る前の本文の検査と正規化。
  * サーバ・Relay は本文を見られないので、秘密情報の検査と正規化は送る前にクライアントで行う
  */
 export function checkPostContent(raw: string): string {
   const content = sanitizeContent(raw);
-  const rules = [...new Set([...scanSecrets(raw), ...scanSecrets(content)].map((f) => f.rule))];
-  if (rules.length > 0) throw new SecretInPostError(rules);
+  assertNoSecrets(raw);
   if (content.length === 0) throw new Error("本文が空です");
   if (content.length > MAX_POST_LENGTH) throw new PostTooLongError(content.length);
   const suspicious = findInstructionLike(content);

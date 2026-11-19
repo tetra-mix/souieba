@@ -9,7 +9,6 @@ name: Release
 # npm への publish は Trusted Publishing（OIDC）で行い、長期のトークンは使わない。provenance は自動で付く。
 # 依存を入れてテストする build ジョブには書き込みと OIDC の権限を渡さず、publish ジョブは依存を入れずにビルド済みの dist だけを使う。
 # publish ジョブは Environment「npm」で動くので、npm の Trusted Publisher にもこの Environment を登録しておく。
-# 手順: docs/client-distribution-plan.md §5
 
 on:
   workflow_dispatch:

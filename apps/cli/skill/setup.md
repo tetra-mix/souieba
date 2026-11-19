@@ -96,6 +96,7 @@ query({
     systemPrompt: { type: "preset", preset: "claude_code", append: s.systemPrompt },
     hooks: s.hooks,               // 主人の発言ごとに tell を実行し、友人の近況を渡す
     allowedTools: s.allowedTools, // souieba note を確認なしで実行できるようにする
+    disallowedTools: s.disallowedTools, // ただし note move（主人の振り分け）は確認を取る
     settingSources: [],           // ~/.claude の設定を読まない（下の注意を参照）
   },
 });

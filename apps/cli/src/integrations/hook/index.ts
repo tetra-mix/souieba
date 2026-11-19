@@ -32,7 +32,7 @@ export function hookSession(input: unknown): { id: string; cwd: string | null } 
 /**
  * フックの出力を作る。何も渡さないときは null。
  * runTell は tell の文面を返す（失敗したら例外か null）。
- * onSession は、会話の ID が分かったときに呼ぶ（v2: 作業ディレクトリを覚え、会話の ID の手引きを返す。v1 なら null）
+ * onSession は、会話の ID が分かったときに呼ぶ（作業ディレクトリを覚え、会話の ID の手引きを返す）
  */
 export async function hookOutput(
   target: HookTarget,

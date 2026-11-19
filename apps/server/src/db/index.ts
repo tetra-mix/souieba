@@ -111,7 +111,7 @@ export function migrate(db: DB, opts: { legacyVersion?: () => number } = {}): vo
 
 /** まだテーブルが1つもない（新しく作った）DB か */
 export function isEmptyDb(db: DB): boolean {
-  return !db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'`);
+  return !db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' LIMIT 1`);
 }
 
 /** 未適用のマイグレーションの数（起動時にバックアップを取るかの判断に使う） */

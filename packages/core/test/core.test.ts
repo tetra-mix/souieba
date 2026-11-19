@@ -3,7 +3,6 @@ import {
   advanceSession,
   canTell,
   compareVersions,
-  maskSecrets,
   findInstructionLike,
   sanitizeContent,
   scanSecrets,
@@ -109,8 +108,10 @@ describe("scanSecrets", () => {
     expect(scanSecrets(text)).toEqual([]);
   });
 
-  it("maskSecrets は該当部分を伏せる", () => {
-    expect(maskSecrets("key=AKIAIOSFODNN7EXAMPLE ok")).toBe("key=[REDACTED] ok");
+  it("全角の記号や見えない文字で、検出を避けられない", () => {
+    expect(scanSecrets("password＝hunter2hunter2").map((f) => f.rule)).toContain("secret_assignment");
+    expect(scanSecrets("連絡は taro＠example.com まで").map((f) => f.rule)).toContain("email");
+    expect(scanSecrets("AKIA\u200bIOSFODNN7EXAMPLE").map((f) => f.rule)).toContain("aws_access_key");
   });
 });
 

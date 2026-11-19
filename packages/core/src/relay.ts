@@ -213,10 +213,10 @@ export const MAX_NARRATIVE_FIELD_LENGTH = 60;
 export const MAX_MESSAGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** 既定の配送期限（Relay が未配送のまま持つ期間） */
 export const DEFAULT_DELIVERY_TTL_MS = 3 * 24 * 60 * 60 * 1000;
-/** 既定の利用期限（受信側が Tell に使ってよい期間）。v1 の Tell の対象期間（48時間）に合わせる */
 /** 時計のずれを許す幅。メッセージの作成時刻が、受け取った時刻とこれ以上ずれていたら受け付けない（Relay と受信側で共通） */
 export const CLOCK_SKEW_MS = 10 * MINUTE_MS;
 
+/** 既定の利用期限（受信側が Tell に使ってよい期間） */
 export const DEFAULT_USE_TTL_MS = 2 * DAY_MS;
 /** 1つのメッセージの宛先の上限 */
 export const MAX_RELAY_RECIPIENTS = 50;
@@ -417,6 +417,7 @@ export function verifyRecipientGroup(env: RelayEnvelope, group: RelayRecipientGr
   const { recipients: _, ...body } = env;
   const { sig, ...unsigned } = group;
   if (!Array.isArray(unsigned.boxes) || typeof sig !== "string") return false;
+  if (!unsigned.boxes.every((b) => b !== null && typeof b === "object" && typeof b.device === "string")) return false;
   return verifyText(senderSignKey, recipientSigningText(body, unsigned), sig);
 }
 

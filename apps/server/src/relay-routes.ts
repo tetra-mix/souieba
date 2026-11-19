@@ -1,5 +1,5 @@
 /**
- * v2 の Relay の API（/v2/*）。v1 のトークン（User・Agent）とは別に、Identity 鍵の署名で得たセッショントークン（sou_r_）で認証する。
+ * v2 の Relay の API（/v2/*）。端末の署名鍵でチャレンジに署名して得たセッショントークン（sou_r_）で認証する。
  * 設計: docs/architecture.md
  */
 import { MAX_DEVICES_PER_PERSON, MAX_RELAY_RECIPIENTS, type RelayEnvelope, DAY_MS, HOUR_MS, MINUTE_MS } from "@souieba/core";

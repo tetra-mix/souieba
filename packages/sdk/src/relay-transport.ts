@@ -36,7 +36,7 @@ import {
   verifyPersonDirectory,
   verifyRecipientGroup,
 } from "@souieba/core";
-import { checkPostContent } from "./post-content.ts";
+import { assertNoSecrets, checkPostContent } from "./post-content.ts";
 import type { RelayConnection, RelayHttp } from "./relay-http.ts";
 import {
   type Contact,
@@ -238,6 +238,8 @@ export class RelayTransport implements SouiebaTransport {
   async publishNarrative(post: CreatePostInput, o: RelayPublishOptions): Promise<RelayPublishResult> {
     if (post.visibility === "private") throw new Error("v2 では自分だけに向けた投稿（private）はできません");
     const content = checkPostContent(post.content);
+    // 近況の背景（目的・ニュアンス・会話の文脈）も、友人に送るので、本文と同じく秘密情報を断る
+    assertNoSecrets(o.purpose, o.nuance, o.context);
     const now = this.now();
     const createdAt = now.toISOString();
     const ttl = (v: number | undefined, d: number) => Math.min(MAX_MESSAGE_TTL_MS, Math.max(MIN_TTL_MS, v ?? d));
@@ -317,7 +319,13 @@ export class RelayTransport implements SouiebaTransport {
       for (const { envelope, receivedAt } of [...held, ...fresh]) {
         const isNew = fresh.some((m) => m.envelope === envelope);
         if (isNew) ack.push(typeof envelope.messageId === "string" ? envelope.messageId : "");
-        const r = this.open(envelope, state, connected, f.seen, now);
+        let r: ReturnType<RelayTransport["open"]>;
+        try {
+          r = this.open(envelope, state, connected, f.seen, now);
+        } catch {
+          // 形の崩れた配送（Relay や相手が作ったもの）が例外を起こして、同期ごと止めないように
+          r = { ok: false, reason: "bad_header" };
+        }
         if (r === "hold") {
           // Relay の受信の列をふさがないよう、受け取ったことにして手元に置く（配送期限まで）
           f.held.push({ envelope, receivedAt } satisfies HeldEnvelope);
