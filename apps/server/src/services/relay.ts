@@ -1,5 +1,5 @@
 /**
- * v2 の Relay。公開鍵ディレクトリ・チャレンジ認証・接続管理・暗号文の配送と期限管理だけを行う（docs/architecture.md）。
+ * v2 の Relay。公開鍵ディレクトリ・チャレンジ認証・接続管理・暗号文の配送と期限管理だけを行う（docs/design/relay-protocol.md）。
  * メッセージの平文・Note・グループ・アクセス権限・Policy は持たない（それらは各 Client が持つ）。
  * Relay が確かめるのは、サーバで機械的に確かめられること（署名・接続の承認・期限・大きさ）だけ。
  *
@@ -408,7 +408,7 @@ export type SendResult = {
 /**
  * 暗号化したメッセージを受け付ける。送った端末の証明書がこの Relay に登録したものと同じか、
  * 宛先の人ごとに、接続済みか・送信した端末の署名が正しいかを確かめ、端末ごとに今の鍵の版で包んだ箱だけを配送する。
- * 送信時点の宛先にだけ配送レコードを作る（あとから接続した人や、あとから足した端末には届かない。§6.3）。
+ * 送信時点の宛先にだけ配送レコードを作る（あとから接続した人や、あとから足した端末には届かない。docs/design/relay-protocol.md §7）。
  */
 export function sendMessage(db: DB, me: RelaySession, env: RelayEnvelope, now: Date, graceMs: number): SendResult {
   if (env.sender !== me.personId || env.senderDevice !== me.deviceId) throw forbidden("送信者がこの端末と一致しません");

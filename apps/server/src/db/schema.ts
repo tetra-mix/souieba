@@ -6,7 +6,7 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-// Relay はメッセージの平文・Note・グループ・Policy を持たない（docs/architecture.md）
+// Relay はメッセージの平文・Note・グループ・Policy を持たない（docs/design/relay-protocol.md）
 // 端末ごとに認証・配送し、接続とブロックは人と人のあいだに持つ
 
 /** 人。Person ID は Person 公開鍵のハッシュ */

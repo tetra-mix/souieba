@@ -23,7 +23,7 @@ export type Config = {
   dataDir: string;
   postGraceMs: number;
   logLevel: "debug" | "info" | "warn" | "error";
-  /** v2 の Relay（docs/architecture.md） */
+  /** v2 の Relay（docs/design/server.md） */
   relay: { enabled: boolean; maxAgents: number };
 };
 

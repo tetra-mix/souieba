@@ -357,7 +357,7 @@ export class RelayTransport implements SouiebaTransport {
   }
 
   /**
-   * 受け取った1件の検証と復号（§3.3・§15）。送信者の認証 → 期限 → 再配送 → 復号 → 中身の検査の順。
+   * 受け取った1件の検証と復号（docs/design/relay-protocol.md §8）。送信者の認証 → 期限 → 再配送 → 復号 → 中身の検査の順。
    * 接続済みだが呼び名のない相手からのものは、呼び名が付くまで Relay に残す（"hold"）
    */
   private open(

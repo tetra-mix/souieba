@@ -1,6 +1,6 @@
 /**
  * souieba mcp の、v2（Relay）の共有の設定を変えるツール。シェルを使えないエージェント（Claude Desktop など）が、
- * 主人に頼まれたときに設定を変えられるようにする（docs/architecture.md・docs/v2-projects.md §9）。
+ * 主人に頼まれたときに設定を変えられるようにする（docs/design/delegation.md）。
  *
  * 中身は CLI の souieba connect・allow など（relay.ts の relayCommand）と同じで、同じ2段階を踏む:
  * - 共有を狭める操作は、そのまま実行する

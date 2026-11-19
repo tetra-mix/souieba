@@ -17,7 +17,7 @@ import { MAX_POST_AGE_MS, MINUTE_MS, floorTo, sanitizeContent, scanSecrets } fro
 import { readStateJson, resolveClientSettings, souiebaHome, writeSecretFile, writeSecretJson } from "./config.ts";
 
 /**
- * メモのプロジェクトをどこから決めたか（docs/v2-projects.md §3）。
+ * メモのプロジェクトをどこから決めたか（docs/design/projects.md §3）。
  * rule-dir: 主人が結び付けたディレクトリ / rule-client: 主人が結び付けた MCP クライアント / pin: 会話ごとの指定（主人の言葉）/ env: SOUIEBA_PROJECT /
  * cwd: フックが知らせた会話の作業ディレクトリ / roots: MCP クライアントの roots / inferred: エージェントの推定（「推定」）/
  * default: 決まらず既定 / hold: 決まらず保留（主人が振り分けるまで送らない）/ owner: 主人があとで振り分けた

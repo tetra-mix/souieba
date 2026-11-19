@@ -1,6 +1,6 @@
 import { DAY_MS } from "@souieba/core";
 /**
- * 作業しているディレクトリから、プロジェクトを決める（docs/v2-projects.md §3）。
+ * 作業しているディレクトリから、プロジェクトを決める（docs/design/projects.md §3）。
  * - ディレクトリは realpath にしてから比べる（シンボリックリンクで別の名前になっても同じに扱う）
  * - git の worktree は、元のリポジトリの場所に置き換えて比べる（`git rev-parse --git-common-dir` の親）。
  *   別の場所に作った worktree（../repo-feature など）でも、元のリポジトリと同じプロジェクトになる
@@ -85,7 +85,7 @@ export function resolveProject(state: RelayState, opts: { cwd?: string | null; e
   return m.dir ? { project: m.project, via: "dir", dir: m.dir } : { project: DEFAULT_PROJECT, via: "default", dir: null };
 }
 
-// ---- メモのプロジェクトの決め方（2.1.0。docs/v2-projects.md §3） ----
+// ---- メモのプロジェクトの決め方（2.1.0。docs/design/projects.md §3） ----
 
 /** メモを書くときに分かっていること。どれも、なければ省く */
 export type NoteContext = {
