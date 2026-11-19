@@ -72,7 +72,7 @@ const EnvelopeSchema = z.object({
   createdAt: iso,
   deliveryExpiresAt: iso,
   iv: z.string().regex(/^[A-Za-z0-9_-]{16}$/),
-  // 本文（120字）と Narrator の項目（各60字）の JSON を暗号化したもの。数 KB に収まる
+  // 本文（200字）と Narrator の項目（各60字）の JSON を暗号化したもの。数 KB に収まる
   ciphertext: z.string().regex(/^[A-Za-z0-9_-]{1,8192}$/),
   recipients: z.array(GroupSchema).min(1).max(MAX_RELAY_RECIPIENTS),
 });
