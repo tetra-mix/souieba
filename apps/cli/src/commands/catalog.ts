@@ -200,7 +200,7 @@ export function usageFamily(prefix: string): string {
   return `souieba ${prefix} [${subs.join(" | ")}]`;
 }
 
-/** 接続・共有の設定のコマンド（`souieba <名前>` でも、以前の `souieba relay <名前>` でも使える）。relay.ts が実行する */
+/** 接続・共有の設定のコマンド。relay.ts が実行する */
 export const RELAY_COMMANDS: string[] = [...new Set(CATALOG.filter((c) => c.section.startsWith("relay-")).map((c) => c.name.split(" ")[0]!))];
 
 /** コマンド名の一覧（ドキュメントのコマンド例の検査に使う） */
@@ -257,6 +257,5 @@ export function renderUsage(vars: UsageVars, configPath: string): string {
     "<相手> は呼び名か ID。<グループ> は ID か名前",
     "共有を狭める操作（reject・disconnect・block・deny・groups remove など）は、確認なしで実行します",
     `設定ファイル: ${configPath}（環境変数 SOUIEBA_HOME で場所を変更できます）`,
-    "以前の `souieba relay <command>` も、そのまま使えます",
   ].join("\n");
 }

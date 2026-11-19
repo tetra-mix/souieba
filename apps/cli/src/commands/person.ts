@@ -10,16 +10,12 @@ export async function initCommand({ sub, values }: CommandContext): Promise<void
   await createPerson({ url: sub, name: values.name }, { log, now: testableNow });
 }
 
-/**
- * 接続・共有の設定のコマンド。`souieba connect …` でも、以前の `souieba connect …` でも同じように動く
- */
+/** 接続・共有の設定のコマンド（connect・accept・allow・policy・project など）。コマンド名が relay.ts の sub になる */
 export async function relayCommand(ctx: CommandContext): Promise<void> {
   const { values } = ctx;
-  const legacy = ctx.cmd === "relay";
-  // `souieba relay <sub> <rest...>` と `souieba <sub> <rest...>` の、どちらでも sub・rest・承認後に実行するコマンドの引数を同じにする
-  const sub = legacy ? ctx.sub : ctx.cmd;
-  const rest = legacy ? ctx.rest : ctx.args;
-  const args = legacy ? ctx.args : [ctx.cmd!, ...ctx.args];
+  const sub = ctx.cmd;
+  const rest = ctx.args;
+  const args = [ctx.cmd!, ...ctx.args];
   try {
     await runRelay(
       {

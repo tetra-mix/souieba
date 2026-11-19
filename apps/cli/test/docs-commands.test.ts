@@ -7,7 +7,7 @@ import { COMMANDS } from "../src/commands/index.ts";
 const root = join(import.meta.dirname, "../../..");
 
 /** コマンドの実装がなくても、ドキュメントに書いてよいもの */
-const EXTRA = ["relay", "version"];
+const EXTRA = ["version"];
 
 function files(dir: string, ext: RegExp, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -48,8 +48,7 @@ function commandsIn(text: string): string[][] {
       if (!/^[a-z][a-z0-9-]*$/.test(tok)) break;
       words.push(tok);
     }
-    // 以前の `souieba relay connect` は `souieba connect` と同じ（relay だけのときは、グループを指している）
-    return words[0] === "relay" && words.length > 1 ? words.slice(1) : words;
+    return words;
   });
 }
 
@@ -64,10 +63,11 @@ describe("コマンドのカタログ", () => {
     expect(new Set(COMMAND_NAMES).size).toBe(COMMAND_NAMES.length);
   });
 
-  it("トップレベルのコマンドは、すべて実装がある。以前の souieba relay <コマンド> も使える", () => {
+  it("トップレベルのコマンドは、すべて実装がある", () => {
     const tops = new Set(CATALOG.map((c) => c.name.split(" ")[0]!));
     for (const top of tops) expect(Object.hasOwn(COMMANDS, top), `${top} の実装（commands/index.ts）がありません`).toBe(true);
-    expect(Object.hasOwn(COMMANDS, "relay")).toBe(true);
+    // 以前の souieba relay <コマンド> は、なくなった
+    expect(Object.hasOwn(COMMANDS, "relay")).toBe(false);
     // 接続・共有の設定のコマンドは、トップレベルのほかのコマンドと名前が重ならない
     const others = new Set(CATALOG.filter((c) => !c.section.startsWith("relay-")).map((c) => c.name.split(" ")[0]!));
     for (const name of RELAY_COMMANDS) expect(others.has(name), `${name} が重なっています`).toBe(false);

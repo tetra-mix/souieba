@@ -17,7 +17,6 @@ export const COMMANDS: Record<string, (ctx: CommandContext) => void | Promise<vo
   compose: composeCommand,
   publish: publishCommand,
   init: initCommand,
-  relay: relayCommand,
   help: () => console.log(USAGE),
   doctor: doctorCommand,
   config: configCommand,

@@ -9,14 +9,14 @@ const tsx = resolve(root, "node_modules/.bin/tsx");
 const cli = resolve(root, "apps/cli/src/main.ts");
 
 describe("CLIのv1専用コマンド", () => {
-  it.each(["login", "whoami", "profile", "invite", "agent", "posts", "export"])("%s は受け付けない", (command) => {
+  it.each(["login", "whoami", "profile", "invite", "agent", "posts", "export", "relay"])("%s は受け付けない", (command) => {
     const result = spawnSync(tsx, [cli, command], { encoding: "utf8" });
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("使い方: souieba <command>");
   });
 
-  it.each([["help"], ["relay", "help"]])("%s で、接続・共有のコマンドも含めた使い方を表示できる", (...args) => {
-    const result = spawnSync(tsx, [cli, ...args.flat()], { encoding: "utf8" });
+  it("help で、接続・共有のコマンドも含めた使い方を表示できる", () => {
+    const result = spawnSync(tsx, [cli, "help"], { encoding: "utf8" });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("groups create");
     expect(result.stdout).toContain("connect <Person ID>");

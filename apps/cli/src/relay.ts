@@ -1,5 +1,5 @@
 /**
- * v2（Relay）の設定と確認のコマンド（souieba connect・allow・project など。souieba relay ... でも同じ）。docs/architecture.md
+ * v2（Relay）の設定と確認のコマンド（souieba connect・allow・project など）。docs/architecture.md
  *
  * ユーザー操作は原則として既存の LLM（エージェント）を通して行う（§1.1・§14.1）。どのコマンドもエージェントが実行できる。
  * ただし、LLM が自分の判断で共有の範囲を広げないよう（§6.2・§7.1）、広げる操作は2段階にする:
