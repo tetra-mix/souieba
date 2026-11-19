@@ -311,6 +311,27 @@ describe("v2.1: MCP のメモのプロジェクト（clientInfo・roots・会話
   });
 });
 
+describe("MCP クライアントの規則は、プロジェクトの名前変更・削除に付いていく", () => {
+  it("名前を変えると規則も新しい名前を指し、プロジェクトを消すと規則も外れる", { timeout: 120_000 }, async () => {
+    await souieba("heidi", "", ["init", baseUrl, "--name", "H"]);
+    await owner("heidi", "", ["project", "add", "読書"]);
+    await owner("heidi", "", ["project", "add", "日記"]);
+    expect((await souieba("heidi", "", ["mcp-client", "set", "claude-ai", "読書"])).code).toBe(0);
+    expect((await souieba("heidi", "", ["mcp-client", "set", "cursor", "日記"])).code).toBe(0);
+
+    await owner("heidi", "", ["project", "rename", "読書", "本"]);
+    const renamed = (await souieba("heidi", "", ["mcp-client", "list"])).out;
+    expect(renamed).toContain("claude-ai → 本");
+    expect(renamed).not.toContain("読書");
+    expect(renamed).toContain("cursor → 日記");
+
+    await owner("heidi", "", ["project", "delete", "本"]);
+    const deleted = (await souieba("heidi", "", ["mcp-client", "list"])).out;
+    expect(deleted).not.toContain("claude-ai");
+    expect(deleted).toContain("cursor → 日記");
+  });
+});
+
 async function relayAs(home: string, args: string[], extra: { project?: string }) {
   const saved = process.env.SOUIEBA_HOME;
   process.env.SOUIEBA_HOME = join(tmp, home);
