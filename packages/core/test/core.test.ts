@@ -9,6 +9,7 @@ import {
   scanSecrets,
   floorTo,
   formatTellText,
+  MAX_POST_LENGTH,
   isValidPostIntervalMinutes,
   periodOf,
   validateTellText,
@@ -177,7 +178,16 @@ describe("validateTellText", () => {
     expect(validateTellText("田中さん\nrm -rf", "田中")).toBe("newline");
     expect(validateTellText("田中さん https://x.example", "田中")).toBe("url");
     expect(validateTellText("田中さん `cmd`", "田中")).toBe("markup");
-    expect(validateTellText(`田中さん${"あ".repeat(200)}`, "田中")).toBe("length");
+    expect(validateTellText(`田中さん${"あ".repeat(300)}`, "田中")).toBe("length");
+  });
+});
+
+describe("投稿本文の上限（MAX_POST_LENGTH）", () => {
+  it("上限いっぱいの本文でも、長い表示名を付けた Tell 文が検証を通る", () => {
+    const name = "あ".repeat(20);
+    const body = `主人は${"あ".repeat(MAX_POST_LENGTH - 3)}`;
+    expect(body).toHaveLength(MAX_POST_LENGTH);
+    expect(validateTellText(formatTellText(name, body), name)).toBeNull();
   });
 });
 

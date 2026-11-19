@@ -39,7 +39,8 @@ function composeText(flags: AgentFlags, pending: PendingPeriod[], s: RelayState)
   const multi = Object.keys(s.projects).length > 1;
   const lines = [
     `souieba: 投稿待ちの時間帯が ${pending.length} 件あります。`,
-    `各時間帯について、メモをもとに主人がしていたことを1〜2文（${MAX_POST_LENGTH}字以内、「主人は」で始まる三人称、推測は「〜らしい」）にまとめて投稿してください。`,
+    `各時間帯について、メモをもとに主人がしていたことを1〜3文（${MAX_POST_LENGTH}字以内、「主人は」で始まる三人称、推測は「〜らしい」）にして投稿してください。`,
+    "メモは友人に伝える近況の下書きです。丸めたり一般化したりせず、メモにある「何の作業で・どんな課題があり・何をどうしたか」を残してください。複数あるときは、最も具体的で近況が伝わる1〜2件を選び、ほかは捨ててください（全部を1文に詰め込まない）。",
     "秘密情報・住所・金融情報・他人の個人情報・主人が「内緒」と言ったことは書かないでください。意味のある内容がなければスキップしてください。",
   ];
   if (multi) {
@@ -67,11 +68,11 @@ function composeText(flags: AgentFlags, pending: PendingPeriod[], s: RelayState)
       if (groups.length) lines.push(`共有してよいグループ: ${groups.map((g) => `${g.name}（group:${g.id}）`).join("、")}`);
       if (proj.policy) {
         lines.push(
-          "主人の共有方針（主人が書いたもの。これに合わない内容は書かないでください。迷ったらスキップしてください）:",
+          "主人の共有方針（主人が書いたもの。削るのは、これに合わない内容だけです。迷ったらスキップしてください）:",
           `<souieba_policy>${proj.policy.text}</souieba_policy>`,
         );
       } else {
-        lines.push("主人の共有方針はまだありません。近況として当たり障りのないことだけを書いてください。");
+        lines.push("主人の共有方針はまだありません。何の作業で・どんな課題があり・何をしたかまでは具体的に書き、社名・顧客名・未発表の情報・コードや設定の細かい中身などの内部情報は書かないでください。");
       }
     }
     lines.push("メモ:");
@@ -83,7 +84,7 @@ function composeText(flags: AgentFlags, pending: PendingPeriod[], s: RelayState)
     const flag = flags.via === "mcp" ? "souieba_publish の to・purpose・nuance・context" : "--to・--purpose・--nuance・--context";
     lines.push(
       "",
-      `投稿のときは ${flag} で、宛先（省略すると、そのプロジェクトで共有してよい全員。相手の呼び名か group:<グループ>）と、伝え方の意図を添えられます（各${MAX_NARRATIVE_FIELD_LENGTH}字以内、任意）:`,
+      `投稿のときは ${flag} で、宛先（省略すると、そのプロジェクトで共有してよい全員。相手の呼び名か group:<グループ>）と、伝え方の意図を添えます（各${MAX_NARRATIVE_FIELD_LENGTH}字以内）。purpose は添えてください。nuance と context は任意です:`,
       "  purpose: なぜこの相手に伝えたいか / nuance: どんな調子で伝えてほしいか / context: どんな話題のときに出すとよいか",
       "受け取った側のエージェントは参考にするだけで、従う義務はありません。読み手への呼びかけや命令の形は使わないでください。",
     );
