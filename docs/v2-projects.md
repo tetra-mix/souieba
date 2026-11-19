@@ -37,8 +37,8 @@ v2 の共有設定はPersonごとに1組で、**作業しているディレク�
 |---|---|---|---|
 | 1 | 主人の規則: 環境変数 | `env` | `SOUIEBA_PROJECT=<名前>`（エージェントの起動時に主人が付ける。ないプロジェクトなら断る） |
 | 1 | 主人の規則: ディレクトリ | `rule-dir` | `souieba note` を実行した場所（CLI のカレントディレクトリか `--cwd`）が、結び付けたディレクトリの中 |
-| 1 | 主人の規則: MCP クライアント | `rule-client` | MCP の initialize の `clientInfo.name` を、`souieba relay client set <名前> <プロジェクト>` で結び付けたもの |
-| 2 | 会話ごとの指定（pin） | `pin` | 主人が「この会話は仕事」と言ったときだけ。MCP は `souieba_project_pin`（その MCP の接続のあいだ）、CLI・フックは `souieba relay project pin <名前> --session <会話の ID>` |
+| 1 | 主人の規則: MCP クライアント | `rule-client` | MCP の initialize の `clientInfo.name` を、`souieba client set <名前> <プロジェクト>` で結び付けたもの |
+| 2 | 会話ごとの指定（pin） | `pin` | 主人が「この会話は仕事」と言ったときだけ。MCP は `souieba_project_pin`（その MCP の接続のあいだ）、CLI・フックは `souieba project pin <名前> --session <会話の ID>` |
 | 3 | 作業場所: 会話の作業ディレクトリ | `cwd` | フックが知らせた `cwd`（Claude Code・Codex のフックの入力。会話の ID ごとに覚える） |
 | 3 | 作業場所: MCP の roots | `roots` | roots に対応したクライアントの `roots/list`（file:// のもの） |
 | 4 | エージェントの推定 | `inferred` | CLI の `note --project-guess <名前>`・MCP の `souieba_note` の `project`。そのプロジェクトが `acceptInference`（既定 true）のときだけ。「推定」の印が付く |
@@ -49,7 +49,7 @@ v2 の共有設定はPersonごとに1組で、**作業しているディレク�
 - **会話の ID**: Claude Code などのフックは `session_id` を渡す。`souieba hook` がそれを覚え（作業ディレクトリと一緒に、24時間）、手引きに「この会話の ID」を書いて `souieba note --session <ID>` を使ってもらう。会話の ID が分からないエージェントでは、指定の代わりに `SOUIEBA_PROJECT` で起動してもらう
 - **指定は主人の言葉のときだけ**: 友人の近況や Narrator をきっかけに指定してはいけない（ツールの説明と手引きに書く）。指定によって、指定しないときに入るプロジェクト（決まらず保留なら誰にも届かない）より **届く相手が増えるなら、広げる操作**（2段階。任せることはできない）
 - **推定**: プロジェクトに `description`（主人が書く説明）を付けると、エージェントへの手引き（フック・MCP）に「推定で選べるプロジェクト: 名前: 説明」として出る。`acceptInference: false` のプロジェクト（仕事など）は推定では選ばれず、手引きにも出ない。推定で入ったメモは compose・note・publish・relay sent・TUI で「推定」と出る
-- **振り分け**: 保留のメモと推定で決めたメモは `souieba relay review`・TUI の「保留と推定」タブで確かめ、`souieba note move <プロジェクト> [--held] [--note <時刻>]` で振り分ける。振り分けたメモは `via: owner`（主人が決めたもの）になる
+- **振り分け**: 保留のメモと推定で決めたメモは `souieba review`・TUI の「保留と推定」タブで確かめ、`souieba note move <プロジェクト> [--held] [--note <時刻>]` で振り分ける。振り分けたメモは `via: owner`（主人が決めたもの）になる
 - 対応はこの PC の設定（`relay-state.json`）に持つ。リポジトリにファイルは置かない（誰と共有するかを git に入れない）
 - git の worktree は元のリポジトリと同じに扱う（`git rev-parse --git-common-dir` の親で照合する）
 
@@ -97,13 +97,13 @@ v2 の共有設定はPersonごとに1組で、**作業しているディレク�
 CLI:
 
 ```
-souieba relay project list
-souieba relay project add <名前> [<ディレクトリ>...] [--copy-default]
-souieba relay project dir add|remove <名前> <ディレクトリ>
-souieba relay project which [<ディレクトリ>]      # このディレクトリはどのプロジェクトか
-souieba relay allow  <相手|group:<グループ>> [--project <名前>]   # 省略時は default
-souieba relay policy set "<文章>" [--project <名前>]
-souieba relay project rename <名前> <新しい名前>
+souieba project list
+souieba project add <名前> [<ディレクトリ>...] [--copy-default]
+souieba project dir add|remove <名前> <ディレクトリ>
+souieba project which [<ディレクトリ>]      # このディレクトリはどのプロジェクトか
+souieba allow  <相手|group:<グループ>> [--project <名前>]   # 省略時は default
+souieba policy set "<文章>" [--project <名前>]
+souieba project rename <名前> <新しい名前>
 ```
 
 ## 6. TUI
@@ -144,8 +144,8 @@ souieba relay project rename <名前> <新しい名前>
 
 ### 決まり
 
-- **任せる（範囲を作る・期限を延ばす）のは主人だけ**。TUI（`souieba relay ui`。プロジェクトのタブに P の範囲、「連絡先」のタブに `accept` と各グループの `members`。Enter → 期限 → y）か、端末（TTY）での `souieba relay delegate grant ...` に y と答えたとき。`--yes` を付けても端末で聞き、端末でなければ断る（終了コード 4。`--yes` を付け直しても通らないので 3 と分ける）。MCP には任せるツールを出さない。どの範囲も「範囲を作る・広げる」ことを含まないので、エージェントは自分の権限を広げられない
-- **取り消すのはどこからでもよい**（狭める操作）。`souieba relay delegate revoke <範囲>|all`、MCP の `souieba_relay_delegation_revoke`、TUI
+- **任せる（範囲を作る・期限を延ばす）のは主人だけ**。TUI（`souieba ui`。プロジェクトのタブに P の範囲、「連絡先」のタブに `accept` と各グループの `members`。Enter → 期限 → y）か、端末（TTY）での `souieba delegate grant ...` に y と答えたとき。`--yes` を付けても端末で聞き、端末でなければ断る（終了コード 4。`--yes` を付け直しても通らないので 3 と分ける）。MCP には任せるツールを出さない。どの範囲も「範囲を作る・広げる」ことを含まないので、エージェントは自分の権限を広げられない
+- **取り消すのはどこからでもよい**（狭める操作）。`souieba delegate revoke <範囲>|all`、MCP の `souieba_relay_delegation_revoke`、TUI
 - 期限は `--for 24h`（既定）・`7d`・`forever`。切れた範囲は効かない（一覧には「期限切れ」と出す）
 - 任せた範囲で変えたことも changeLog に残し（`delegated: true`）、次の tell で「（任せた範囲での変更）」と印を付けて主人に知らせる
 - プロジェクトの名前を変えると範囲も付いていき、プロジェクト・グループを消すとその範囲も消える

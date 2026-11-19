@@ -1,5 +1,5 @@
 /**
- * 共有の設定を変える操作。CLI（souieba relay ...）と TUI（souieba relay ui）で共通に使う。
+ * 共有の設定を変える操作。CLI（souieba connect・allow など）と TUI（souieba ui）で共通に使う。
  *
  * どの操作も、まず「何が変わるか」（Change）を組み立ててから実行する。
  * 共有の範囲を広げる操作（widens）は、呼び出し側で主人の承認を取ってから apply する（docs/architecture.md）。

@@ -1,5 +1,5 @@
 /**
- * souieba relay ui: v2 の設定を、主人が自分の目で見て直接操作する画面（TUI）。
+ * souieba ui: v2 の設定を、主人が自分の目で見て直接操作する画面（TUI）。
  * エージェント（LLM）を通さない、決定論的な入口（docs/architecture.md）。
  * 上にタブを並べる。プロジェクトのタブ（← → で切り替え）では、そのプロジェクトのディレクトリ・共有先・Policy を出し、
  * 「連絡先」のタブには、全体のもの（届いた接続要求・連絡先の呼び名・グループ・ブロック）をまとめる（docs/v2-projects.md §6）。
@@ -754,7 +754,7 @@ export function createRelayTui(opts: TuiOptions) {
 
 export async function runRelayTui(opts: TuiOptions): Promise<void> {
   if (!opts.input && !isInteractive()) {
-    throw new Error("souieba relay ui は端末で実行してください（主人が自分で操作する画面です。エージェントは souieba relay の各コマンドを使います）");
+    throw new Error("souieba ui は端末で実行してください（主人が自分で操作する画面です。エージェントは souieba connect・allow などの各コマンドを使います）");
   }
   const ui = createRelayTui(opts);
   const onResize = () => ui.render();

@@ -1,6 +1,6 @@
 /**
  * コマンドの一覧（カタログ）。使い方の文字列は、ここだけに書く。
- * - ヘルプ（souieba・souieba relay help）は、ここから作る（renderUsage・renderRelayUsage）
+ * - ヘルプ（souieba・souieba help）は、ここから作る（renderUsage）
  * - エラーメッセージの「souieba … <引数>」は、usageOf・usageFamily で引く
  * - ドキュメントのコマンド例がここにあるコマンドかは、test/docs-commands.test.ts が確かめる
  * コマンドを足す・引数を変えるときは、ここを直す。
@@ -15,7 +15,7 @@ export type Section =
   | "relay-project";
 
 export type CommandSpec = {
-  /** `souieba` の後ろに続くコマンド名。例: "relay connect" */
+  /** `souieba` の後ろに続くコマンド名。例: "connect"・"project add" */
   name: string;
   /** 引数の書き方。例: "<Person ID> --name <呼び名>" */
   args?: string;
@@ -32,6 +32,7 @@ export const CATALOG: CommandSpec[] = [
   { name: "config set", args: "<項目> <値>", summary: "CLIの設定を保存する（session-gap / tell-interval / update-check）", section: "general" },
   { name: "config unset", args: "<項目>", summary: "CLIの設定を既定に戻す", section: "general" },
   { name: "doctor", summary: "Person IDとRelayへの接続を確認する", section: "general" },
+  { name: "help", summary: "このヘルプを表示する", section: "general" },
   { name: "init", args: "<Relay の URL>", summary: "Person ID を作って Relay に登録する", section: "general" },
 
   // ---- エージェント用 ----
@@ -70,108 +71,108 @@ export const CATALOG: CommandSpec[] = [
   },
 
   // ---- relay: 見る ----
-  { name: "relay id", summary: "自分の ID（友人に伝えて、接続してもらう。同じPersonを使うクライアントで共通）", section: "relay-view" },
-  { name: "relay lookup", args: "<ID>", summary: "ID が Relay にあるかを確かめる", section: "relay-view" },
-  { name: "relay contacts", summary: "接続済みの相手・届いた接続要求・送った接続要求", section: "relay-view" },
-  { name: "relay status", summary: "設定の一覧（連絡先・グループ・アクセス権限・Policy・メモの振り分けの規則）", section: "relay-view" },
-  { name: "relay inbox", summary: "受け取った近況（利用期限内）", section: "relay-view" },
-  { name: "relay sent", summary: "送った近況の配送状態", section: "relay-view" },
-  { name: "relay review", summary: "保留のメモと、推定でプロジェクトを決めたメモ", section: "relay-view" },
-  { name: "relay ui", summary: "設定の画面（TUI）。主人が自分で見て操作する", section: "relay-view" },
+  { name: "id", summary: "自分の ID（友人に伝えて、接続してもらう。同じPersonを使うクライアントで共通）", section: "relay-view" },
+  { name: "lookup", args: "<ID>", summary: "ID が Relay にあるかを確かめる", section: "relay-view" },
+  { name: "contacts", summary: "接続済みの相手・届いた接続要求・送った接続要求", section: "relay-view" },
+  { name: "status", summary: "設定の一覧（連絡先・グループ・アクセス権限・Policy・メモの振り分けの規則）", section: "relay-view" },
+  { name: "inbox", summary: "受け取った近況（利用期限内）", section: "relay-view" },
+  { name: "sent", summary: "送った近況の配送状態", section: "relay-view" },
+  { name: "review", summary: "保留のメモと、推定でプロジェクトを決めたメモ", section: "relay-view" },
+  { name: "ui", summary: "設定の画面（TUI）。主人が自分で見て操作する", section: "relay-view" },
 
   // ---- relay: 設定を変える ----
-  { name: "relay connect", args: "<Person ID> --name <呼び名>", summary: "接続を要求する（相手が承認すると接続になる）", section: "relay-change" },
-  { name: "relay accept", args: "<Person ID> --name <呼び名>", summary: "届いた接続要求を承認する", section: "relay-change" },
-  { name: "relay reject", args: "<Person ID>", summary: "届いた接続要求を断る", section: "relay-change" },
+  { name: "connect", args: "<Person ID> --name <呼び名>", summary: "接続を要求する（相手が承認すると接続になる）", section: "relay-change" },
+  { name: "accept", args: "<Person ID> --name <呼び名>", summary: "届いた接続要求を承認する", section: "relay-change" },
+  { name: "reject", args: "<Person ID>", summary: "届いた接続要求を断る", section: "relay-change" },
   {
-    name: "relay rename",
+    name: "rename",
     args: "<相手> <新しい呼び名>",
     summary: "呼び名を変える（呼び名のない接続済みの相手に付けるのにも使う）",
     section: "relay-change",
   },
-  { name: "relay disconnect", args: "<相手>", summary: "接続を解除する", section: "relay-change" },
-  { name: "relay block", args: "<相手>", summary: "ブロックする（接続を解除して、再接続も受け付けない）", section: "relay-change" },
-  { name: "relay unblock", args: "<Person ID>", summary: "ブロックを解除する", section: "relay-change" },
-  { name: "relay groups", args: "[list]", summary: "この PC だけのグループの一覧", section: "relay-change" },
-  { name: "relay groups create", args: "<ID（英小文字・数字・-_）> <名前>", summary: "グループを作る", section: "relay-change" },
-  { name: "relay groups add", args: "<グループ> <相手...>", summary: "グループにメンバーを加える", section: "relay-change" },
-  { name: "relay groups remove", args: "<グループ> <相手...>", summary: "グループからメンバーを外す", section: "relay-change" },
-  { name: "relay groups delete", args: "<グループ>", summary: "グループを消す", section: "relay-change" },
+  { name: "disconnect", args: "<相手>", summary: "接続を解除する", section: "relay-change" },
+  { name: "block", args: "<相手>", summary: "ブロックする（接続を解除して、再接続も受け付けない）", section: "relay-change" },
+  { name: "unblock", args: "<Person ID>", summary: "ブロックを解除する", section: "relay-change" },
+  { name: "groups", args: "[list]", summary: "この PC だけのグループの一覧", section: "relay-change" },
+  { name: "groups create", args: "<ID（英小文字・数字・-_）> <名前>", summary: "グループを作る", section: "relay-change" },
+  { name: "groups add", args: "<グループ> <相手...>", summary: "グループにメンバーを加える", section: "relay-change" },
+  { name: "groups remove", args: "<グループ> <相手...>", summary: "グループからメンバーを外す", section: "relay-change" },
+  { name: "groups delete", args: "<グループ>", summary: "グループを消す", section: "relay-change" },
   {
-    name: "relay allow",
+    name: "allow",
     args: "<相手|group:<グループ>> [--project <名前>]",
     summary: "共有してよい（既定はすべて禁止。個人の設定はグループより優先、グループ同士は deny が優先）",
     section: "relay-change",
   },
-  { name: "relay deny", args: "<相手|group:<グループ>> [--project <名前>]", summary: "共有しない", section: "relay-change" },
-  { name: "relay unset", args: "<相手|group:<グループ>> [--project <名前>]", summary: "個別の設定を消す", section: "relay-change" },
-  { name: "relay policy", args: "[--project <名前>]", summary: "共有方針（自然言語）を見る。エージェントが投稿前に読んで判断する", section: "relay-change" },
-  { name: "relay policy set", args: "<方針の文章> [--project <名前>]", summary: "共有方針を書く", section: "relay-change" },
-  { name: "relay policy clear", args: "[--project <名前>]", summary: "共有方針を消す", section: "relay-change" },
+  { name: "deny", args: "<相手|group:<グループ>> [--project <名前>]", summary: "共有しない", section: "relay-change" },
+  { name: "unset", args: "<相手|group:<グループ>> [--project <名前>]", summary: "個別の設定を消す", section: "relay-change" },
+  { name: "policy", args: "[--project <名前>]", summary: "共有方針（自然言語）を見る。エージェントが投稿前に読んで判断する", section: "relay-change" },
+  { name: "policy set", args: "<方針の文章> [--project <名前>]", summary: "共有方針を書く", section: "relay-change" },
+  { name: "policy clear", args: "[--project <名前>]", summary: "共有方針を消す", section: "relay-change" },
 
   // ---- relay: エージェントに任せる ----
-  { name: "relay delegate", args: "[list]", summary: "任せている範囲と期限", section: "relay-delegate" },
+  { name: "delegate", args: "[list]", summary: "任せている範囲と期限", section: "relay-delegate" },
   {
-    name: "relay delegate grant",
+    name: "delegate grant",
     args: "audience|policy|dirs [--project <名前>] [--for 24h|7d|forever]",
     summary: "任せる（主人が端末で y と答えたときだけ。--yes では任せられない。既定の期限は 24h）",
     section: "relay-delegate",
   },
-  { name: "relay delegate grant members", args: "<グループ> [--for ...]", summary: "グループのメンバーを出し入れする範囲を任せる", section: "relay-delegate" },
-  { name: "relay delegate grant accept", args: "[--for ...]", summary: "接続要求の承認を任せる", section: "relay-delegate" },
+  { name: "delegate grant members", args: "<グループ> [--for ...]", summary: "グループのメンバーを出し入れする範囲を任せる", section: "relay-delegate" },
+  { name: "delegate grant accept", args: "[--for ...]", summary: "接続要求の承認を任せる", section: "relay-delegate" },
   {
-    name: "relay delegate revoke",
+    name: "delegate revoke",
     args: "audience|policy|dirs [--project <名前>] | members <グループ> | accept | all",
     summary: "任せた範囲を取り消す",
     section: "relay-delegate",
   },
 
   // ---- relay: プロジェクト ----
-  { name: "relay project", args: "[list]", summary: "プロジェクトと、結び付けたディレクトリ・規則", section: "relay-project" },
+  { name: "project", args: "[list]", summary: "プロジェクトと、結び付けたディレクトリ・規則", section: "relay-project" },
   {
-    name: "relay project add",
+    name: "project add",
     args: "<名前> [<ディレクトリ>...] [--copy-default]",
     summary: "作る（共有先は空で始まる。--copy-default で既定の共有先と方針を写す）",
     section: "relay-project",
   },
-  { name: "relay project dir", args: "add|remove <名前> <ディレクトリ>...", summary: "プロジェクトにディレクトリを付ける・外す", section: "relay-project" },
+  { name: "project dir", args: "add|remove <名前> <ディレクトリ>...", summary: "プロジェクトにディレクトリを付ける・外す", section: "relay-project" },
   {
-    name: "relay project describe",
+    name: "project describe",
     args: "<名前> <説明>",
     summary: "どんな作業のプロジェクトか（エージェントがメモのプロジェクトを推定するときに読む）",
     section: "relay-project",
   },
   {
-    name: "relay project inference",
+    name: "project inference",
     args: "<名前> on|off",
     summary: "エージェントの推定でこのプロジェクトに入れてよいか（既定は on。仕事などは off に）",
     section: "relay-project",
   },
   {
-    name: "relay project pin",
+    name: "project pin",
     args: "<名前> --session <会話の ID>",
     summary: "この会話のメモをこのプロジェクトに入れる（主人が「この会話は〜」と言ったときだけ）",
     section: "relay-project",
   },
-  { name: "relay project unpin", args: "--session <会話の ID>", summary: "この会話の指定を外す", section: "relay-project" },
+  { name: "project unpin", args: "--session <会話の ID>", summary: "この会話の指定を外す", section: "relay-project" },
   {
-    name: "relay project delete",
+    name: "project delete",
     args: "<名前>",
     summary: "消す（そのディレクトリとまだ送っていないメモは既定になる）",
     section: "relay-project",
   },
-  { name: "relay project rename", args: "<名前> <新しい名前>", summary: "名前を変える（既定は変えられない）", section: "relay-project" },
-  { name: "relay project which", args: "[<ディレクトリ>]", summary: "そのディレクトリ（省略時はカレント）がどのプロジェクトか", section: "relay-project" },
+  { name: "project rename", args: "<名前> <新しい名前>", summary: "名前を変える（既定は変えられない）", section: "relay-project" },
+  { name: "project which", args: "[<ディレクトリ>]", summary: "そのディレクトリ（省略時はカレント）がどのプロジェクトか", section: "relay-project" },
   {
-    name: "relay client",
+    name: "client",
     args: "[list]",
     summary: "MCP のクライアント（Claude Desktop など）ごとに、メモを入れるプロジェクトの規則",
     section: "relay-project",
   },
-  { name: "relay client set", args: "<クライアント名> <プロジェクト>", summary: "規則を作る", section: "relay-project" },
-  { name: "relay client unset", args: "<クライアント名>", summary: "規則を消す", section: "relay-project" },
+  { name: "client set", args: "<クライアント名> <プロジェクト>", summary: "規則を作る", section: "relay-project" },
+  { name: "client unset", args: "<クライアント名>", summary: "規則を消す", section: "relay-project" },
   {
-    name: "relay unresolved",
+    name: "unresolved",
     args: "default|hold",
     summary: "どのプロジェクトにも決まらないメモを、既定に入れる（default）か、振り分けるまで保留する（hold）",
     section: "relay-project",
@@ -180,14 +181,14 @@ export const CATALOG: CommandSpec[] = [
 
 const byName = new Map(CATALOG.map((c) => [c.name, c]));
 
-/** `souieba relay connect <Person ID> --name <呼び名>` のような、1つのコマンドの使い方 */
+/** `souieba connect <Person ID> --name <呼び名>` のような、1つのコマンドの使い方 */
 export function usageOf(name: string, vars: Partial<UsageVars> = {}): string {
   const c = byName.get(name);
   if (!c) throw new Error(`コマンドのカタログにありません: ${name}`);
   return fill(`souieba ${c.name}${c.args ? ` ${c.args}` : ""}`, vars);
 }
 
-/** サブコマンドの一覧。`souieba relay groups [list | create | add | remove | delete]` */
+/** サブコマンドの一覧。`souieba groups [list | create | add | remove | delete]` */
 export function usageFamily(prefix: string): string {
   const subs: string[] = [];
   if (byName.has(prefix)) subs.push("list");
@@ -198,6 +199,9 @@ export function usageFamily(prefix: string): string {
   }
   return `souieba ${prefix} [${subs.join(" | ")}]`;
 }
+
+/** 接続・共有の設定のコマンド（`souieba <名前>` でも、以前の `souieba relay <名前>` でも使える）。relay.ts が実行する */
+export const RELAY_COMMANDS: string[] = [...new Set(CATALOG.filter((c) => c.section.startsWith("relay-")).map((c) => c.name.split(" ")[0]!))];
 
 /** コマンド名の一覧（ドキュメントのコマンド例の検査に使う） */
 export const COMMAND_NAMES: string[] = CATALOG.map((c) => c.name);
@@ -213,8 +217,8 @@ const LABEL_WIDTH = 36;
 const displayWidth = (s: string) => [...s].reduce((n, ch) => n + ((ch.codePointAt(0) ?? 0) >= 0x1100 ? 2 : 1), 0);
 const pad = (s: string, width: number) => s + " ".repeat(Math.max(0, width - displayWidth(s)));
 
-function renderLine(c: CommandSpec, vars: UsageVars, strip: string): string {
-  const label = `${c.name.replace(strip, "")}${c.args ? ` ${fill(c.args, vars)}` : ""}`;
+function renderLine(c: CommandSpec, vars: UsageVars): string {
+  const label = `${c.name}${c.args ? ` ${fill(c.args, vars)}` : ""}`;
   const lines: string[] = [];
   if (c.summary && displayWidth(label) <= LABEL_WIDTH - 2) lines.push(`  ${pad(label, LABEL_WIDTH)}${fill(c.summary, vars)}`);
   else {
@@ -225,31 +229,20 @@ function renderLine(c: CommandSpec, vars: UsageVars, strip: string): string {
   return lines.join("\n");
 }
 
-/** `souieba`（引数なし）のヘルプ。relay のコマンドは souieba relay help に任せる */
+/** `souieba`（引数なし）・`souieba help` のヘルプ */
 export function renderUsage(vars: UsageVars, configPath: string): string {
-  const of = (s: Section) => CATALOG.filter((c) => c.section === s).map((c) => renderLine(c, vars, ""));
+  const of = (s: Section) => CATALOG.filter((c) => c.section === s && c.name !== "help").map((c) => renderLine(c, vars));
   return [
     "使い方: souieba <command>",
     "",
     ...of("general"),
-    `  ${"--version".padEnd(LABEL_WIDTH)}CLI のバージョン`,
+    `  ${pad("help", LABEL_WIDTH)}このヘルプを表示する`,
+    `  ${pad("--version", LABEL_WIDTH)}CLI のバージョン`,
     "",
     "エージェント用（Skill から呼ぶ。--json で JSON 出力）:",
     ...of("agent"),
     "",
-    "Relay（Person IDで、アカウントなしで共有する）:",
-    `  ${"relay ...".padEnd(LABEL_WIDTH)}souieba relay help で一覧（id / contacts / connect / accept / allow / policy / project など）`,
-    "",
-    `<グループ> は名前か ID。設定ファイル: ${configPath}（環境変数 SOUIEBA_HOME で場所を変更できます）`,
-  ].join("\n");
-}
-
-/** `souieba relay help` のヘルプ */
-export function renderRelayUsage(vars: UsageVars): string {
-  const of = (s: Section) => CATALOG.filter((c) => c.section === s).map((c) => renderLine(c, vars, "relay "));
-  return [
-    "使い方: souieba relay <command>（Relay 経由で、人ごとの Person ID で共有する。始めるには souieba init <Relay の URL>）",
-    "",
+    "つながる・見る（Person IDで、アカウントなしで共有する。始めるには souieba init <Relay の URL>）:",
     ...of("relay-view"),
     "",
     "設定を変える（共有を広げる操作には、主人の承認が要る。端末では y/N で聞き、エージェントは --yes を付けて実行する）:",
@@ -263,5 +256,7 @@ export function renderRelayUsage(vars: UsageVars): string {
     "",
     "<相手> は呼び名か ID。<グループ> は ID か名前",
     "共有を狭める操作（reject・disconnect・block・deny・groups remove など）は、確認なしで実行します",
+    `設定ファイル: ${configPath}（環境変数 SOUIEBA_HOME で場所を変更できます）`,
+    "以前の `souieba relay <command>` も、そのまま使えます",
   ].join("\n");
 }

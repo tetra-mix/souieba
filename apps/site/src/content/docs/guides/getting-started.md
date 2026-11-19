@@ -29,10 +29,10 @@ CLI とスキルは別々に更新されます。`npm i -g souieba@latest` と `
 
 ```bash
 souieba init https://souieba.example.com
-souieba relay id    # あなたの Person ID（sb_…）
+souieba id    # あなたの Person ID（sb_…）
 ```
 
-以後の `souieba relay`・`souieba note`・`souieba tell`・`souieba publish` は、この Person を自動的に使います。
+以後の `souieba connect`・`souieba note`・`souieba tell`・`souieba publish` などは、この Person を自動的に使います。
 
 ## 3. プラグイン・フックを入れる（おすすめ）
 

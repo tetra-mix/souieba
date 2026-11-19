@@ -2,7 +2,7 @@
  * souieba mcp の、v2（Relay）の共有の設定を変えるツール。シェルを使えないエージェント（Claude Desktop など）が、
  * 主人に頼まれたときに設定を変えられるようにする（docs/architecture.md・docs/v2-projects.md §9）。
  *
- * 中身は CLI の souieba relay ...（relay.ts の relayCommand）と同じで、同じ2段階を踏む:
+ * 中身は CLI の souieba connect・allow など（relay.ts の relayCommand）と同じで、同じ2段階を踏む:
  * - 共有を狭める操作は、そのまま実行する
  * - 広げる操作は、confirm: true（CLI の --yes）がなければ変更の内容を返して何もしない。主人が会話で同意したら confirm: true で呼び直す
  * - 主人が任せた範囲の中の広げる操作は、confirm なしで実行する
@@ -195,7 +195,7 @@ export function registerRelayTools(server: McpServer, flags: AgentFlags): void {
     {
       title: "エージェントに任せた範囲を取り消す",
       description:
-        "主人がエージェントに任せた範囲（souieba_relay_status の delegations）を取り消す。狭める操作なので、主人に頼まれたらそのまま実行してよい。任せる（広げる）ことは、主人がターミナルか souieba relay ui で自分でするもので、このツールではできない。",
+        "主人がエージェントに任せた範囲（souieba_relay_status の delegations）を取り消す。狭める操作なので、主人に頼まれたらそのまま実行してよい。任せる（広げる）ことは、主人がターミナルか souieba ui で自分でするもので、このツールではできない。",
       inputSchema: {
         scope: z.enum(["audience", "policy", "dirs", "members", "accept", "all"]),
         project,

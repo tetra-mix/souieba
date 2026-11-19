@@ -1,13 +1,13 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CATALOG, COMMAND_NAMES, renderRelayUsage, renderUsage, usageFamily, usageOf } from "../src/commands/catalog.ts";
+import { CATALOG, COMMAND_NAMES, RELAY_COMMANDS, renderUsage, usageFamily, usageOf } from "../src/commands/catalog.ts";
 import { COMMANDS } from "../src/commands/index.ts";
 
 const root = join(import.meta.dirname, "../../..");
 
 /** コマンドの実装がなくても、ドキュメントに書いてよいもの */
-const EXTRA = ["relay help", "version"];
+const EXTRA = ["relay", "version"];
 
 function files(dir: string, ext: RegExp, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -48,39 +48,35 @@ function commandsIn(text: string): string[][] {
       if (!/^[a-z][a-z0-9-]*$/.test(tok)) break;
       words.push(tok);
     }
-    return words;
+    // 以前の `souieba relay connect` は `souieba connect` と同じ（relay だけのときは、グループを指している）
+    return words[0] === "relay" && words.length > 1 ? words.slice(1) : words;
   });
 }
 
 describe("コマンドのカタログ", () => {
   it("使い方を引ける。サブコマンドの一覧も作れる", () => {
-    expect(usageOf("relay connect")).toBe("souieba relay connect <Person ID> --name <呼び名>");
-    expect(usageFamily("relay groups")).toBe("souieba relay groups [list | create | add | remove | delete]");
-    expect(() => usageOf("relay nothing")).toThrow();
+    expect(usageOf("connect")).toBe("souieba connect <Person ID> --name <呼び名>");
+    expect(usageFamily("groups")).toBe("souieba groups [list | create | add | remove | delete]");
+    expect(() => usageOf("nothing")).toThrow();
   });
 
   it("名前が重複していない", () => {
     expect(new Set(COMMAND_NAMES).size).toBe(COMMAND_NAMES.length);
   });
 
-  it("トップレベルのコマンドは、すべて実装がある（relay 以外）", () => {
+  it("トップレベルのコマンドは、すべて実装がある。以前の souieba relay <コマンド> も使える", () => {
     const tops = new Set(CATALOG.map((c) => c.name.split(" ")[0]!));
-    for (const top of tops) {
-      if (top === "relay") continue;
-      expect(Object.hasOwn(COMMANDS, top), `${top} の実装（commands/index.ts）がありません`).toBe(true);
-    }
+    for (const top of tops) expect(Object.hasOwn(COMMANDS, top), `${top} の実装（commands/index.ts）がありません`).toBe(true);
     expect(Object.hasOwn(COMMANDS, "relay")).toBe(true);
+    // 接続・共有の設定のコマンドは、トップレベルのほかのコマンドと名前が重ならない
+    const others = new Set(CATALOG.filter((c) => !c.section.startsWith("relay-")).map((c) => c.name.split(" ")[0]!));
+    for (const name of RELAY_COMMANDS) expect(others.has(name), `${name} が重なっています`).toBe(false);
   });
 
   it("ヘルプには、カタログのコマンドがすべて出る", () => {
     const vars = { topics: "a / b", hooks: "x|y" };
-    const top = renderUsage(vars, "/home/.souieba/config.json");
-    const relay = renderRelayUsage(vars);
-    for (const c of CATALOG) {
-      const shown = c.name.startsWith("relay ") ? relay : top;
-      const label = c.name.replace(/^relay /, "");
-      expect(shown, `${c.name} がヘルプに出ていません`).toContain(label);
-    }
+    const help = renderUsage(vars, "/home/.souieba/config.json");
+    for (const c of CATALOG) expect(help, `${c.name} がヘルプに出ていません`).toContain(c.name);
   });
 });
 

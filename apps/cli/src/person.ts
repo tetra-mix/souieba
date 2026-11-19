@@ -89,8 +89,8 @@ export async function initCommand(a: { url?: string; name?: string }, io: Person
   io.log(`ID: ${person.personId}（このPCの同じPersonを使うクライアントで共通です。友人にはこのIDを伝えます）`);
   io.log(`内部転送端末: ${name}（通常の操作では指定不要です）`);
   io.log("次に:");
-  io.log("  1. 友人と ID を伝え合い、souieba relay connect <相手の ID> --name <呼び名> で接続を要求する（相手が承認すると接続）");
-  io.log("  2. 共有してよい相手を決める: souieba relay allow <呼び名>（既定はすべて禁止）");
+  io.log("  1. 友人と ID を伝え合い、souieba connect <相手の ID> --name <呼び名> で接続を要求する（相手が承認すると接続）");
+  io.log("  2. 共有してよい相手を決める: souieba allow <呼び名>（既定はすべて禁止）");
   io.log("  3. 別のPersonを作るなら、SOUIEBA_HOMEを変えて souieba init を実行します");
-  io.log("souieba relay ui で、これらを画面で見ながら設定することもできます。");
+  io.log("souieba ui で、これらを画面で見ながら設定することもできます。");
 }

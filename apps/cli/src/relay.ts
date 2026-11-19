@@ -1,5 +1,5 @@
 /**
- * v2（Relay）の設定と確認のコマンド（souieba relay ...）。docs/architecture.md
+ * v2（Relay）の設定と確認のコマンド（souieba connect・allow・project など。souieba relay ... でも同じ）。docs/architecture.md
  *
  * ユーザー操作は原則として既存の LLM（エージェント）を通して行う（§1.1・§14.1）。どのコマンドもエージェントが実行できる。
  * ただし、LLM が自分の判断で共有の範囲を広げないよう（§6.2・§7.1）、広げる操作は2段階にする:
@@ -7,9 +7,9 @@
  * - 広げる操作（接続・承認・allow・グループに加える・Policy の変更・ブロック解除）は、--yes がなければ変更の内容だけを出して止まる。
  *   エージェントはその内容を主人に見せ、主人が会話で同意したら --yes を付けて実行し直す。端末から実行したときは y/N で聞く
  * - 端末の外で変えた設定は、次の tell で主人に知らせる（だまされたエージェントに変えられても、主人が気づけるように）
- * - 主人がエージェントに任せた範囲（souieba relay delegate）の中の広げる操作は、--yes なしで実行する（変えたことは同じく tell で知らせる）。
+ * - 主人がエージェントに任せた範囲（souieba delegate）の中の広げる操作は、--yes なしで実行する（変えたことは同じく tell で知らせる）。
  *   任せるのは主人だけ: 端末での y/N（--yes では任せられない）か TUI。取り消すのはどこからでもよい
- * 主人が自分の目で見て直接操作する入口は TUI（souieba relay ui、relay-tui.ts）。
+ * 主人が自分の目で見て直接操作する入口は TUI（souieba ui、relay-tui.ts）。
  * --yes は主人の承認を取る手順を必ず踏ませるための段差で、同じユーザー権限で動くプログラムへのセキュリティ境界ではない。
  */
 import { join } from "node:path";
@@ -34,7 +34,8 @@ import {
   resolveProject,
 } from "@souieba/sdk";
 import { NO_PERSON_MESSAGE, requirePerson } from "./person.ts";
-import { renderRelayUsage, usageFamily, usageOf } from "./commands/catalog.ts";
+import { usageFamily, usageOf } from "./commands/catalog.ts";
+import { USAGE } from "./commands/usage.ts";
 import { type Change, OpError, describeScope, parseScope, parseTerm, projectLabel, relayOps, requireProject, who } from "./relay-ops/index.ts";
 import { CLI_VERSION } from "./version.ts";
 
@@ -66,7 +67,7 @@ export function approvalMessage(summary: string, retry: string): string {
 }
 
 export const OWNER_ONLY_MESSAGE =
-  "souieba: エージェントに範囲を任せる操作は、主人が自分でしかできません（ターミナルで souieba relay delegate grant を実行して y と答えるか、souieba relay ui の画面で）。--yes を付けても実行しません。まだ何も変えていません。主人に頼まれたら、このことを伝えてください。";
+  "souieba: エージェントに範囲を任せる操作は、主人が自分でしかできません（ターミナルで souieba delegate grant を実行して y と答えるか、souieba ui の画面で）。--yes を付けても実行しません。まだ何も変えていません。主人に頼まれたら、このことを伝えてください。";
 
 /** 端末で主人に y/N を聞く */
 export async function ttyAsk(summary: string): Promise<boolean> {
@@ -80,7 +81,7 @@ export async function ttyAsk(summary: string): Promise<boolean> {
 }
 
 
-export const RELAY_USAGE = renderRelayUsage({ topics: "", hooks: "" });
+
 
 /** v2 の操作に使う部品。状態とRelayの接続はPersonごとに扱う。 */
 export function relayParts(r: ResolvedRelayAgent, now: () => Date) {
@@ -111,7 +112,7 @@ const short = (id: string) => `${id.slice(0, 10)}…`;
 
 /** 実行するコマンドを、主人がそのまま貼れる形にする */
 function commandLine(args: string[]): string {
-  return ["souieba", "relay", ...args.map(shellQuote)].join(" ");
+  return ["souieba", ...args.map(shellQuote)].join(" ");
 }
 
 /** シェルで特別な意味を持つ文字があるときだけ、シングルクォートで囲む */
@@ -139,7 +140,7 @@ export type RelayArgs = {
 export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
   const { sub, rest } = a;
   if (sub === undefined || sub === "help") {
-    io.log(RELAY_USAGE);
+    io.log(USAGE);
     return;
   }
   if (sub === "init") {
@@ -193,13 +194,13 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
     case "id": {
       io.log(`ID: ${r.personId}`);
       io.log(`Relay: ${r.relayUrl}`);
-      io.log("友人にこの ID を伝え、souieba relay connect <この ID> --name <呼び名> で接続を要求してもらってください。");
+      io.log("友人にこの ID を伝え、souieba connect <この ID> --name <呼び名> で接続を要求してもらってください。");
       io.log("（ID はあなたの Person 鍵から作るので、ID が合っていれば相手は本物の鍵で確かめられます。ID は信頼できる経路で伝えてください。同じPersonを使うクライアントでは同じIDです）");
       return;
     }
     case "lookup": {
       const id = rest[0];
-      if (!id || !isPersonId(id)) throw new Error(usageOf("relay lookup"));
+      if (!id || !isPersonId(id)) throw new Error(usageOf("lookup"));
       const [e] = await p.http.lookup([id]);
       const v = e ? verifyPersonDirectory(e) : null;
       io.log(v?.ok ? `${id} は登録されています（使える端末 ${v.devices.length} 台）` : `${id} は見つかりません`);
@@ -215,9 +216,9 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       for (const c of by("accepted")) {
         const contact = s.contacts[c.peer];
         const shared = Object.keys(s.projects).filter((pr) => accessFor(s, c.peer, pr).allowed).map(projectLabel);
-        io.log(`- ${contact ? contact.name : "（呼び名なし。souieba relay rename で付けてください）"}  ${c.peer}  共有: ${shared.length ? shared.join("、") : "なし"}`);
+        io.log(`- ${contact ? contact.name : "（呼び名なし。souieba rename で付けてください）"}  ${c.peer}  共有: ${shared.length ? shared.join("、") : "なし"}`);
       }
-      io.log("## 届いた接続要求（承認: souieba relay accept <ID> --name <呼び名>）");
+      io.log("## 届いた接続要求（承認: souieba accept <ID> --name <呼び名>）");
       for (const c of by("incoming")) io.log(`- ${c.peer}（${c.createdAt}）`);
       io.log("## 送った接続要求（相手の承認待ち）");
       for (const c of by("outgoing")) io.log(`- ${s.pendingNames[c.peer] ?? ""} ${c.peer}`);
@@ -241,7 +242,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
         if (g.length) io.log(`グループのアクセス権限: ${g.join("、")}`);
         const rules = Object.entries(pr.access.people).map(([id, rule]) => `${who(s, id)}: ${rule}`);
         io.log(`個人のアクセス権限: ${rules.join("、") || "なし"}`);
-        io.log(`Policy: ${pr.policy ? pr.policy.text : `未設定（souieba relay policy set <方針>${pr.name === DEFAULT_PROJECT ? "" : ` --project ${pr.name}`} で設定）`}`);
+        io.log(`Policy: ${pr.policy ? pr.policy.text : `未設定（souieba policy set <方針>${pr.name === DEFAULT_PROJECT ? "" : ` --project ${pr.name}`} で設定）`}`);
       }
       io.log("");
       logDelegations(s, io);
@@ -276,18 +277,18 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       return;
     }
     case "connect":
-      return run(ops.connect(need(rest[0], usageOf("relay connect")), a.name ?? ""));
+      return run(ops.connect(need(rest[0], usageOf("connect")), a.name ?? ""));
     case "accept":
-      return run(ops.accept(need(rest[0], usageOf("relay accept")), a.name ?? ""));
+      return run(ops.accept(need(rest[0], usageOf("accept")), a.name ?? ""));
     case "reject":
-      return run(ops.reject(need(rest[0], usageOf("relay reject"))));
+      return run(ops.reject(need(rest[0], usageOf("reject"))));
     case "rename":
-      return run(ops.rename(need(rest[0], usageOf("relay rename")), rest.slice(1).join(" ")));
+      return run(ops.rename(need(rest[0], usageOf("rename")), rest.slice(1).join(" ")));
     case "disconnect":
     case "block":
-      return run(ops.disconnect(need(rest[0], usageOf(`relay ${sub}`)), { block: sub === "block" }));
+      return run(ops.disconnect(need(rest[0], usageOf(sub)), { block: sub === "block" }));
     case "unblock":
-      return run(ops.unblock(need(rest[0], usageOf("relay unblock"))));
+      return run(ops.unblock(need(rest[0], usageOf("unblock"))));
     case "groups": {
       const [action, ...args] = rest;
       if (action === undefined || action === "list") {
@@ -300,16 +301,16 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
         }
         return;
       }
-      if (action === "create") return run(ops.groupCreate(need(args[0], usageOf("relay groups create")), args.slice(1).join(" ")));
-      if (action === "add") return run(ops.groupMembers(need(args[0], usageOf("relay groups add")), args.slice(1), []));
-      if (action === "remove") return run(ops.groupMembers(need(args[0], usageOf("relay groups remove")), [], args.slice(1)));
-      if (action === "delete") return run(ops.groupDelete(need(args[0], usageOf("relay groups delete"))));
-      throw new OpError(usageFamily("relay groups"));
+      if (action === "create") return run(ops.groupCreate(need(args[0], usageOf("groups create")), args.slice(1).join(" ")));
+      if (action === "add") return run(ops.groupMembers(need(args[0], usageOf("groups add")), args.slice(1), []));
+      if (action === "remove") return run(ops.groupMembers(need(args[0], usageOf("groups remove")), [], args.slice(1)));
+      if (action === "delete") return run(ops.groupDelete(need(args[0], usageOf("groups delete"))));
+      throw new OpError(usageFamily("groups"));
     }
     case "allow":
     case "deny":
     case "unset":
-      return run(ops.setAccess(need(rest[0], usageOf(`relay ${sub}`)), sub === "unset" ? null : sub, a.project));
+      return run(ops.setAccess(need(rest[0], usageOf(sub)), sub === "unset" ? null : sub, a.project));
     case "policy": {
       const action = rest[0];
       if (action === undefined) {
@@ -319,7 +320,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       }
       if (action === "clear") return run(ops.policyClear(a.project));
       if (action === "set") return run(ops.policySet(rest.slice(1).join(" "), a.project));
-      throw new OpError(usageFamily("relay policy"));
+      throw new OpError(usageFamily("policy"));
     }
     case "delegate": {
       const [action, kind, arg] = rest;
@@ -327,7 +328,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       if (action === undefined || action === "list") return logDelegations(s, io);
       if (action === "grant") return run(ops.delegateGrant(parseScope(s, kind, arg, a.project), parseTerm(a.term)));
       if (action === "revoke") return run(ops.delegateRevoke(kind === "all" ? null : parseScope(s, kind, arg, a.project)));
-      throw new OpError(usageFamily("relay delegate"));
+      throw new OpError(usageFamily("delegate"));
     }
     case "project": {
       const [action, ...args] = rest;
@@ -354,24 +355,24 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
         if (process.env.SOUIEBA_PROJECT) io.log(`（環境変数 SOUIEBA_PROJECT=${process.env.SOUIEBA_PROJECT} があるので、メモはそちらに入ります）`);
         return;
       }
-      if (action === "add") return run(ops.projectAdd(need(args[0], usageOf("relay project add")), args.slice(1), { copyDefault: a.copyDefault }));
+      if (action === "add") return run(ops.projectAdd(need(args[0], usageOf("project add")), args.slice(1), { copyDefault: a.copyDefault }));
       if (action === "dir") {
         const [verb, name, ...dirs] = args;
-        const usage = usageOf("relay project dir");
+        const usage = usageOf("project dir");
         if (verb === "add") return run(ops.projectDirs(need(name, usage), dirs, []));
         if (verb === "remove") return run(ops.projectDirs(need(name, usage), [], dirs));
         throw new OpError(usage);
       }
-      if (action === "delete") return run(ops.projectDelete(need(args[0], usageOf("relay project delete"))));
-      if (action === "describe") return run(ops.projectDescribe(need(args[0], usageOf("relay project describe")), args.slice(1).join(" ")));
+      if (action === "delete") return run(ops.projectDelete(need(args[0], usageOf("project delete"))));
+      if (action === "describe") return run(ops.projectDescribe(need(args[0], usageOf("project describe")), args.slice(1).join(" ")));
       if (action === "inference") {
-        const usage = usageOf("relay project inference");
+        const usage = usageOf("project inference");
         const v = args[1];
         if (v !== "on" && v !== "off") throw new OpError(usage);
         return run(ops.projectInference(need(args[0], usage), v === "on"));
       }
       if (action === "pin" || action === "unpin") {
-        const target = action === "pin" ? need(args[0], usageOf("relay project pin")) : null;
+        const target = action === "pin" ? need(args[0], usageOf("project pin")) : null;
         if (a.mcpPin) return run(ops.pin(target, a.mcpPin.baseline(), (pr) => a.mcpPin!.set(pr)));
         const key = a.session ?? process.env.SOUIEBA_SESSION;
         if (!key) {
@@ -384,10 +385,10 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
         return run(ops.pin(target, baseline, (pr) => p.sessions.pin(key, pr, io.now())));
       }
       if (action === "rename") {
-        const usage = usageOf("relay project rename");
+        const usage = usageOf("project rename");
         return run(ops.projectRename(need(args[0], usage), need(args.slice(1).join(" ") || undefined, usage)));
       }
-      throw new OpError(usageFamily("relay project"));
+      throw new OpError(usageFamily("project"));
     }
     case "client": {
       const [action, name, project] = rest;
@@ -398,9 +399,9 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
         for (const [c, pr] of cl) io.log(`- ${c} → ${projectLabel(pr)}`);
         return;
       }
-      if (action === "set") return run(ops.clientRule(need(name, usageOf("relay client set")), need(project, usageOf("relay client set"))));
-      if (action === "unset") return run(ops.clientRule(need(name, usageOf("relay client unset")), null));
-      throw new OpError(usageFamily("relay client"));
+      if (action === "set") return run(ops.clientRule(need(name, usageOf("client set")), need(project, usageOf("client set"))));
+      if (action === "unset") return run(ops.clientRule(need(name, usageOf("client unset")), null));
+      throw new OpError(usageFamily("client"));
     }
     case "unresolved": {
       const v = rest[0];
@@ -408,7 +409,7 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
         io.log(`どのプロジェクトにも決まらないメモ: ${p.state.load().unresolved === "hold" ? "hold（保留）" : "default（既定のプロジェクト）"}`);
         return;
       }
-      if (v !== "default" && v !== "hold") throw new OpError(usageOf("relay unresolved"));
+      if (v !== "default" && v !== "hold") throw new OpError(usageOf("unresolved"));
       return run(ops.unresolvedMode(v));
     }
     case "review": {
@@ -418,11 +419,11 @@ export async function relayCommand(a: RelayArgs, io: RelayIo): Promise<void> {
       for (const n of items) {
         io.log(`- ${n.ts} ${n.via === "hold" ? "［保留］" : `［推定: ${projectLabel(s.projects[n.project ?? DEFAULT_PROJECT] ? (n.project ?? DEFAULT_PROJECT) : DEFAULT_PROJECT)}］`} ${n.text}`);
       }
-      if (items.length) io.log("振り分け: souieba note move <プロジェクト> --note <時刻>（保留のメモは --held も付ける）。souieba relay ui の「保留と推定」でもできます");
+      if (items.length) io.log("振り分け: souieba note move <プロジェクト> --note <時刻>（保留のメモは --held も付ける）。souieba ui の「保留と推定」でもできます");
       return;
     }
     default:
-      throw new Error(`不明なコマンドです: relay ${sub}\n${RELAY_USAGE}`);
+      throw new Error(`不明なコマンドです: ${sub}\n${USAGE}`);
   }
 }
 

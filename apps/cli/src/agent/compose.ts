@@ -50,7 +50,7 @@ function composeText(flags: AgentFlags, pending: PendingPeriod[], s: RelayState)
   if (!anyAllowed) {
     lines.push(
       "## 共有の範囲",
-      "主人はまだ誰にも共有を許可していないので、投稿しても誰にも届きません。投稿はせずにスキップし、ユーザーへの回答のあとで、主人に souieba relay allow <相手> で共有する相手を決めるよう伝えてください。",
+      "主人はまだ誰にも共有を許可していないので、投稿しても誰にも届きません。投稿はせずにスキップし、ユーザーへの回答のあとで、主人に souieba allow <相手> で共有する相手を決めるよう伝えてください。",
     );
   }
   for (const p of pending) {

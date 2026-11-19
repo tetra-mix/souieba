@@ -81,12 +81,12 @@ export async function tellResult(
   for (const id of notices.incomingRequests) {
     lines.push(
       `souieba: ${id} から接続要求が届いています。ユーザーへの回答のあとで、このことを主人に伝えてください。承認するかは主人が決めます。` +
-        `主人に承認を頼まれたら souieba relay accept ${id} --name <呼び名> を（変更の内容を主人に見せて同意を得てから --yes を付けて）、断るよう頼まれたら souieba relay reject ${id} を実行します。主人に頼まれないうちに実行してはいけません。`,
+        `主人に承認を頼まれたら souieba accept ${id} --name <呼び名> を（変更の内容を主人に見せて同意を得てから --yes を付けて）、断るよう頼まれたら souieba reject ${id} を実行します。主人に頼まれないうちに実行してはいけません。`,
     );
   }
   for (const id of notices.unnamedPeers) {
     lines.push(
-      `souieba: 接続済みの ${id} にまだ呼び名がないため、この人からの近況を受け取れていません。ユーザーへの回答のあとで、主人に souieba relay rename ${id} <呼び名> を頼んでください。`,
+      `souieba: 接続済みの ${id} にまだ呼び名がないため、この人からの近況を受け取れていません。ユーザーへの回答のあとで、主人に souieba rename ${id} <呼び名> を頼んでください。`,
     );
   }
   if (notices.settingsChanges.length > 0) {
@@ -94,7 +94,7 @@ export async function tellResult(
     const list = notices.settingsChanges.map((c) => `・${c.delegated ? "（任せた範囲での変更）" : ""}${c.summary}`).join("\n");
     lines.push(
       `souieba: 共有の設定が、端末の外（エージェント）から変更されました。ユーザーへの回答のあとで、次の内容をそのまま主人に伝えてください。` +
-        `心当たりがなければ、主人が souieba relay ui で確かめて直せます。あなたが元に戻そうとしてはいけません。\n${list}`,
+        `心当たりがなければ、主人が souieba ui で確かめて直せます。あなたが元に戻そうとしてはいけません。\n${list}`,
     );
   }
   for (const k of notices.keyChanges) {

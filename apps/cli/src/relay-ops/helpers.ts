@@ -41,13 +41,13 @@ export function who(state: RelayState, id: string): string {
 export function requireContact(state: RelayState, ref: string | undefined): Contact {
   if (!ref) throw new OpError("相手（呼び名か ID）を指定してください");
   const c = findContact(state, ref);
-  if (!c) throw new OpError(`連絡先に「${ref}」がありません（souieba relay contacts で確認できます）`);
+  if (!c) throw new OpError(`連絡先に「${ref}」がありません（souieba contacts で確認できます）`);
   return c;
 }
 
 export function requireProject(state: RelayState, ref: string | undefined): Project {
   const p = findProject(state, ref ?? DEFAULT_PROJECT);
-  if (!p) throw new OpError(`プロジェクト「${ref}」はありません（souieba relay project list で確かめられます）`);
+  if (!p) throw new OpError(`プロジェクト「${ref}」はありません（souieba project list で確かめられます）`);
   return p;
 }
 

@@ -78,9 +78,9 @@ scripts/v2-try.sh reset                 # 最初からにする
 同じマシンで別のPersonを動かすときは、`SOUIEBA_HOME` を分けて、それぞれで `souieba init` します。
 共有先と共有方針は、**プロジェクト** ごとに変えられます（[docs/v2-projects.md](docs/v2-projects.md)）。メモのプロジェクトは、主人の規則（ディレクトリ・MCP クライアント）> 会話の指定 > 作業場所（フックの cwd・MCP の roots）> エージェントの推定（プロジェクトごとに許すか決める）> 既定か保留、の順に決まります。
 旧v2 Agentの設定移行は提供しません。必要な設定は新しいPersonで作り直してください。
-設定はエージェントにも頼めます（共有を広げる操作は、エージェントが変更の内容を主人に見せて同意を得てから `--yes` で実行します）。主人が自分で見て操作するときは `souieba relay ui`（TUI）を使います。
+設定はエージェントにも頼めます（共有を広げる操作は、エージェントが変更の内容を主人に見せて同意を得てから `--yes` で実行します）。主人が自分で見て操作するときは `souieba ui`（TUI）を使います。
 シェルのない MCP クライアント（Claude Desktop など）からも、`souieba mcp` の `souieba_relay_*` ツールで同じ2段階（`confirm: true`）で設定できます。
-主人は、範囲を決めて設定をエージェントに任せることもできます（`souieba relay delegate grant audience --project 研究 --for 7d` を端末で実行して y、または TUI。任せた範囲の中なら確認なしで実行され、変えたことは次の tell で知らされます。任せることはエージェントにはできません）。
+主人は、範囲を決めて設定をエージェントに任せることもできます（`souieba delegate grant audience --project 研究 --for 7d` を端末で実行して y、または TUI。任せた範囲の中なら確認なしで実行され、変えたことは次の tell で知らされます。任せることはエージェントにはできません）。
 
 ```bash
 # 1. それぞれPersonを作ってRelay（上のサーバの /v2）に登録する。ID が表示される
@@ -88,20 +88,20 @@ SOUIEBA_HOME=./.souieba-alice pnpm souieba init http://127.0.0.1:8080
 SOUIEBA_HOME=./.souieba-bob pnpm souieba init http://127.0.0.1:8080
 
 # 2. アリスがボブに接続を要求し、ボブが承認する（呼び名はそれぞれが付ける。接続は人と人）
-SOUIEBA_HOME=./.souieba-alice pnpm souieba relay connect <ボブの ID> --name ボブ
-SOUIEBA_HOME=./.souieba-bob pnpm souieba relay accept <アリスの ID> --name アリス
+SOUIEBA_HOME=./.souieba-alice pnpm souieba connect <ボブの ID> --name ボブ
+SOUIEBA_HOME=./.souieba-bob pnpm souieba accept <アリスの ID> --name アリス
 
 # 3. アリスがボブへの共有を許可し、共有方針を決める（既定は誰にも共有しない）。TUI で設定してもよい
-SOUIEBA_HOME=./.souieba-alice pnpm souieba relay allow ボブ
-SOUIEBA_HOME=./.souieba-alice pnpm souieba relay policy set "友達には趣味や週末の過ごし方は話してよい。仕事の話は共有しない。"
-SOUIEBA_HOME=./.souieba-alice pnpm souieba relay ui
+SOUIEBA_HOME=./.souieba-alice pnpm souieba allow ボブ
+SOUIEBA_HOME=./.souieba-alice pnpm souieba policy set "友達には趣味や週末の過ごし方は話してよい。仕事の話は共有しない。"
+SOUIEBA_HOME=./.souieba-alice pnpm souieba ui
 
 # 3'. 作業するディレクトリごとに共有先を変える（プロジェクト）。~/lab で書いたメモは、研究の共有先にだけ届く
-SOUIEBA_HOME=./.souieba-alice pnpm souieba relay project add 研究 ~/lab
-SOUIEBA_HOME=./.souieba-alice pnpm souieba relay allow ボブ --project 研究
+SOUIEBA_HOME=./.souieba-alice pnpm souieba project add 研究 ~/lab
+SOUIEBA_HOME=./.souieba-alice pnpm souieba allow ボブ --project 研究
 # 推定（エージェントがメモの内容からプロジェクトを選ぶ）を断るプロジェクト・説明・決まらないメモの保留
-SOUIEBA_HOME=./.souieba-alice pnpm souieba relay project inference 研究 off
-SOUIEBA_HOME=./.souieba-alice pnpm souieba relay unresolved hold
+SOUIEBA_HOME=./.souieba-alice pnpm souieba project inference 研究 off
+SOUIEBA_HOME=./.souieba-alice pnpm souieba unresolved hold
 
 # 4. 伝え方の意図（Narrator）を添えて投稿し、ボブの側で tell
 SOUIEBA_HOME=./.souieba-alice pnpm souieba publish --current --nuance "気軽な雑談として" "主人はM5Stackを使ったロボットを作っていた。"

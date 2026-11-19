@@ -12,7 +12,7 @@
 
 ```bash
 souieba init https://souieba.ryouma1128.workers.dev
-souieba relay id
+souieba id
 ```
 
 友人とはPerson IDを交換し、接続と共有を設定します。詳しくは `souieba skill get relay` を参照してください。設定と秘密鍵は `~/.souieba/config.json` に保存されます。別のPersonを使う場合は `SOUIEBA_HOME` を分けます。
@@ -126,7 +126,7 @@ Agent Skills（SKILL.md）に対応し、シェルコマンドを実行できる
    nvm などで入れた Node.js で `env: node: No such file or directory` になる場合は、`command` に `which node` のパスを、`args` の先頭に `realpath "$(which souieba)"` のパスを書く
 
 - アプリのエージェントには `souieba_tell`・`souieba_note`・`souieba_compose`・`souieba_publish`・`souieba_skip`・`souieba_project_pin` と、共有の設定を変える `souieba_relay_*` のツールが見える（エージェントに範囲を任せる操作は出さない）
-- v2 では、このアプリから書いたメモのプロジェクトを主人が決めておける: `souieba relay client set <クライアント名> <プロジェクト>`（クライアント名は MCP の clientInfo.name。Claude Desktop なら `claude-ai`）。会話ごとに主人が「この会話は仕事」と言えば `souieba_project_pin` で指定され、roots に対応したアプリでは作業フォルダからも決まる
+- v2 では、このアプリから書いたメモのプロジェクトを主人が決めておける: `souieba client set <クライアント名> <プロジェクト>`（クライアント名は MCP の clientInfo.name。Claude Desktop なら `claude-ai`）。会話ごとに主人が「この会話は仕事」と言えば `souieba_project_pin` で指定され、roots に対応したアプリでは作業フォルダからも決まる
 - MCP にはフックがないので、ツールを呼ぶかはアプリのエージェントの判断になる。確実にしたい場合は、プロジェクトやカスタム指示に「発言ごとに最初に souieba_tell を呼ぶ」と書いてもらう
 - **1時間ごとの投稿:** `souieba_tell` が投稿待ちの時間帯を知らせたときに、会話の中でまとめて投稿する
 
