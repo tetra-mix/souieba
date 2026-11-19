@@ -32,21 +32,21 @@ describe.skipIf(process.platform === "win32")("設定ファイルの権限", () 
 
   it("保存すると、既にある ~/.souieba も 700、config.json は 600 にし、一時ファイルを残さない", () => {
     chmodSync(home, 0o755);
-    saveClientConfig({ serverUrl: "https://example.test", agents: {} });
+    saveClientConfig({ client: { updateCheck: false } });
     expect(mode(home)).toBe(0o700);
     expect(mode(configPath())).toBe(0o600);
     expect(readdirSync(home)).toEqual(["config.json"]);
   });
 
   it("読むときに、他人が読める config.json を 600 に直す", () => {
-    saveClientConfig({ serverUrl: "https://example.test", agents: {} });
+    saveClientConfig({ client: { updateCheck: false } });
     chmodSync(configPath(), 0o644);
-    expect(loadClientConfig().serverUrl).toBe("https://example.test");
+    expect(loadClientConfig().client?.updateCheck).toBe(false);
     expect(mode(configPath())).toBe(0o600);
   });
 
   it("クライアント設定の間隔を読み、環境変数で一時的に上書きできる", () => {
-    saveClientConfig({ agents: {}, client: { sessionGapMinutes: 0, tellIntervalMinutes: 2, updateCheck: false } });
+    saveClientConfig({ client: { sessionGapMinutes: 0, tellIntervalMinutes: 2, updateCheck: false } });
     expect(resolveClientSettings()).toEqual({ sessionGapMs: 0, tellIntervalMs: 120_000, updateCheck: false });
 
     process.env.SOUIEBA_SESSION_GAP_MIN = "3";

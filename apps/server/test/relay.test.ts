@@ -205,8 +205,7 @@ describe("v2 Relay: 登録と認証（人と端末）", () => {
 
   it("v1 のトークンでは v2 を使えない", async () => {
     const { h } = relayHarness();
-    const alice = await h.user("alice", "アリス");
-    expect((await h.call("GET", "/v2/connections", alice.agentToken)).status).toBe(401);
+    expect((await h.call("GET", "/v2/connections", `sou_u_${"a".repeat(43)}`)).status).toBe(401);
   });
 
   it("鍵の版を上げた端末証明書で、暗号化鍵を替えられる", async () => {
@@ -314,7 +313,7 @@ describe("v2 Relay: 検索と接続", () => {
     const b = await member();
     await h.call("POST", "/v2/connections", a.token, { to: b.personId });
     h.clock.advance(15 * 86_400_000);
-    expect(runRetention(h.db, h.clock.now, 30 * 86_400_000).relay.requests).toBe(1);
+    expect(runRetention(h.db, h.clock.now).relay.requests).toBe(1);
   });
 
   it("自分自身や、登録されていない Agent には要求できない", async () => {
@@ -395,7 +394,7 @@ describe("v2 Relay: メッセージの配送", () => {
     h.clock.advance(HOUR + 1);
     b.token = await login(b.id);
     expect(await inbox(b)).toEqual([]);
-    expect(runRetention(h.db, h.clock.now, 30 * 86_400_000).relay.messages).toBe(1);
+    expect(runRetention(h.db, h.clock.now).relay.messages).toBe(1);
   });
 
   it("接続を解除すると、まだ届いていないメッセージも届かなくなる", async () => {

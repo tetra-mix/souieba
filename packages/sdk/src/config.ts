@@ -4,10 +4,6 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DeviceCert, DeviceIdentity, KeyPair } from "@souieba/core";
 
-export type AgentKeys = { enc: KeyPair; sign: KeyPair };
-
-export type AgentEntry = { id: string; token: string; keys?: AgentKeys };
-
 /** エージェント連携などのクライアント動作。秘密情報はここに置かない */
 export type ClientSettings = {
   /** 会話の区切りとみなす無通信時間（分）。0なら発話ごとに新しいSession */
@@ -20,13 +16,9 @@ export type ClientSettings = {
 
 /**
  * ~/.souieba/config.json。SDK・CLI が共通で読む。
- * トークンに加えて Agent の秘密鍵も入るので、権限は必ず 600 にする。
+ * Person と内部端末の秘密鍵が入るので、権限は必ず 600 にする。
  */
 export type ClientConfig = {
-  serverUrl?: string;
-  userToken?: string;
-  user?: { id: string; handle: string; displayName: string };
-  agents: Record<string, AgentEntry>;
   client?: ClientSettings;
   /** v2 RelayのPersonと、通信に使う内部端末。通常の操作ではPersonだけを意識する */
   person?: PersonEntry;
@@ -66,12 +58,10 @@ export function configPath(): string {
 
 export function loadClientConfig(): ClientConfig {
   const p = configPath();
-  if (!existsSync(p)) return { agents: {} };
+  if (!existsSync(p)) return {};
   // 前のバージョンや手で作ったファイルが他人に読める権限なら、600 に直す
   restrictMode(p, 0o600);
-  const cfg = JSON.parse(readFileSync(p, "utf8")) as ClientConfig;
-  cfg.agents ??= {};
-  return cfg;
+  return JSON.parse(readFileSync(p, "utf8")) as ClientConfig;
 }
 
 export type ResolvedClientSettings = {
@@ -157,47 +147,6 @@ export function saveClientConfig(cfg: ClientConfig): void {
   restrictMode(souiebaHome(), 0o700);
 }
 
-export type ResolvedAgent = {
-  serverUrl: string;
-  agentId: string;
-  token: string;
-  name: string;
-  keys?: AgentKeys;
-  userId?: string;
-};
-
-/**
- * v1で使うAgentを決める。優先順: 引数（--agent）> 環境変数 SOUIEBA_AGENT > 登録が1つだけならそれ。
- * 環境変数 SOUIEBA_SERVER があればサーバの URL だけ設定ファイルより優先する。
- * （トークンだけを環境変数で渡す方法はやめた。E2EE には Agent の秘密鍵が必要なため）
- */
-export function resolveAgent(name?: string): ResolvedAgent {
-  name ??= process.env.SOUIEBA_AGENT || undefined;
-  const cfg = loadClientConfig();
-  const serverUrl = process.env.SOUIEBA_SERVER ?? cfg.serverUrl;
-  if (!serverUrl) throw new Error("サーバが未設定です。`souieba login <URL> --code <コード>` を実行してください");
-  const names = Object.keys(cfg.agents);
-  const key = name ?? (names.length === 1 ? names[0] : undefined);
-  const agent = key ? cfg.agents[key] : undefined;
-  if (!key || !agent) {
-    throw new Error(
-      names.length === 0
-        ? "Agent が未登録です。`souieba agent add <名前>` を実行してください"
-        : key
-          ? `Agent「${key}」は未登録です。登録済み: ${names.join(", ")}`
-          : `Agent を指定してください（--agent または環境変数 SOUIEBA_AGENT）。登録済み: ${names.join(", ")}`,
-    );
-  }
-  return {
-    serverUrl,
-    agentId: agent.id,
-    token: agent.token,
-    name: key,
-    keys: agent.keys,
-    userId: cfg.user?.id,
-  };
-}
-
 /** v2 の内部転送端末として解決された接続情報 */
 export type ResolvedRelayAgent = {
   /** 端末の名前（手元だけ） */
@@ -219,7 +168,7 @@ export function deviceDir(deviceId: string): string {
 }
 
 /**
- * Person のRelayを使う内部端末を返す。v1のAgent設定しかなければ null。
+ * Person のRelayを使う内部端末を返す。Person が未作成なら null。
  * Personがあるときは、そのPersonの最初の有効な内部端末を使う。
  */
 export function resolveRelayAgent(): ResolvedRelayAgent | null {

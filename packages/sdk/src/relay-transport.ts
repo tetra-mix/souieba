@@ -35,7 +35,7 @@ import {
   verifyPersonDirectory,
   verifyRecipientGroup,
 } from "@souieba/core";
-import { checkPostContent } from "./e2ee.ts";
+import { checkPostContent } from "./post-content.ts";
 import type { RelayConnection, RelayHttp } from "./relay-http.ts";
 import {
   type Contact,

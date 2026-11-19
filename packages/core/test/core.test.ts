@@ -8,60 +8,12 @@ import {
   findInstructionLike,
   sanitizeContent,
   scanSecrets,
-  selectTellCandidate,
-  validatePeriod,
   formatTellText,
   validateTellText,
 } from "../src/index.ts";
 
 const NOW = new Date("2026-10-05T14:20:00Z");
 const ago = (min: number) => new Date(NOW.getTime() - min * 60_000).toISOString();
-
-describe("selectTellCandidate", () => {
-  const row = (postId: string, ownerId: string, minAgo: number, periodStart = ago(minAgo + 60)) => ({
-    postId,
-    ownerId,
-    periodStart,
-    createdAt: ago(minAgo),
-  });
-  const first = () => 0;
-
-  it("候補がなければ null", () => {
-    expect(selectTellCandidate([], { now: NOW, lastToldOwnerId: null })).toBeNull();
-  });
-
-  it("48時間より古い投稿は除く", () => {
-    const old = row("old", "a", 49 * 60);
-    expect(selectTellCandidate([old], { now: NOW, lastToldOwnerId: null })).toBeNull();
-  });
-
-  it("新しい順の先頭を選ぶ（random=0）", () => {
-    const r = selectTellCandidate([row("p1", "a", 300), row("p2", "b", 10)], { now: NOW, lastToldOwnerId: null, random: first });
-    expect(r?.postId).toBe("p2");
-  });
-
-  it("直前に伝えた Owner は、他に候補があれば避ける", () => {
-    const rows = [row("p1", "a", 300), row("p2", "b", 10)];
-    expect(selectTellCandidate(rows, { now: NOW, lastToldOwnerId: "b", random: first })?.postId).toBe("p1");
-    // 他に候補がなければ同じ Owner でも選ぶ
-    expect(selectTellCandidate([row("p2", "b", 10)], { now: NOW, lastToldOwnerId: "b", random: first })?.postId).toBe("p2");
-  });
-
-  it("同じ Owner・同じ時間帯の投稿は1件にまとめる", () => {
-    const ps = ago(120);
-    const rows = [row("chat", "a", 30, ps), row("code", "a", 20, ps)];
-    const picks = new Set([0, 0.5, 0.99].map((x) => selectTellCandidate(rows, { now: NOW, lastToldOwnerId: null, random: () => x })?.postId));
-    expect(picks).toEqual(new Set(["code"]));
-  });
-
-  it("上位3件から重みつきで選ぶ", () => {
-    const rows = [row("p1", "a", 10), row("p2", "b", 20), row("p3", "c", 30), row("p4", "d", 40)];
-    const pick = (x: number) => selectTellCandidate(rows, { now: NOW, lastToldOwnerId: null, random: () => x })?.postId;
-    expect(pick(0.59)).toBe("p1");
-    expect(pick(0.61)).toBe("p2");
-    expect(pick(0.95)).toBe("p3");
-  });
-});
 
 describe("session", () => {
   it("10分空くと新しい Session になり、Tell 回数がリセットされる", () => {
@@ -92,20 +44,6 @@ describe("session", () => {
     expect(r.isNewSession).toBe(true);
     expect(r.state.tellsInSession).toBe(0);
     expect(r.state.lastMessageAt).toBe(NOW.toISOString());
-  });
-});
-
-describe("period", () => {
-  it("正時に揃った1時間だけを受け付ける", () => {
-    const { periodStart, periodEnd } = periodOf(NOW, "previous");
-    expect(periodStart).toBe("2026-10-05T13:00:00.000Z");
-    expect(validatePeriod(periodStart, periodEnd, NOW)).toBeNull();
-    expect(validatePeriod("2026-10-05T22:00:00+09:00", "2026-10-05T23:00:00+09:00", NOW)).toBeNull();
-    expect(validatePeriod("2026-10-05T13:30:00Z", "2026-10-05T14:30:00Z", NOW)).toBe("not_hour_aligned");
-    expect(validatePeriod("2026-10-05T12:00:00Z", "2026-10-05T14:00:00Z", NOW)).toBe("not_one_hour");
-    expect(validatePeriod("2026-10-05T16:00:00Z", "2026-10-05T17:00:00Z", NOW)).toBe("in_future");
-    expect(validatePeriod("2026-10-03T10:00:00Z", "2026-10-03T11:00:00Z", NOW)).toBe("too_old");
-    expect(validatePeriod("x", "y", NOW)).toBe("invalid_date");
   });
 });
 

@@ -14,10 +14,10 @@ const json = (status: number, code: string, message: string) =>
 
 /** 通してよければ null、弾くならそのレスポンスを返す */
 export function edgeGuard(req: Request): Response | null {
-  // Hono のルーティングと同じく % をデコードしたパスで判定する（/v1/auth/re%64eem を公開ルートとして数えるため）
+  // Hono のルーティングと同じく % をデコードしたパスで判定する（/v2/auth/ch%61llenge を公開ルートとして数えるため）
   const path = getPath(req);
   if (!clientIp(req)) return json(400, "bad_request", "送信元が分かりません");
-  if (path !== "/healthz" && !path.startsWith("/v1/") && !path.startsWith("/v2/")) return json(404, "not_found", "Not Found");
+  if (path !== "/healthz" && !path.startsWith("/v2/")) return json(404, "not_found", "Not Found");
   // Content-Length がない（chunked・HTTP/2 などの）要求は、Durable Object の中（app.ts の bodyLimit）で読みながら数えて打ち切る
   if (Number(req.headers.get("content-length") ?? 0) > POST_BODY_LIMIT) {
     return json(413, "payload_too_large", "リクエストが大きすぎます");
@@ -25,7 +25,7 @@ export function edgeGuard(req: Request): Response | null {
   // HEAD は GET と同じ扱い（Hono も GET のルートで応答する）
   const method = req.method === "HEAD" ? "GET" : req.method;
   const isPublic = PUBLIC_ROUTES.includes(`${method} ${path}`);
-  if (!isPublic && !/^Bearer\s+sou_[uamr]_[A-Za-z0-9_-]+$/.test(req.headers.get("authorization") ?? "")) {
+  if (!isPublic && !/^Bearer\s+sou_r_[A-Za-z0-9_-]+$/.test(req.headers.get("authorization") ?? "")) {
     return json(401, "unauthorized", "認証に失敗しました");
   }
   return null;
@@ -39,7 +39,7 @@ export function clientIp(req: Request): string {
   return req.headers.get("cf-connecting-ip") ?? "";
 }
 
-/** 認証なしで呼べる POST（招待コードの使用・ブートストラップ）。総当たりの対象なので、入口で別に厳しく数える */
+/** 認証なしで呼べる POST（端末の登録・認証の開始など）。総当たりの対象なので、入口で別に厳しく数える */
 export function isPublicPost(req: Request): boolean {
   return req.method === "POST" && PUBLIC_ROUTES.includes(`POST ${getPath(req)}`);
 }
