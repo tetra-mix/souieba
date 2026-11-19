@@ -94,7 +94,7 @@ v2 の共有設定はPersonごとに1組で、**作業しているディレク�
 
 ディレクトリやメモを、Policy の違うプロジェクトへ移すのは、届く相手がいるなら広げる扱いのまま（2026-10-31 主人と確認）。
 
-CLI（案）:
+CLI:
 
 ```
 souieba relay project list
@@ -149,7 +149,7 @@ souieba relay project rename <名前> <新しい名前>
 - 期限は `--for 24h`（既定）・`7d`・`forever`。切れた範囲は効かない（一覧には「期限切れ」と出す）
 - 任せた範囲で変えたことも changeLog に残し（`delegated: true`）、次の tell で「（任せた範囲での変更）」と印を付けて主人に知らせる
 - プロジェクトの名前を変えると範囲も付いていき、プロジェクト・グループを消すとその範囲も消える
-- 状態は `relay-state.json` の `delegations`（版は 2 のまま。足しただけの項目で、古い CLI も読み書きで消さない）
+- 状態は `relay-state.json` の `delegations`（状態の版は 3）
 
 ### 限界
 

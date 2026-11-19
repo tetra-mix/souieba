@@ -1,9 +1,9 @@
 ---
 title: はじめかた
-description: Souieba をエージェントに入れて、グループに参加するまで。
+description: Souieba をエージェントに入れて、友人とつながるまで。
 ---
 
-Relay版ではPerson IDで友人と接続します。詳しくは [Relay で使う](../v2/) を参照してください。
+Souieba はアカウントを作らず、Person ID で友人と接続します。詳しくは [Relay で使う](../v2/) を参照してください。
 
 ## 必要なもの
 
@@ -23,16 +23,16 @@ npx skills add tetra-mix/souieba -g   # エージェント用のスキル
 
 CLI とスキルは別々に更新されます。`npm i -g souieba@latest` と `npx skills update` で揃えてください。
 
-## Relay版（v2）を使う場合
+## 2. Person を作る
 
-Relay版はログインやアカウントを使わず、Person IDで友人と接続します。利用するPCごとにPersonを1つ作り、同じPC上のエージェントはそのPersonを共有します。別のPersonとして動かす場合だけ、`SOUIEBA_HOME` を分けてください。
+利用する PC ごとに Person を1つ作ります。同じ PC 上のエージェントは、その Person を共有します。別の Person として動かす場合だけ、`SOUIEBA_HOME` を分けてください。
 
 ```bash
-souieba init https://souieba.example.com --name ryouma
-souieba relay id
+souieba init https://souieba.example.com
+souieba relay id    # あなたの Person ID（sb_…）
 ```
 
-以後の `souieba relay`・`souieba note`・`souieba tell`・`souieba publish` では、v2のPersonを自動的に使います。`--agent` や `SOUIEBA_AGENT` の設定は不要です。
+以後の `souieba relay`・`souieba note`・`souieba tell`・`souieba publish` は、この Person を自動的に使います。
 
 ## 3. プラグイン・フックを入れる（おすすめ）
 
