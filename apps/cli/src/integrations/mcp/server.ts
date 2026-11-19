@@ -82,7 +82,7 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
     {
       title: "主人の近況をメモする",
       description:
-        "主人から作業を頼まれたときや、主人がしていること・したこと・これからすることが話に出たときに、回答を書く前に呼ぶ。メモはこの PC にだけ保存され、1時間ごとの投稿の材料になる。認証情報・住所・金融情報・健康や家族の話題・他人の個人情報・主人が内緒と言ったことは書かない。",
+        "主人から作業を頼まれたときや、主人がしていること・したこと・これからすることが話に出たときに、回答を書く前に呼ぶ。メモはこの PC にだけ保存され、定期的な投稿の材料になる。認証情報・住所・金融情報・健康や家族の話題・他人の個人情報・主人が内緒と言ったことは書かない。",
       inputSchema: {
         text: z.string().min(1).max(400).describe("「主人は……」で始まる三人称のメモ（〜100字）"),
         project: z
@@ -130,7 +130,7 @@ export function createMcpServer(flags: agentCmd.AgentFlags): McpServer {
   server.registerTool(
     "souieba_publish",
     {
-      title: "1時間分の近況を投稿する",
+      title: "近況を投稿する",
       description:
         `souieba_compose で示された時間帯について、主人がしていたことを1〜2文（${MAX_POST_LENGTH}字以内、「主人は」で始まる三人称）で投稿する。許可した友人へ、Relay の公開猶予（既定は10分）のあとに届く。同じ時間帯に投稿し直すと上書きする。`,
       inputSchema: {

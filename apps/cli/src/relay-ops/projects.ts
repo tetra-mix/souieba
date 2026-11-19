@@ -268,7 +268,7 @@ export function projectOps({ ctx, p, load, mutation, dirShifts }: OpsEnv) {
         s,
         sources.map((n) => ({ before: n, after: target, label: n === HOLD ? "保留のメモ" : `${label(n)}のメモ` })),
       );
-      const what = `${opts.held ? "保留の" : from !== undefined ? `プロジェクト${label(from)}の` : ""}${opts.ts ? `${opts.ts} の` : opts.periodStart ? `${opts.periodStart} からの1時間の` : ""}まだ送っていないメモを、プロジェクト${label(target)}に移します`;
+      const what = `${opts.held ? "保留の" : from !== undefined ? `プロジェクト${label(from)}の` : ""}${opts.ts ? `${opts.ts} の` : opts.periodStart ? `${opts.periodStart} からの時間帯の` : ""}まだ送っていないメモを、プロジェクト${label(target)}に移します`;
       return {
         summary: `${what}${diff.note}`,
         widens: diff.widens,

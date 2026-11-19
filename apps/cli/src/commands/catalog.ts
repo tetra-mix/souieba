@@ -28,8 +28,8 @@ export type CommandSpec = {
 
 export const CATALOG: CommandSpec[] = [
   // ---- 全般 ----
-  { name: "config", args: "[show]", summary: "CLIの設定（間隔・更新確認）を見る", section: "general" },
-  { name: "config set", args: "<項目> <値>", summary: "CLIの設定を保存する（session-gap / tell-interval / update-check）", section: "general" },
+  { name: "config", args: "[show]", summary: "CLIの設定（Tell の間隔・投稿の間隔・更新確認）を見る", section: "general" },
+  { name: "config set", args: "<項目> <値>", summary: "CLIの設定を保存する（session-gap / tell-interval / post-interval / update-check）", section: "general" },
   { name: "config unset", args: "<項目>", summary: "CLIの設定を既定に戻す", section: "general" },
   { name: "doctor", summary: "Person IDとRelayへの接続を確認する", section: "general" },
   { name: "help", summary: "このヘルプを表示する", section: "general" },
@@ -64,7 +64,7 @@ export const CATALOG: CommandSpec[] = [
   {
     name: "publish",
     args: "[--period previous|current|<ISO>] <本文>",
-    summary: "1時間分の投稿をする",
+    summary: "1つの時間帯の投稿をする",
     options:
       "[--project <名前>] [--to <相手|group:<グループ>>]... [--purpose <理由>] [--nuance <調子>] [--context <合う話題>] [--expires-in <時間>] [--allow-reshare]",
     section: "agent",

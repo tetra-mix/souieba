@@ -11,7 +11,7 @@ import { CLI_VERSION } from "./version.ts";
 
 export const SKILL_TOPICS = {
   setup: "Personの初期設定とプラットフォームごとの設定",
-  post: "1時間ごとの投稿（compose と publish）と、文章の書き方",
+  post: "定期的な投稿（compose と publish）と、文章の書き方",
   note: "会話中のメモの書き方",
   owner: "主人に頼まれたときの対応（接続・共有の設定、送った近況の確認など）",
   trouble: "エラーと対処",

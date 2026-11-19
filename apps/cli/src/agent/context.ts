@@ -1,4 +1,4 @@
-import { HOUR_MS, MAX_NARRATIVE_FIELD_LENGTH } from "@souieba/core";
+import { MAX_NARRATIVE_FIELD_LENGTH } from "@souieba/core";
 /**
  * エージェント用コマンド（note / compose / publish / tell など）の共通部分。
  * Person の実行環境（context）、出力、書き直しを求める結果の作り方、時間帯の読み取り。
@@ -150,9 +150,12 @@ export function rewriteRequest(err: unknown): AgentResult {
   throw err;
 }
 
-/** 時間帯の開始時刻（ISO 8601）を読み、その1時間を返す */
-export function parsePeriod(periodStart: string): { periodStart: string; periodEnd: string } {
+/** 時間帯の開始時刻（ISO 8601）を読み、その時間帯（長さは CLI の設定 post-interval。既定は1時間）を返す */
+export function parsePeriod(
+  periodStart: string,
+  intervalMs: number = resolveClientSettings().postIntervalMs,
+): { periodStart: string; periodEnd: string } {
   const start = new Date(periodStart);
   if (Number.isNaN(start.getTime())) throw new Error(`period の値が不正です: ${periodStart}`);
-  return { periodStart: start.toISOString(), periodEnd: new Date(start.getTime() + HOUR_MS).toISOString() };
+  return { periodStart: start.toISOString(), periodEnd: new Date(start.getTime() + intervalMs).toISOString() };
 }

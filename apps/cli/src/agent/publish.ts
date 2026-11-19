@@ -1,6 +1,6 @@
-/** 1時間分の投稿を、Relay へ暗号化して送る（souieba publish） */
+/** 1つの時間帯の投稿を、Relay へ暗号化して送る（souieba publish） */
 import { periodOf, DAY_MS } from "@souieba/core";
-import { DEFAULT_PROJECT, NoRecipientsError, type RelayPublishOptions } from "@souieba/sdk";
+import { DEFAULT_PROJECT, NoRecipientsError, type RelayPublishOptions, resolveClientSettings } from "@souieba/sdk";
 import { projectLabel } from "../relay-ops/index.ts";
 import { type AgentContext, type AgentFlags, type AgentResult, context, fmt, hm, parsePeriod, print, rewriteRequest } from "./context.ts";
 
@@ -17,7 +17,7 @@ export async function publishResult(
 ): Promise<AgentResult> {
   const ctx = context(flags);
   const now = flags.now();
-  const period = periodArg === "previous" || periodArg === "current" ? periodOf(now, periodArg) : parsePeriod(periodArg);
+  const period = periodArg === "previous" || periodArg === "current" ? periodOf(now, periodArg, resolveClientSettings().postIntervalMs) : parsePeriod(periodArg);
   const project = narrative.project ?? DEFAULT_PROJECT;
   if (!ctx.transport.localState().projects[project]) {
     return { ok: false, json: { ok: false, error: "unknown_project" }, text: `souieba: プロジェクト「${project}」はありません。souieba compose が示した --project を使ってください。` };
@@ -67,6 +67,6 @@ async function sendPost(
   return {
     ok: true,
     json: { ok: true, ...r, ...period, project, inferred },
-    text: `souieba: ${r.recipients.join("、")} に送りました（${fmt.format(new Date(period.periodStart))}〜の1時間${project !== DEFAULT_PROJECT || inferred ? `、プロジェクト: ${projectLabel(project)}${inferred ? "・推定を含む" : ""}` : ""}、${hm.format(new Date(r.visibleAt))} から届きます）。${extra.join("。")}`,
+    text: `souieba: ${r.recipients.join("、")} に送りました（${fmt.format(new Date(period.periodStart))}〜の時間帯${project !== DEFAULT_PROJECT || inferred ? `、プロジェクト: ${projectLabel(project)}${inferred ? "・推定を含む" : ""}` : ""}、${hm.format(new Date(r.visibleAt))} から届きます）。${extra.join("。")}`,
   };
 }

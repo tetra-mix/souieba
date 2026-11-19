@@ -3,6 +3,7 @@ import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readF
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DeviceCert, DeviceIdentity, KeyPair } from "@souieba/core";
+import { DEFAULT_POST_INTERVAL_MS, MINUTE_MS, isValidPostIntervalMinutes } from "@souieba/core";
 
 /** エージェント連携などのクライアント動作。秘密情報はここに置かない */
 export type ClientSettings = {
@@ -10,6 +11,8 @@ export type ClientSettings = {
   sessionGapMinutes?: number;
   /** 同じSessionで次の友人の近況を伝えるまでの間隔（分）。0なら待たない */
   tellIntervalMinutes?: number;
+  /** 投稿の時間帯の長さ（分）。省略時は60。5分以上24時間以下で、1日（1440分）を割り切る値 */
+  postIntervalMinutes?: number;
   /** npm の更新確認を行うか。省略時は行う */
   updateCheck?: boolean;
 };
@@ -67,8 +70,14 @@ export function loadClientConfig(): ClientConfig {
 export type ResolvedClientSettings = {
   sessionGapMs?: number;
   tellIntervalMs?: number;
+  /** 投稿の時間帯の長さ */
+  postIntervalMs: number;
   updateCheck: boolean;
 };
+
+/** 投稿の間隔の指定が正しくないときの案内 */
+export const POST_INTERVAL_MESSAGE =
+  "投稿の間隔は、5分以上24時間以下で、1日（1440分）を割り切る分数で指定してください（5・10・15・20・30・60・120・180・240・360・480・720・1440 など）";
 
 function minutes(value: unknown, label: string): number | undefined {
   if (value === undefined || value === null) return undefined;
@@ -92,8 +101,11 @@ function envMinutes(name: string, fallback: unknown, label: string): number | un
 export function resolveClientSettings(cfg: ClientConfig = loadClientConfig()): ResolvedClientSettings {
   const sessionGapMinutes = envMinutes("SOUIEBA_SESSION_GAP_MIN", cfg.client?.sessionGapMinutes, "client.sessionGapMinutes");
   const tellIntervalMinutes = envMinutes("SOUIEBA_TELL_INTERVAL_MIN", cfg.client?.tellIntervalMinutes, "client.tellIntervalMinutes");
+  const postIntervalMinutes = envMinutes("SOUIEBA_POST_INTERVAL_MIN", cfg.client?.postIntervalMinutes, "client.postIntervalMinutes");
+  if (postIntervalMinutes !== undefined && !isValidPostIntervalMinutes(postIntervalMinutes)) throw new Error(POST_INTERVAL_MESSAGE);
   return {
     sessionGapMs: sessionGapMinutes === undefined ? undefined : sessionGapMinutes * 60_000,
+    postIntervalMs: postIntervalMinutes === undefined ? DEFAULT_POST_INTERVAL_MS : postIntervalMinutes * MINUTE_MS,
     tellIntervalMs: tellIntervalMinutes === undefined ? undefined : tellIntervalMinutes * 60_000,
     updateCheck: !process.env.SOUIEBA_NO_UPDATE_CHECK && cfg.client?.updateCheck !== false,
   };

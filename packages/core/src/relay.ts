@@ -238,7 +238,7 @@ export type NarrativeMessage = {
   useExpiresAt: string;
   /** 受信側の Agent が他の人へ伝え直してよいか */
   reshare: Reshare;
-  /** 近況の時間帯（Note → Publish の1時間）。ないこともある */
+  /** 近況の時間帯（Note → Publish の単位。既定は1時間）。ないこともある */
   periodStart?: string;
   periodEnd?: string;
 };

@@ -7,7 +7,10 @@ import {
   findInstructionLike,
   sanitizeContent,
   scanSecrets,
+  floorTo,
   formatTellText,
+  isValidPostIntervalMinutes,
+  periodOf,
   validateTellText,
 } from "../src/index.ts";
 
@@ -196,5 +199,19 @@ describe("compareVersions", () => {
     expect(compareVersions("0.10.0", "0.9.0")).toBeGreaterThan(0);
     expect(compareVersions("1.0.0-beta.1", "1.0.0")).toBe(0);
     expect(compareVersions("abc", "0.0.1")).toBeLessThan(0);
+  });
+});
+
+describe("投稿の時間帯", () => {
+  it("既定は1時間。間隔を渡すと、その長さの時間帯になる", () => {
+    expect(periodOf(NOW, "previous")).toEqual({ periodStart: "2026-10-05T13:00:00.000Z", periodEnd: "2026-10-05T14:00:00.000Z" });
+    expect(periodOf(NOW, "current", 30 * 60_000)).toEqual({ periodStart: "2026-10-05T14:00:00.000Z", periodEnd: "2026-10-05T14:30:00.000Z" });
+    expect(periodOf(NOW, "previous", 15 * 60_000)).toEqual({ periodStart: "2026-10-05T14:00:00.000Z", periodEnd: "2026-10-05T14:15:00.000Z" });
+    expect(floorTo(NOW, 2 * 60 * 60_000).toISOString()).toBe("2026-10-05T14:00:00.000Z");
+  });
+
+  it("投稿の間隔は、5分以上24時間以下で、1日を割り切る分数だけ", () => {
+    for (const ok of [5, 10, 15, 30, 45, 60, 90, 120, 360, 1440]) expect(isValidPostIntervalMinutes(ok), `${ok}`).toBe(true);
+    for (const ng of [0, 1, 4, 7, 25, 100, 1441, 2880, -60, 60.5, Number.NaN]) expect(isValidPostIntervalMinutes(ng), `${ng}`).toBe(false);
   });
 });
