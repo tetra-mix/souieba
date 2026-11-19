@@ -3,10 +3,7 @@ import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readF
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DeviceCert, DeviceIdentity, KeyPair } from "@souieba/core";
-
-export type AgentKeys = { enc: KeyPair; sign: KeyPair };
-
-export type AgentEntry = { id: string; token: string; keys?: AgentKeys };
+import { DEFAULT_POST_INTERVAL_MS, MINUTE_MS, isValidPostIntervalMinutes } from "@souieba/core";
 
 /** エージェント連携などのクライアント動作。秘密情報はここに置かない */
 export type ClientSettings = {
@@ -14,19 +11,17 @@ export type ClientSettings = {
   sessionGapMinutes?: number;
   /** 同じSessionで次の友人の近況を伝えるまでの間隔（分）。0なら待たない */
   tellIntervalMinutes?: number;
+  /** 投稿の時間帯の長さ（分）。省略時は60。5分以上24時間以下で、1日（1440分）を割り切る値 */
+  postIntervalMinutes?: number;
   /** npm の更新確認を行うか。省略時は行う */
   updateCheck?: boolean;
 };
 
 /**
  * ~/.souieba/config.json。SDK・CLI が共通で読む。
- * トークンに加えて Agent の秘密鍵も入るので、権限は必ず 600 にする。
+ * Person と内部端末の秘密鍵が入るので、権限は必ず 600 にする。
  */
 export type ClientConfig = {
-  serverUrl?: string;
-  userToken?: string;
-  user?: { id: string; handle: string; displayName: string };
-  agents: Record<string, AgentEntry>;
   client?: ClientSettings;
   /** v2 RelayのPersonと、通信に使う内部端末。通常の操作ではPersonだけを意識する */
   person?: PersonEntry;
@@ -66,19 +61,23 @@ export function configPath(): string {
 
 export function loadClientConfig(): ClientConfig {
   const p = configPath();
-  if (!existsSync(p)) return { agents: {} };
+  if (!existsSync(p)) return {};
   // 前のバージョンや手で作ったファイルが他人に読める権限なら、600 に直す
   restrictMode(p, 0o600);
-  const cfg = JSON.parse(readFileSync(p, "utf8")) as ClientConfig;
-  cfg.agents ??= {};
-  return cfg;
+  return JSON.parse(readFileSync(p, "utf8")) as ClientConfig;
 }
 
 export type ResolvedClientSettings = {
   sessionGapMs?: number;
   tellIntervalMs?: number;
+  /** 投稿の時間帯の長さ */
+  postIntervalMs: number;
   updateCheck: boolean;
 };
+
+/** 投稿の間隔の指定が正しくないときの案内 */
+export const POST_INTERVAL_MESSAGE =
+  "投稿の間隔は、5分以上24時間以下で、1日（1440分）を割り切る分数で指定してください（5・10・15・20・30・60・120・180・240・360・480・720・1440 など）";
 
 function minutes(value: unknown, label: string): number | undefined {
   if (value === undefined || value === null) return undefined;
@@ -102,8 +101,11 @@ function envMinutes(name: string, fallback: unknown, label: string): number | un
 export function resolveClientSettings(cfg: ClientConfig = loadClientConfig()): ResolvedClientSettings {
   const sessionGapMinutes = envMinutes("SOUIEBA_SESSION_GAP_MIN", cfg.client?.sessionGapMinutes, "client.sessionGapMinutes");
   const tellIntervalMinutes = envMinutes("SOUIEBA_TELL_INTERVAL_MIN", cfg.client?.tellIntervalMinutes, "client.tellIntervalMinutes");
+  const postIntervalMinutes = envMinutes("SOUIEBA_POST_INTERVAL_MIN", cfg.client?.postIntervalMinutes, "client.postIntervalMinutes");
+  if (postIntervalMinutes !== undefined && !isValidPostIntervalMinutes(postIntervalMinutes)) throw new Error(POST_INTERVAL_MESSAGE);
   return {
     sessionGapMs: sessionGapMinutes === undefined ? undefined : sessionGapMinutes * 60_000,
+    postIntervalMs: postIntervalMinutes === undefined ? DEFAULT_POST_INTERVAL_MS : postIntervalMinutes * MINUTE_MS,
     tellIntervalMs: tellIntervalMinutes === undefined ? undefined : tellIntervalMinutes * 60_000,
     updateCheck: !process.env.SOUIEBA_NO_UPDATE_CHECK && cfg.client?.updateCheck !== false,
   };
@@ -122,14 +124,33 @@ export function readStateJson<T>(path: string): T | null {
   }
 }
 
-/** トークンを含むので所有者だけが読める権限（600）で書く */
+/**
+ * 読めない（壊れている・知らない版の）状態ファイルを、上書きで失う前に脇へ移す。
+ * 連絡先や共有の設定を、書き込みのついでに空で上書きして消してしまわないため
+ */
+export function setAsideUnreadable(path: string): string | null {
+  if (!existsSync(path)) return null;
+  const aside = `${path}.unreadable-${new Date().toISOString().replace(/[^0-9]/g, "")}`;
+  renameSync(path, aside);
+  return aside;
+}
+
+/** トークンを含む JSON を、所有者だけが読める権限（600）で書く */
 export function writeSecretJson(path: string, value: unknown): void {
+  writeSecretFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/**
+ * 所有者だけが読める権限（600）で、途中で落ちても元のファイルが残るように書く（一時ファイルに書いてから置き換える）。
+ * メモ（notes.jsonl）のように JSON 以外の中身にも使う
+ */
+export function writeSecretFile(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   // 同時に動く別の souieba と一時ファイルがぶつからないよう、名前を毎回変える
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   const fd = openSync(tmp, "w", 0o600);
   try {
-    writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+    writeFileSync(fd, content);
     // 置き換えたあとに落ちても中身が空にならないよう、ディスクに書いてから rename する
     fsyncSync(fd);
   } finally {
@@ -157,47 +178,6 @@ export function saveClientConfig(cfg: ClientConfig): void {
   restrictMode(souiebaHome(), 0o700);
 }
 
-export type ResolvedAgent = {
-  serverUrl: string;
-  agentId: string;
-  token: string;
-  name: string;
-  keys?: AgentKeys;
-  userId?: string;
-};
-
-/**
- * v1で使うAgentを決める。優先順: 引数（--agent）> 環境変数 SOUIEBA_AGENT > 登録が1つだけならそれ。
- * 環境変数 SOUIEBA_SERVER があればサーバの URL だけ設定ファイルより優先する。
- * （トークンだけを環境変数で渡す方法はやめた。E2EE には Agent の秘密鍵が必要なため）
- */
-export function resolveAgent(name?: string): ResolvedAgent {
-  name ??= process.env.SOUIEBA_AGENT || undefined;
-  const cfg = loadClientConfig();
-  const serverUrl = process.env.SOUIEBA_SERVER ?? cfg.serverUrl;
-  if (!serverUrl) throw new Error("サーバが未設定です。`souieba login <URL> --code <コード>` を実行してください");
-  const names = Object.keys(cfg.agents);
-  const key = name ?? (names.length === 1 ? names[0] : undefined);
-  const agent = key ? cfg.agents[key] : undefined;
-  if (!key || !agent) {
-    throw new Error(
-      names.length === 0
-        ? "Agent が未登録です。`souieba agent add <名前>` を実行してください"
-        : key
-          ? `Agent「${key}」は未登録です。登録済み: ${names.join(", ")}`
-          : `Agent を指定してください（--agent または環境変数 SOUIEBA_AGENT）。登録済み: ${names.join(", ")}`,
-    );
-  }
-  return {
-    serverUrl,
-    agentId: agent.id,
-    token: agent.token,
-    name: key,
-    keys: agent.keys,
-    userId: cfg.user?.id,
-  };
-}
-
 /** v2 の内部転送端末として解決された接続情報 */
 export type ResolvedRelayAgent = {
   /** 端末の名前（手元だけ） */
@@ -219,7 +199,7 @@ export function deviceDir(deviceId: string): string {
 }
 
 /**
- * Person のRelayを使う内部端末を返す。v1のAgent設定しかなければ null。
+ * Person のRelayを使う内部端末を返す。Person が未作成なら null。
  * Personがあるときは、そのPersonの最初の有効な内部端末を使う。
  */
 export function resolveRelayAgent(): ResolvedRelayAgent | null {

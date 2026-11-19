@@ -1,0 +1,19 @@
+name: Setup
+description: pnpm と Node.js を入れ、依存を入れる（呼び出す側で、先に actions/checkout を実行しておく）
+
+inputs:
+  install-args:
+    description: pnpm install に渡す引数。空にすると、依存は入れない
+    default: --frozen-lockfile
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      with:
+        node-version: 24
+        cache: pnpm
+    - if: inputs.install-args != ''
+      shell: bash
+      run: pnpm install ${{ inputs.install-args }}

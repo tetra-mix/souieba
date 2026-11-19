@@ -15,12 +15,25 @@ import {
 import {
   type ClientConfig,
   type DeviceEntry,
+  type ResolvedRelayAgent,
   RelayHttp,
   deviceDir,
   loadClientConfig,
+  resolveRelayAgent,
   saveClientConfig,
 } from "@souieba/sdk";
+import { usageOf } from "./commands/catalog.ts";
 import { CLI_VERSION } from "./version.ts";
+
+/** Person がまだないときの案内 */
+export const NO_PERSON_MESSAGE = `Person がありません。${usageOf("init")} を実行してください`;
+
+/** 初期化された Person（と内部の端末）を返す。なければ、始め方を案内するエラー */
+export function requirePerson(): ResolvedRelayAgent {
+  const r = resolveRelayAgent();
+  if (!r) throw new Error(NO_PERSON_MESSAGE);
+  return r;
+}
 
 export type PersonIo = { log: (line: string) => void; now: () => Date };
 
@@ -50,10 +63,10 @@ function newDevice(person: PersonKeys, now: Date): DeviceIdentity & { entry: Dev
 export async function initCommand(a: { url?: string; name?: string }, io: PersonIo): Promise<void> {
   const cfg = loadClientConfig();
   if (cfg.person) {
-    throw new Error(`v2 のPerson ID（${cfg.person.personId}）はもうあります。別のPersonを作るときは SOUIEBA_HOME を変えてください`);
+    throw new Error(`Person ID（${cfg.person.personId}）はもうあります。別のPersonを作るときは SOUIEBA_HOME を変えてください`);
   }
   const url = a.url;
-  if (!url) throw new Error("souieba init <Relay の URL> [--name <内部名>]");
+  if (!url) throw new Error(usageOf("init"));
   const relayUrl = relayOrigin(url);
   const name = requireDeviceName(cfg, a.name ?? "relay");
   const now = io.now();
@@ -72,12 +85,12 @@ export async function initCommand(a: { url?: string; name?: string }, io: Person
     devices: { [name]: dev.entry },
   };
   saveClientConfig(cfg);
-  io.log(`v2 の ID を作り、${relayUrl} に登録しました。`);
+  io.log(`Person ID を作り、${relayUrl} に登録しました。`);
   io.log(`ID: ${person.personId}（このPCの同じPersonを使うクライアントで共通です。友人にはこのIDを伝えます）`);
   io.log(`内部転送端末: ${name}（通常の操作では指定不要です）`);
   io.log("次に:");
-  io.log("  1. 友人と ID を伝え合い、souieba relay connect <相手の ID> --name <呼び名> で接続を要求する（相手が承認すると接続）");
-  io.log("  2. 共有してよい相手を決める: souieba relay allow <呼び名>（既定はすべて禁止）");
+  io.log("  1. 友人と ID を伝え合い、souieba connect <相手の ID> --name <呼び名> で接続を要求する（相手が承認すると接続）");
+  io.log("  2. 共有してよい相手を決める: souieba allow <呼び名>（既定はすべて禁止）");
   io.log("  3. 別のPersonを作るなら、SOUIEBA_HOMEを変えて souieba init を実行します");
-  io.log("souieba relay ui で、これらを画面で見ながら設定することもできます。");
+  io.log("souieba ui で、これらを画面で見ながら設定することもできます。");
 }

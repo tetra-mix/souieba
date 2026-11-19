@@ -1,18 +1,18 @@
 /**
- * v2 で Client（この PC）が持つ状態。Relay には置かない（docs/architecture.md）。
+ * v2 で Client（この PC）が持つ状態。Relay には置かない（docs/design/local-state.md）。
  * Person単位: このPCの内部転送端末が、~/.souieba/person/ の1組を共有する。
  * - 連絡先: 接続済みの人と、主人が付けた呼び名、検証して固定した Person 鍵と、知っている端末
  * - グループ: Person ID の集合。この PC だけのもので、他のメンバーとは共有しない
- * - プロジェクト: 作業するディレクトリに名前を付けたもの。プロジェクトごとに共有先（アクセス権限）と Policy を持つ（docs/v2-projects.md）
+ * - プロジェクト: 作業するディレクトリに名前を付けたもの。プロジェクトごとに共有先（アクセス権限）と Policy を持つ（docs/design/projects.md）
  *   - アクセス権限: 誰に共有してよいか（個人・グループ単位）。既定はすべて禁止
  *   - Policy: 主人が自然言語で書いた共有方針（意味の判断は Agent が行う）
  *   - どのプロジェクトにも入らないディレクトリ（と、ディレクトリを持たない会話）は default プロジェクト
  * - 受信箱: 受け取って検証・復号した Narrative Message（利用期限まで）
- * どれも主人の判断で変えるもので、エージェントが自分の判断で変えないよう、変更は CLI で主人の確認を取る（apps/cli の relay コマンド）。
+ * どれも主人の判断で変えるもので、エージェントが自分の判断で変えないよう、変更は CLI で主人の確認を取る（apps/cli の変更コマンド）。
  */
 import { join } from "node:path";
-import { type NarrativeMessage, type RelayEnvelope, isPersonId, isValidDisplayName } from "@souieba/core";
-import { readStateJson, writeSecretJson } from "./config.ts";
+import { type NarrativeMessage, type RelayEnvelope, isPersonId, isValidDisplayName, DAY_MS } from "@souieba/core";
+import { readStateJson, setAsideUnreadable, writeSecretJson } from "./config.ts";
 import { withFileLock } from "./notes.ts";
 
 export type Contact = {
@@ -80,7 +80,7 @@ export type RelayState = {
    */
   changeLog?: SettingsChange[];
   /**
-   * 主人がエージェントに任せた範囲（docs/v2-projects.md §9）。この範囲の中の「広げる操作」は、1回ごとの確認なしで実行できる。
+   * 主人がエージェントに任せた範囲（docs/design/delegation.md）。この範囲の中の「広げる操作」は、1回ごとの確認なしで実行できる。
    * 任せる・広げるのは主人だけ（TUI か、端末での y/N）。取り消すのはどこからでもよい
    */
   delegations?: Delegation[];
@@ -88,7 +88,7 @@ export type RelayState = {
   clients?: Record<string, string>;
   /** どのプロジェクトにも決まらなかったメモの扱い（既定は default） */
   unresolved?: UnresolvedMode;
-  /** 送った近況の、手元だけの記録（relay sent でプロジェクトと「推定」を出す。配送期限が過ぎたら消す） */
+  /** 送った近況の、手元だけの記録（souieba sent でプロジェクトと「推定」を出す。配送期限が過ぎたら消す） */
   sent?: Record<string, { project: string; inferred: boolean; at: string; until: string }>;
 };
 
@@ -191,8 +191,13 @@ export class RelayStateStore {
     return `${this.path}.lock`;
   }
 
+  /** 読めたら状態を、ファイルがない・読めないなら null */
+  private read(): RelayState | null {
+    return migrateRelayState(readStateJson<unknown>(this.path));
+  }
+
   load(): RelayState {
-    return migrateRelayState(readStateJson<unknown>(this.path)) ?? emptyState();
+    return this.read() ?? emptyState();
   }
 
   save(state: RelayState): void {
@@ -202,7 +207,12 @@ export class RelayStateStore {
   /** 読んで変えて書く。同時に動く別の souieba（フック・MCP・CLI）と変更を取り合わないよう、ロックを取る */
   update<T>(fn: (s: RelayState) => T): T {
     return withFileLock(this.lockPath, () => {
-      const s = this.load();
+      let s = this.read();
+      if (!s) {
+        // ファイルがあるのに読めない（壊れている・新しい版）ときは、空で上書きして消さないよう、脇へ移してから作り直す
+        setAsideUnreadable(this.path);
+        s = emptyState();
+      }
       const r = fn(s);
       this.save(s);
       return r;
@@ -282,7 +292,7 @@ export function findGroup(state: RelayState, ref: string): LocalGroup | undefine
 export type AccessDecision = { allowed: boolean; why: "person_allow" | "person_deny" | "group_allow" | "group_deny" | "default_deny" };
 
 /**
- * その人に共有してよいか。優先順位は次のとおり（docs/v2-projects.md）:
+ * その人に共有してよいか。優先順位は次のとおり（docs/design/projects.md §2）:
  * 1. 個人の設定があればそれに従う（グループの設定より優先）
  * 2. 入っているグループの設定のうち、1つでも deny があれば禁止
  * 3. 入っているグループのどれかが allow なら許可
@@ -315,7 +325,7 @@ export type ResolvedTargets = {
 
 /**
  * Publish の宛先を決める。targets は "all"（既定。接続済みの全員）・"group:<ID か名前>"・Person ID・呼び名。
- * 送信時点の連絡先とグループのメンバーだけを使う（あとから加わった人に過去のメッセージは届かない。§6.3）。
+ * 送信時点の連絡先とグループのメンバーだけを使う（あとから加わった人に過去のメッセージは届かない。docs/design/relay-protocol.md §7）。
  * connected は Relay が接続済みと返した人（接続が切れた相手には送らない）。アクセス権限は project の設定だけで決める
  */
 export function resolveTargets(state: RelayState, targets: string[], connected: Set<string>, project: string = DEFAULT_PROJECT): ResolvedTargets {
@@ -380,9 +390,14 @@ export class RelayInboxStore {
     this.path = join(dir, "relay-inbox.json");
   }
 
-  load(): InboxFile {
+  /** 読めたら受信箱を、ファイルがない・読めないなら null */
+  private read(): InboxFile | null {
     const f = readStateJson<InboxFile>(this.path);
-    return f && f.v === 1 ? f : { v: 1, items: [], seen: {} };
+    return f && f.v === 1 ? f : null;
+  }
+
+  load(): InboxFile {
+    return this.read() ?? { v: 1, items: [], seen: {} };
   }
 
   save(f: InboxFile): void {
@@ -391,7 +406,11 @@ export class RelayInboxStore {
 
   update<T>(fn: (f: InboxFile) => T): T {
     return withFileLock(`${this.path}.lock`, () => {
-      const f = this.load();
+      let f = this.read();
+      if (!f) {
+        setAsideUnreadable(this.path);
+        f = { v: 1, items: [], seen: {} };
+      }
       const r = fn(f);
       this.save(f);
       return r;
@@ -399,12 +418,12 @@ export class RelayInboxStore {
   }
 
   /**
-   * 利用期限を過ぎたものは受信箱から消す（§11.3。もう Tell に使わない）。伝えたものは1日だけ残す。
+   * 利用期限を過ぎたものは受信箱から消す（docs/design/post-flow.md。もう Tell に使わない）。伝えたものは1日だけ残す。
    * 再配送を見分けるための ID は、配送期限まで残す
    */
   static prune(f: InboxFile, now: Date): void {
     const t = now.toISOString();
-    const dayAgo = new Date(now.getTime() - 86_400_000).toISOString();
+    const dayAgo = new Date(now.getTime() - DAY_MS).toISOString();
     f.items = f.items.filter((i) => i.message.useExpiresAt > t && !(i.toldAt && i.toldAt < dayAgo));
     for (const [id, exp] of Object.entries(f.seen)) if (exp <= t) delete f.seen[id];
     f.held = (f.held ?? []).filter((h) => typeof h.envelope?.deliveryExpiresAt === "string" && h.envelope.deliveryExpiresAt > t).slice(-MAX_HELD);

@@ -1,3 +1,4 @@
+import { DAY_MS } from "@souieba/core";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { serve } from "@hono/node-server";
@@ -28,11 +29,11 @@ async function main() {
   }
 
   const retention = () => {
-    const r = runRetention(db, new Date(), config.postRetentionMs);
+    const r = runRetention(db, new Date());
     console.log(JSON.stringify({ level: "info", msg: "retention", ...r }));
   };
   retention();
-  setInterval(retention, 86_400_000).unref();
+  setInterval(retention, DAY_MS).unref();
 
   if (config.publicUrl.startsWith("http:")) {
     console.warn(JSON.stringify({ level: "warn", msg: "http で動作しています（開発用）。公開するときは https にしてください" }));

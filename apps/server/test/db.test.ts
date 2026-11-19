@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { createDb, migrate, pendingMigrations, schema } from "../src/db/index.ts";
+import { createDb, isEmptyDb, migrate, pendingMigrations, schema } from "../src/db/index.ts";
 import { NodeSqlStorage, openDb } from "../src/db/node.ts";
 import { LEGACY_MIGRATIONS } from "./fixtures/legacy-schema.ts";
 
@@ -54,7 +54,17 @@ describe("マイグレーション", () => {
     migrate(db);
     expect(pendingMigrations(db)).toBe(0);
     migrate(db);
-    expect(db.select().from(schema.users).all()).toEqual([]);
+    expect(db.select().from(schema.relayPersons).all()).toEqual([]);
+  });
+
+  it("v1（アカウント・グループ・投稿）の表は作らない", () => {
+    const { db, storage } = openDb(":memory:");
+    migrate(db);
+    const names = (storage.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((r) => r.name);
+    for (const t of ["users", "agents", "credentials", "groups", "group_members", "invites", "posts", "post_recipients", "deliveries", "group_name_boxes"]) {
+      expect(names).not.toContain(t);
+    }
+    expect(names).toContain("relay_persons");
   });
 
   it("0.2 系の手書きのマイグレーション（v2）で作った DB と、同じ形のスキーマになる", () => {
@@ -65,7 +75,7 @@ describe("マイグレーション", () => {
     expect(shape(legacy.raw)).toEqual(shape(fresh.storage.raw));
   });
 
-  it("0.2 系の DB を、データを残したまま引き継ぐ", () => {
+  it("v1 のデータが入った DB も、最後まで移行できる（v1 の表は外部キーがあっても落ちる）", () => {
     const { raw, storage, db } = legacyDb(2);
     raw.exec(`
       INSERT INTO users (id, handle, display_name, role, created_at, identity_key) VALUES ('u1','alice','A','admin','t','k');
@@ -73,10 +83,11 @@ describe("マイグレーション", () => {
     `);
     migrate(db, { legacyVersion: () => storage.legacyVersion() });
     expect(pendingMigrations(db)).toBe(0);
-    expect(db.select({ handle: schema.users.handle }).from(schema.users).all()).toEqual([{ handle: "alice" }]);
-    // 引き継いだ後も、外部キーの ON DELETE CASCADE が効く
-    db.delete(schema.users).run();
-    expect(db.select().from(schema.agents).all()).toEqual([]);
+    const names = (raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[]).map((r) => r.name);
+    expect(names).not.toContain("users");
+    expect(names).not.toContain("agents");
+    expect(names).toContain("relay_persons");
+    expect(raw.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
   it("Friend の時代の DB（v1）は、先に 0.2 系で移行するよう求める", () => {
@@ -112,11 +123,20 @@ describe("node:sqlite のトランザクション", () => {
     expect(() =>
       storage.transactionSync(() => {
         storage.raw.exec("PRAGMA defer_foreign_keys = ON");
-        storage.raw.exec("INSERT INTO agents (id, owner_id, name, created_at) VALUES ('a1', 'missing', 'x', 't')");
+        storage.raw.exec("INSERT INTO relay_device_challenges (challenge, device_id, expires_at) VALUES ('c1', 'missing', 't')");
       }),
     ).toThrow(/FOREIGN KEY/);
     expect(storage.raw.isTransaction).toBe(false);
     // その後のトランザクションも普通に使える
     expect(storage.transactionSync(() => 1)).toBe(1);
+  });
+});
+
+describe("isEmptyDb", () => {
+  it("テーブルが1つもない DB だけを空とみなす（移行済みの DB は、v1 の表がなくても空ではない）", () => {
+    const { db } = openDb(":memory:");
+    expect(isEmptyDb(db)).toBe(true);
+    migrate(db);
+    expect(isEmptyDb(db)).toBe(false);
   });
 });

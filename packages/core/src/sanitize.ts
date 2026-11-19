@@ -1,7 +1,7 @@
 export const MAX_CONTENT_LENGTH = 300;
 export const MIN_TELL_CONTENT_LENGTH = 10;
-/** 投稿本文の上限。Tell 文（120字の本文＋定型＋表示名）が検証を通る長さに収める */
-export const MAX_POST_LENGTH = 120;
+/** 投稿本文の上限。何の作業で・どんな課題があり・何をしたかが入る長さ。Tell 文（本文＋定型＋表示名）が MAX_TELL_TEXT_LENGTH に収まる長さにする */
+export const MAX_POST_LENGTH = 200;
 
 /** 正規化のあとに残してよい文字。日本語の文字、英数字、空白、近況に要る程度の句読点だけ */
 const DISALLOWED = /[^\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}ー A-Za-z0-9、。・「」『』()!?,.+\-%〜…]/gu;
@@ -58,11 +58,6 @@ export function isValidDisplayName(name: string): boolean {
     sanitizeContent(name) === name &&
     findInstructionLike(name).length === 0
   );
-}
-
-/** 表示名の重複を見るときの比較キー（英字の大文字・小文字は区別しない） */
-export function displayNameKey(name: string): string {
-  return name.toLowerCase();
 }
 
 /** 近況として不自然な、読み手への命令に見える表現の規則名を返す（なければ空） */

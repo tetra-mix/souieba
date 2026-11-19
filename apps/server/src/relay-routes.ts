@@ -1,13 +1,14 @@
 /**
- * v2 の Relay の API（/v2/*）。v1 のトークン（User・Agent）とは別に、Identity 鍵の署名で得たセッショントークン（sou_r_）で認証する。
- * 設計: docs/architecture.md
+ * v2 の Relay の API（/v2/*）。端末の署名鍵でチャレンジに署名して得たセッショントークン（sou_r_）で認証する。
+ * 設計: docs/design/relay-protocol.md
  */
-import { MAX_DEVICES_PER_PERSON, MAX_RELAY_RECIPIENTS, type RelayEnvelope } from "@souieba/core";
+import { MAX_DEVICES_PER_PERSON, MAX_RELAY_RECIPIENTS, type RelayEnvelope, DAY_MS, HOUR_MS, MINUTE_MS } from "@souieba/core";
 import { type Context, Hono } from "hono";
 import { z } from "zod";
 import type { Config } from "./config.ts";
 import type { DB } from "./db/index.ts";
 import { ApiError, badRequest, tooManyRequests, unauthorized } from "./errors.ts";
+import { bearerToken } from "./crypto.ts";
 import { rateLimitKey } from "./net.ts";
 import { RateLimiter } from "./ratelimit.ts";
 import * as relay from "./services/relay.ts";
@@ -71,7 +72,7 @@ const EnvelopeSchema = z.object({
   createdAt: iso,
   deliveryExpiresAt: iso,
   iv: z.string().regex(/^[A-Za-z0-9_-]{16}$/),
-  // 本文（120字）と Narrator の項目（各60字）の JSON を暗号化したもの。数 KB に収まる
+  // 本文（200字）と Narrator の項目（各60字）の JSON を暗号化したもの。数 KB に収まる
   ciphertext: z.string().regex(/^[A-Za-z0-9_-]{1,8192}$/),
   recipients: z.array(GroupSchema).min(1).max(MAX_RELAY_RECIPIENTS),
 });
@@ -80,13 +81,13 @@ export function relayRoutes(deps: { db: DB; config: Config; now: () => Date }) {
   const { db, config, now } = deps;
   const app = new Hono<RelayEnv>();
 
-  const publicLimiter = new RateLimiter(30, 10 * 60_000);
-  const registerLimiter = new RateLimiter(10, 60 * 60_000);
+  const publicLimiter = new RateLimiter(30, 10 * MINUTE_MS);
+  const registerLimiter = new RateLimiter(10, HOUR_MS);
   // 登録は消えないので、長い期間でも数える（多くの IP から上限まで埋められにくくする）
-  const registerDailyLimiter = new RateLimiter(20, 24 * 60 * 60_000);
-  const sendLimiter = new RateLimiter(30, 60 * 60_000);
-  const connectLimiter = new RateLimiter(30, 60 * 60_000);
-  const readLimiter = new RateLimiter(60, 60_000);
+  const registerDailyLimiter = new RateLimiter(20, DAY_MS);
+  const sendLimiter = new RateLimiter(30, HOUR_MS);
+  const connectLimiter = new RateLimiter(30, HOUR_MS);
+  const readLimiter = new RateLimiter(60, MINUTE_MS);
 
   const ipKey = (c: Context<RelayEnv>) => rateLimitKey(c.get("clientIp"));
   const take = (limiter: RateLimiter, k: string) => {
@@ -133,8 +134,8 @@ export function relayRoutes(deps: { db: DB; config: Config; now: () => Date }) {
 
   const authed = new Hono<RelayEnv>();
   authed.use("*", async (c, next) => {
-    const m = /^Bearer\s+(sou_r_[A-Za-z0-9_-]+)$/.exec(c.req.header("authorization") ?? "");
-    const me = m ? relay.sessionOf(db, m[1]!, now()) : null;
+    const token = bearerToken(c.req.header("authorization"));
+    const me = token ? relay.sessionOf(db, token, now()) : null;
     if (!me) throw unauthorized();
     c.set("relaySession", me);
     take(readLimiter, `relay:${me.personId}`);
@@ -145,7 +146,7 @@ export function relayRoutes(deps: { db: DB; config: Config; now: () => Date }) {
 
   authed.get("/me", (c) => c.json({ directory: relay.lookup(db, [me(c)])[0] ?? null, deviceId: sess(c).deviceId }));
 
-  // 公開鍵ディレクトリ。返すのは接続に要る鍵だけ（§5.1）
+  // 公開鍵ディレクトリ。返すのは接続に要る鍵だけ（docs/design/relay-protocol.md §3）
   authed.get("/persons/:id", (c) => {
     const e = relay.lookup(db, [c.req.param("id")])[0];
     if (!e) throw new ApiError(404, "not_found", "相手が見つかりません");

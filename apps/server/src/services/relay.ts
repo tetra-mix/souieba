@@ -1,11 +1,10 @@
 /**
- * v2 の Relay。公開鍵ディレクトリ・チャレンジ認証・接続管理・暗号文の配送と期限管理だけを行う（docs/architecture.md）。
+ * v2 の Relay。公開鍵ディレクトリ・チャレンジ認証・接続管理・暗号文の配送と期限管理だけを行う（docs/design/relay-protocol.md）。
  * メッセージの平文・Note・グループ・アクセス権限・Policy は持たない（それらは各 Client が持つ）。
  * Relay が確かめるのは、サーバで機械的に確かめられること（署名・接続の承認・期限・大きさ）だけ。
  *
  * ID は人ごと。ディレクトリは人ごとに Person 鍵・端末証明書・端末の取り消しを持ち、
  * 認証は端末ごと（端末の署名鍵でチャレンジに署名する）。接続・ブロックは人と人。配送は端末ごと。
- * 旧Relayの表は現行のRelay処理では使わない。
  */
 import {
   type DeviceCert,
@@ -25,9 +24,11 @@ import {
   verifyRecipientGroup,
   verifyRevocation,
   verifyText,
+  CLOCK_SKEW_MS,
+  DAY_MS,
 } from "@souieba/core";
-import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
-import { newToken, sha256 } from "../crypto.ts";
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
+import { newRelayToken, sha256 } from "../crypto.ts";
 import { type DB, MAX_BOUND_PARAMS, chunks } from "../db/index.ts";
 import {
   relayDeviceChallenges,
@@ -43,18 +44,20 @@ import { ApiError, badRequest, conflict, forbidden, notFound } from "../errors.t
 
 export const CHALLENGE_TTL_MS = 2 * 60_000;
 export const SESSION_TTL_MS = 60 * 60_000;
-/** 送信時刻のずれの許容範囲 */
-export const CLOCK_SKEW_MS = 10 * 60_000;
 /** 1人が受け取れる未処理の接続要求の上限（スパム対策） */
 export const MAX_PENDING_INCOMING = 100;
 /** 1人が出せる承認待ちの要求の上限（多くの宛先に要求をばらまけないように） */
 export const MAX_PENDING_OUTGOING = 50;
 /** 承認も拒否もされない要求は、この期間で消す */
-export const PENDING_TTL_MS = 14 * 86_400_000;
+export const PENDING_TTL_MS = 14 * DAY_MS;
 /** 1人がブロックできる相手の上限 */
 export const MAX_BLOCKS = 500;
 /** 1回の受信で返すメッセージの上限 */
 export const MAX_FETCH = 50;
+/** 1人が送った、まだ受け取られていない配送（端末ごと）の上限。受け取らない相手に送り続けて、保存先を埋めないように */
+export const MAX_UNDELIVERED_PER_SENDER = 10_000;
+/** 送信済みの一覧で返すメッセージの上限（新しいほう） */
+export const MAX_SENT_LIST = 200;
 /** 取り消した端末も含めて、1人が登録できる端末の上限（取り消しを繰り返して表を膨らませないように） */
 export const MAX_DEVICE_ROWS_PER_PERSON = 50;
 
@@ -189,7 +192,7 @@ export function openSession(
   if (!verifyText(device.signKey, authSigningText(relayOrigin, input.personId, input.deviceId, input.challenge), input.sig)) {
     throw new ApiError(401, "unauthorized", "認証に失敗しました");
   }
-  const token = newToken("relay");
+  const token = newRelayToken();
   const expiresAt = iso(new Date(now.getTime() + SESSION_TTL_MS));
   db.insert(relayDeviceSessions)
     .values({ tokenHash: sha256(token), deviceId: input.deviceId, personId: input.personId, expiresAt, createdAt: iso(now) })
@@ -263,16 +266,27 @@ export function requestConnection(db: DB, me: string, to: string, now: Date): Co
       db.update(C).set({ status: "accepted", updatedAt: ts }).where(and(eq(C.requesterId, to), eq(C.recipientId, me))).run();
       return view(me, { ...incoming, status: "accepted", updatedAt: ts });
     }
-    const count = (col: typeof C.requesterId | typeof C.recipientId, id: string) =>
-      db
-        .select({ n: sql<number>`count(*)` })
-        .from(C)
-        .where(and(eq(col, id), eq(C.status, "pending")))
-        .get()?.n ?? 0;
-    if (count(C.requesterId, me) >= MAX_PENDING_OUTGOING) {
+    const pendingOut = db
+      .select({ n: sql<number>`count(*)` })
+      .from(C)
+      .where(and(eq(C.requesterId, me), eq(C.status, "pending")))
+      .get()?.n ?? 0;
+    // 受信側は、本人が（ブロックして）見えなくした相手の要求を数えない。数えると、ブロックした相手が要求を送り直すだけで、枠を埋め続けられる
+    const pendingIn = db
+      .select({ n: sql<number>`count(*)` })
+      .from(C)
+      .where(
+        and(
+          eq(C.recipientId, to),
+          eq(C.status, "pending"),
+          sql`NOT EXISTS (SELECT 1 FROM ${B} WHERE ${B.blockerId} = ${C.recipientId} AND ${B.blockedId} = ${C.requesterId})`,
+        ),
+      )
+      .get()?.n ?? 0;
+    if (pendingOut >= MAX_PENDING_OUTGOING) {
       throw conflict("too_many_pending", `承認待ちの要求が多すぎます（${MAX_PENDING_OUTGOING} 件まで）。承認されない要求を取り消してください`);
     }
-    if (count(C.recipientId, to) >= MAX_PENDING_INCOMING) {
+    if (pendingIn >= MAX_PENDING_INCOMING) {
       throw conflict("recipient_busy", "相手の承認待ちの要求が多すぎるため、今は要求を送れません。時間をおいてください");
     }
     const row = { requesterId: me, recipientId: to, status: "pending" as const, createdAt: ts, updatedAt: ts };
@@ -394,7 +408,7 @@ export type SendResult = {
 /**
  * 暗号化したメッセージを受け付ける。送った端末の証明書がこの Relay に登録したものと同じか、
  * 宛先の人ごとに、接続済みか・送信した端末の署名が正しいかを確かめ、端末ごとに今の鍵の版で包んだ箱だけを配送する。
- * 送信時点の宛先にだけ配送レコードを作る（あとから接続した人や、あとから足した端末には届かない。§6.3）。
+ * 送信時点の宛先にだけ配送レコードを作る（あとから接続した人や、あとから足した端末には届かない。docs/design/relay-protocol.md §7）。
  */
 export function sendMessage(db: DB, me: RelaySession, env: RelayEnvelope, now: Date, graceMs: number): SendResult {
   if (env.sender !== me.personId || env.senderDevice !== me.deviceId) throw forbidden("送信者がこの端末と一致しません");
@@ -458,6 +472,16 @@ export function sendMessage(db: DB, me: RelaySession, env: RelayEnvelope, now: D
       for (const b of ok) deliveries.push({ messageId: env.messageId, deviceId: b.device, personId: g.person, box });
     }
     if (deliveries.length > 0) {
+      const undelivered =
+        db
+          .select({ n: sql<number>`count(*)` })
+          .from(relayDeviceDeliveries)
+          .innerJoin(relayPersonMessages, eq(relayPersonMessages.id, relayDeviceDeliveries.messageId))
+          .where(and(eq(relayPersonMessages.senderId, me.personId), isNull(relayDeviceDeliveries.deliveredAt), gt(relayPersonMessages.deliveryExpiresAt, iso(now))))
+          .get()?.n ?? 0;
+      if (undelivered + deliveries.length > MAX_UNDELIVERED_PER_SENDER) {
+        throw conflict("too_many_undelivered", "まだ受け取られていないメッセージが多すぎます。相手が受け取るか、期限が切れるまで待ってください");
+      }
       db.insert(relayPersonMessages)
         .values({
           id: env.messageId,
@@ -548,42 +572,44 @@ export type SentView = {
   recipients: { personId: string; status: "pending" | "delivered"; deliveredAt: string | null; devices: number }[];
 };
 
-/** 自分（この人のどの端末からでも）が送った、配送期限内のメッセージの配送状態 */
+/** 自分（この人のどの端末からでも）が送った、配送期限内のメッセージの配送状態（新しい MAX_SENT_LIST 件まで） */
 export function listSent(db: DB, me: RelaySession, now: Date): SentView[] {
   const M = relayPersonMessages;
+  const D = relayDeviceDeliveries;
   const msgs = db
-    .select()
+    .select({ id: M.id, createdAt: M.createdAt, visibleAt: M.visibleAt, deliveryExpiresAt: M.deliveryExpiresAt })
     .from(M)
     .where(and(eq(M.senderId, me.personId), gt(M.deliveryExpiresAt, iso(now))))
-    .orderBy(asc(M.createdAt))
-    .all();
+    .orderBy(desc(M.createdAt))
+    .limit(MAX_SENT_LIST)
+    .all()
+    .reverse();
   if (msgs.length === 0) return [];
-  const deliveries = chunks(
+  // 箱（box）は読まない。人ごとの端末数と、いちばん早い受け取りだけを数える
+  const byMessage = new Map<string, SentView["recipients"]>();
+  for (const part of chunks(
     msgs.map((m) => m.id),
     MAX_BOUND_PARAMS,
-  ).flatMap((part) => db.select().from(relayDeviceDeliveries).where(inArray(relayDeviceDeliveries.messageId, part)).all());
-  return msgs.map((m) => {
-    const byPerson = new Map<string, { delivered: string | null; devices: number }>();
-    for (const d of deliveries) {
-      if (d.messageId !== m.id) continue;
-      const cur = byPerson.get(d.personId) ?? { delivered: null, devices: 0 };
-      cur.devices++;
-      if (d.deliveredAt && (!cur.delivered || d.deliveredAt < cur.delivered)) cur.delivered = d.deliveredAt;
-      byPerson.set(d.personId, cur);
+  )) {
+    const rows = db
+      .select({ messageId: D.messageId, personId: D.personId, devices: sql<number>`count(*)`, delivered: sql<string | null>`min(${D.deliveredAt})` })
+      .from(D)
+      .where(inArray(D.messageId, part))
+      .groupBy(D.messageId, D.personId)
+      .all();
+    for (const r of rows) {
+      const list = byMessage.get(r.messageId) ?? [];
+      list.push({ personId: r.personId, status: r.delivered ? "delivered" : "pending", deliveredAt: r.delivered, devices: r.devices });
+      byMessage.set(r.messageId, list);
     }
-    return {
-      messageId: m.id,
-      createdAt: m.createdAt,
-      visibleAt: m.visibleAt,
-      deliveryExpiresAt: m.deliveryExpiresAt,
-      recipients: [...byPerson].map(([personId, v]) => ({
-        personId,
-        status: v.delivered ? ("delivered" as const) : ("pending" as const),
-        deliveredAt: v.delivered,
-        devices: v.devices,
-      })),
-    };
-  });
+  }
+  return msgs.map((m) => ({
+    messageId: m.id,
+    createdAt: m.createdAt,
+    visibleAt: m.visibleAt,
+    deliveryExpiresAt: m.deliveryExpiresAt,
+    recipients: byMessage.get(m.id) ?? [],
+  }));
 }
 
 /** 送ったメッセージを取り消す（同じ人のどの端末からでも）。まだ受け取っていない宛先には届かなくなる */

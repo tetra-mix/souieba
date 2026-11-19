@@ -1,11 +1,11 @@
-import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { execFile, spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { NotesStore, SecretInNoteError } from "../src/notes.ts";
+import { NotesStore, SecretInNoteError, withFileLock } from "../src/notes.ts";
 
 const at = (iso: string) => new Date(iso);
 const store = () => new NotesStore("agt", mkdtempSync(join(tmpdir(), "souieba-notes-")));
@@ -20,6 +20,27 @@ describe("NotesStore", () => {
     const p = s.pending(at("2026-10-05T14:20:00Z"));
     expect(p.map((x) => x.periodStart)).toEqual(["2026-10-05T12:00:00.000Z", "2026-10-05T13:00:00.000Z"]);
     expect(p[0]!.notes.map((n) => n.text)).toEqual(["主人はAPIを設計していた", "主人はテストを書いていた"]);
+  });
+
+  it("投稿の間隔を30分にすると、30分ごとの時間帯にまとめる", () => {
+    const s = new NotesStore("agt", mkdtempSync(join(tmpdir(), "souieba-notes-")), 30 * 60_000);
+    s.add("主人はAPIを設計していた", at("2026-10-05T12:10:00Z"));
+    s.add("主人はテストを書いていた", at("2026-10-05T12:40:00Z"));
+    s.add("主人は休憩していた", at("2026-10-05T14:05:00Z"));
+    const p = s.pending(at("2026-10-05T14:20:00Z"));
+    expect(p.map((x) => [x.periodStart, x.periodEnd])).toEqual([
+      ["2026-10-05T12:00:00.000Z", "2026-10-05T12:30:00.000Z"],
+      ["2026-10-05T12:30:00.000Z", "2026-10-05T13:00:00.000Z"],
+    ]);
+  });
+
+  it("投稿の間隔を2時間にすると、確定していない時間帯のメモは含めない", () => {
+    const s = new NotesStore("agt", mkdtempSync(join(tmpdir(), "souieba-notes-")), 2 * 60 * 60_000);
+    s.add("主人はAPIを設計していた", at("2026-10-05T11:10:00Z"));
+    s.add("主人はテストを書いていた", at("2026-10-05T13:10:00Z"));
+    const p = s.pending(at("2026-10-05T14:20:00Z"));
+    expect(p.map((x) => x.periodStart)).toEqual(["2026-10-05T10:00:00.000Z", "2026-10-05T12:00:00.000Z"]);
+    expect(s.pending(at("2026-10-05T13:20:00Z")).map((x) => x.periodStart)).toEqual(["2026-10-05T10:00:00.000Z"]);
   });
 
   it("投稿・スキップした時間帯は pending から消える", () => {
@@ -73,6 +94,29 @@ describe("NotesStore", () => {
     s.add("主人はAPIを設計していた", at("2026-10-05T12:10:00Z"));
     expect(s.all()).toHaveLength(1);
     expect(existsSync(lock)).toBe(false);
+  });
+
+  it("自分のロックが奪われて別の持ち主に代わっていたら、手放すときにそれを消さない", () => {
+    const dir = mkdtempSync(join(tmpdir(), "souieba-lock-"));
+    const lock = join(dir, "x.lock");
+    withFileLock(lock, () => {
+      writeFileSync(lock, "other-owner");
+    });
+    expect(readFileSync(lock, "utf8")).toBe("other-owner");
+  });
+
+  it("使用中の新しいロックは奪わず、手放されるのを待つ", () => {
+    const dir = mkdtempSync(join(tmpdir(), "souieba-lock-"));
+    const lock = join(dir, "x.lock");
+    writeFileSync(lock, "other-owner");
+    // 別のプロセスが、少し使ってから手放す
+    const child = spawn(process.execPath, ["-e", `setTimeout(()=>require("fs").unlinkSync(${JSON.stringify(lock)}),300)`], { stdio: "ignore" });
+    const started = Date.now();
+    let ran = false;
+    withFileLock(lock, () => void (ran = true));
+    child.kill();
+    expect(ran).toBe(true);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
   });
 
   it("別々のプロセスが同時にメモと prune をしても、行を失わない", { timeout: 60_000 }, async () => {

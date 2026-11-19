@@ -1,3 +1,4 @@
+import { MINUTE_MS } from "./period.ts";
 import { randomUUID } from "node:crypto";
 
 export type SessionState = {
@@ -8,10 +9,10 @@ export type SessionState = {
   lastToldAt?: string;
 };
 
-export const DEFAULT_SESSION_GAP_MS = 10 * 60 * 1000;
+export const DEFAULT_SESSION_GAP_MS = 10 * MINUTE_MS;
 
 /** 同じ Session の途中でも、前の Tell からこれだけたてば次の1件を伝える */
-export const DEFAULT_TELL_INTERVAL_MS = 10 * 60 * 1000;
+export const DEFAULT_TELL_INTERVAL_MS = 10 * MINUTE_MS;
 
 /** ユーザー発話のたびに呼ぶ。前回から gap 以上空いていれば新しい Session にする */
 export function advanceSession(

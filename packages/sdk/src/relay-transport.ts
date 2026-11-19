@@ -7,6 +7,7 @@
  * 受信箱は1つなので、伝えるのは1回だけ（先に tell した会話）。
  */
 import {
+  CLOCK_SKEW_MS,
   type CreatePostInput,
   DEFAULT_DELIVERY_TTL_MS,
   HPKE_SUITE,
@@ -35,7 +36,7 @@ import {
   verifyPersonDirectory,
   verifyRecipientGroup,
 } from "@souieba/core";
-import { checkPostContent } from "./e2ee.ts";
+import { assertNoSecrets, checkPostContent } from "./post-content.ts";
 import type { RelayConnection, RelayHttp } from "./relay-http.ts";
 import {
   type Contact,
@@ -51,7 +52,6 @@ import {
 import type { SouiebaTransport } from "./transport.ts";
 
 /** 作成時刻が未来にずれていてよい範囲 */
-const FUTURE_SKEW_MS = 10 * 60_000;
 const MIN_TTL_MS = 60 * 60_000;
 const DEFAULT_LEASE_SEC = 600;
 
@@ -238,6 +238,8 @@ export class RelayTransport implements SouiebaTransport {
   async publishNarrative(post: CreatePostInput, o: RelayPublishOptions): Promise<RelayPublishResult> {
     if (post.visibility === "private") throw new Error("v2 では自分だけに向けた投稿（private）はできません");
     const content = checkPostContent(post.content);
+    // 近況の背景（目的・ニュアンス・会話の文脈）も、友人に送るので、本文と同じく秘密情報を断る
+    assertNoSecrets(o.purpose, o.nuance, o.context);
     const now = this.now();
     const createdAt = now.toISOString();
     const ttl = (v: number | undefined, d: number) => Math.min(MAX_MESSAGE_TTL_MS, Math.max(MIN_TTL_MS, v ?? d));
@@ -317,7 +319,13 @@ export class RelayTransport implements SouiebaTransport {
       for (const { envelope, receivedAt } of [...held, ...fresh]) {
         const isNew = fresh.some((m) => m.envelope === envelope);
         if (isNew) ack.push(typeof envelope.messageId === "string" ? envelope.messageId : "");
-        const r = this.open(envelope, state, connected, f.seen, now);
+        let r: ReturnType<RelayTransport["open"]>;
+        try {
+          r = this.open(envelope, state, connected, f.seen, now);
+        } catch {
+          // 形の崩れた配送（Relay や相手が作ったもの）が例外を起こして、同期ごと止めないように
+          r = { ok: false, reason: "bad_header" };
+        }
         if (r === "hold") {
           // Relay の受信の列をふさがないよう、受け取ったことにして手元に置く（配送期限まで）
           f.held.push({ envelope, receivedAt } satisfies HeldEnvelope);
@@ -349,7 +357,7 @@ export class RelayTransport implements SouiebaTransport {
   }
 
   /**
-   * 受け取った1件の検証と復号（§3.3・§15）。送信者の認証 → 期限 → 再配送 → 復号 → 中身の検査の順。
+   * 受け取った1件の検証と復号（docs/design/relay-protocol.md §8）。送信者の認証 → 期限 → 再配送 → 復号 → 中身の検査の順。
    * 接続済みだが呼び名のない相手からのものは、呼び名が付くまで Relay に残す（"hold"）
    */
   private open(
@@ -390,7 +398,7 @@ export class RelayTransport implements SouiebaTransport {
     if (seen[env.messageId]) return { ok: false, reason: "replay" };
     const t = now.getTime();
     if (Date.parse(env.deliveryExpiresAt) <= t) return { ok: false, reason: "expired" };
-    if (!(Date.parse(env.createdAt) <= t + FUTURE_SKEW_MS)) return { ok: false, reason: "bad_time" };
+    if (!(Date.parse(env.createdAt) <= t + CLOCK_SKEW_MS)) return { ok: false, reason: "bad_time" };
     let raw: unknown;
     try {
       raw = openRelayMessage(env, me);

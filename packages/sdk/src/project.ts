@@ -1,5 +1,6 @@
+import { DAY_MS } from "@souieba/core";
 /**
- * 作業しているディレクトリから、プロジェクトを決める（docs/v2-projects.md §3）。
+ * 作業しているディレクトリから、プロジェクトを決める（docs/design/projects.md §3）。
  * - ディレクトリは realpath にしてから比べる（シンボリックリンクで別の名前になっても同じに扱う）
  * - git の worktree は、元のリポジトリの場所に置き換えて比べる（`git rev-parse --git-common-dir` の親）。
  *   別の場所に作った worktree（../repo-feature など）でも、元のリポジトリと同じプロジェクトになる
@@ -70,7 +71,7 @@ export function resolveProject(state: RelayState, opts: { cwd?: string | null; e
   const forced = (opts.env ?? process.env).SOUIEBA_PROJECT?.trim();
   if (forced) {
     const p = findProject(state, forced);
-    if (!p) throw new RelayStateError(`SOUIEBA_PROJECT のプロジェクト「${forced}」はありません（souieba relay project list で確かめられます）`);
+    if (!p) throw new RelayStateError(`SOUIEBA_PROJECT のプロジェクト「${forced}」はありません（souieba project list で確かめられます）`);
     return { project: p.name, via: "env", dir: null };
   }
   if (!opts.cwd) return { project: DEFAULT_PROJECT, via: "default", dir: null };
@@ -84,7 +85,7 @@ export function resolveProject(state: RelayState, opts: { cwd?: string | null; e
   return m.dir ? { project: m.project, via: "dir", dir: m.dir } : { project: DEFAULT_PROJECT, via: "default", dir: null };
 }
 
-// ---- メモのプロジェクトの決め方（2.1.0。docs/v2-projects.md §3） ----
+// ---- メモのプロジェクトの決め方（2.1.0。docs/design/projects.md §3） ----
 
 /** メモを書くときに分かっていること。どれも、なければ省く */
 export type NoteContext = {
@@ -124,12 +125,6 @@ function dirMatch(state: RelayState, dir: string | null | undefined): { project:
   return m.dir ? { project: m.project, dir: m.dir } : null;
 }
 
-/** 推定を受け付けるプロジェクトか（acceptInference が false なら受け付けない） */
-export function acceptsInference(state: RelayState, name: string): boolean {
-  const p = findProject(state, name);
-  return !!p && p.acceptInference !== false;
-}
-
 /**
  * メモのプロジェクトを決める。先に当てはまったものを使う:
  * 1. 主人の規則: SOUIEBA_PROJECT（環境変数）・ディレクトリ（souieba note を実行した場所）・MCP クライアント
@@ -143,7 +138,7 @@ export function resolveNoteProject(state: RelayState, ctx: NoteContext = {}): No
   const forced = (ctx.env ?? process.env).SOUIEBA_PROJECT?.trim();
   if (forced) {
     const p = findProject(state, forced);
-    if (!p) throw new RelayStateError(`SOUIEBA_PROJECT のプロジェクト「${forced}」はありません（souieba relay project list で確かめられます）`);
+    if (!p) throw new RelayStateError(`SOUIEBA_PROJECT のプロジェクト「${forced}」はありません（souieba project list で確かめられます）`);
     return { project: p.name, via: "env" };
   }
   const d = dirMatch(state, ctx.cwd);
@@ -176,7 +171,7 @@ export function resolveNoteProject(state: RelayState, ctx: NoteContext = {}): No
 // ---- 会話ごとの指定（pin）と、フックが知らせた会話の作業ディレクトリ ----
 
 /** 会話ごとの記録を残す期間。会話が終わっても消す手がかりがないので、期限で消す */
-export const SESSION_RECORD_TTL_MS = 24 * 3_600_000;
+export const SESSION_RECORD_TTL_MS = DAY_MS;
 
 type SessionFile = { v: 1; sessions: Record<string, { pin?: string; pinnedAt?: string; cwd?: string; seenAt: string }> };
 

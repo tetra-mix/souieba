@@ -1,11 +1,11 @@
 /**
- * souieba relay ui: v2 の設定を、主人が自分の目で見て直接操作する画面（TUI）。
- * エージェント（LLM）を通さない、決定論的な入口（docs/architecture.md）。
+ * souieba ui: v2 の設定を、主人が自分の目で見て直接操作する画面（TUI）。
+ * エージェント（LLM）を通さない、決定論的な入口（docs/design/projects.md）。
  * 上にタブを並べる。プロジェクトのタブ（← → で切り替え）では、そのプロジェクトのディレクトリ・共有先・Policy を出し、
- * 「連絡先」のタブには、全体のもの（届いた接続要求・連絡先の呼び名・グループ・ブロック）をまとめる（docs/v2-projects.md §6）。
+ * 「連絡先」のタブには、全体のもの（届いた接続要求・連絡先の呼び名・グループ・ブロック）をまとめる（docs/design/projects.md §6）。
  * 「保留と推定」のタブには、どのプロジェクトにも決まらず保留にしたメモと、エージェントの推定で決めたメモ、メモの振り分けの規則
  * （MCP クライアントごとの規則・決まらないときの扱い）を表示する。
- * 操作の中身は CLI と同じ relay-ops.ts を使う。共有を広げる操作と、取り消しにくい操作は、画面の中で y/n を聞く。
+ * 操作の中身は CLI と同じ relay-ops/ を使う。共有を広げる操作と、取り消しにくい操作は、画面の中で y/n を聞く。
  * エージェントに範囲を任せる（delegation）のは主人だけなので、ここ（とTTYでの y/N）が入口になる。
  * プロジェクトのタブに、そのプロジェクトの範囲（共有先・共有方針・ディレクトリ）を、「連絡先」のタブに全体の範囲（接続要求の承認・グループのメンバー）を出す。
  * 外部のライブラリは使わない（CLI を依存なしで配るため）。
@@ -18,7 +18,8 @@
 import { emitKeypressEvents } from "node:readline";
 import type { DelegationScope, Note, RelayConnection, RelayState, ResolvedRelayAgent } from "@souieba/sdk";
 import { DEFAULT_PROJECT, accessFor, activeDelegations, scopeKey } from "@souieba/sdk";
-import { type Change, describeScope, parseTerm, projectLabel, relayOps } from "./relay-ops.ts";
+import { isInteractive } from "./tty.ts";
+import { type Change, describeScope, parseTerm, projectLabel, relayOps } from "./relay-ops/index.ts";
 import type { relayParts } from "./relay.ts";
 
 type Key = { name?: string; ctrl?: boolean; meta?: boolean; shift?: boolean; sequence?: string };
@@ -752,8 +753,8 @@ export function createRelayTui(opts: TuiOptions) {
 }
 
 export async function runRelayTui(opts: TuiOptions): Promise<void> {
-  if (!opts.input && !(process.stdin.isTTY && process.stdout.isTTY)) {
-    throw new Error("souieba relay ui は端末で実行してください（主人が自分で操作する画面です。エージェントは souieba relay の各コマンドを使います）");
+  if (!opts.input && !isInteractive()) {
+    throw new Error("souieba ui は端末で実行してください（主人が自分で操作する画面です。エージェントは souieba connect・allow などの各コマンドを使います）");
   }
   const ui = createRelayTui(opts);
   const onResize = () => ui.render();

@@ -1,7 +1,10 @@
+/** Tell 文の上限。投稿本文（MAX_POST_LENGTH）に定型文と表示名が付いても収まる長さ */
+export const MAX_TELL_TEXT_LENGTH = 260;
+
 /** LLM が生成した Tell 文が、そのまま表示してよい形かを確かめる */
 export function validateTellText(text: string, displayName: string): string | null {
   const t = text.trim();
-  if (t.length === 0 || t.length > 180) return "length";
+  if (t.length === 0 || t.length > MAX_TELL_TEXT_LENGTH) return "length";
   if (/[\r\n]/.test(t)) return "newline";
   if (/https?:\/\/|www\./i.test(t)) return "url";
   if (/[`<>{}[\]$]/.test(t)) return "markup";

@@ -1,8 +1,22 @@
-# GitHub Actions のバージョン（コミット SHA で固定している）を毎週確かめ、新しいものがあれば PR を作る
+# GitHub Actions のバージョン（コミット SHA で固定している）と、npm の依存を毎週確かめ、新しいものがあれば PR を作る
 version: 2
 updates:
   - package-ecosystem: github-actions
+    # ワークフローと、共通の手順（.github/actions/*）の両方
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    target-branch: dev
+  - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
     target-branch: dev
+    # CLI にバンドルされる依存は、更新の PR が散らからないよう、種類ごとにまとめる
+    groups:
+      production:
+        dependency-type: production
+      development:
+        dependency-type: development
