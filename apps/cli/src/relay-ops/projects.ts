@@ -72,15 +72,17 @@ export function projectOps({ ctx, p, load, mutation, dirShifts }: OpsEnv) {
       );
     },
 
-    /** プロジェクトを消す。そのディレクトリと、まだ送っていないメモは既定のプロジェクトになる */
+    /** プロジェクトを消す。そのディレクトリと、まだ送っていないメモは既定のプロジェクトになる。MCP クライアントの規則と任せた範囲も消える */
     projectDelete(ref: string): Change {
       const s = load();
       const pr = requireProject(s, ref);
       if (pr.name === DEFAULT_PROJECT) throw new OpError("既定のプロジェクトは消せません");
+      const rules = Object.keys(s.clients ?? {}).filter((c) => s.clients?.[c] === pr.name);
       return mutation(
-        `プロジェクト「${pr.name}」を消します（ディレクトリと、まだ送っていないメモは既定のプロジェクトになります）`,
+        `プロジェクト「${pr.name}」を消します（ディレクトリと、まだ送っていないメモは既定のプロジェクトになります${rules.length ? `。MCP クライアント ${rules.join("、")} の規則も外します` : ""}）`,
         (st) => {
           delete st.projects[pr.name];
+          for (const c of Object.keys(st.clients ?? {})) if (st.clients?.[c] === pr.name) delete st.clients[c];
           st.delegations = (st.delegations ?? []).filter((d) => !("project" in d.scope && d.scope.project === pr.name));
         },
         `プロジェクト「${pr.name}」を消しました`,
@@ -91,7 +93,7 @@ export function projectOps({ ctx, p, load, mutation, dirShifts }: OpsEnv) {
       );
     },
 
-    /** プロジェクトの名前を変える。共有先・方針・ディレクトリ・メモ・任せた範囲はそのまま付いていく（届く相手は変わらないので、狭める扱い） */
+    /** プロジェクトの名前を変える。共有先・方針・ディレクトリ・メモ・任せた範囲・MCP クライアントの規則はそのまま付いていく（届く相手は変わらないので、狭める扱い） */
     projectRename(ref: string, rawName: string): Change {
       const s = load();
       const pr = requireProject(s, ref);
@@ -113,6 +115,7 @@ export function projectOps({ ctx, p, load, mutation, dirShifts }: OpsEnv) {
             delete st.projects[pr.name];
             st.projects[name] = { ...t, name };
             for (const d of st.delegations ?? []) if ("project" in d.scope && d.scope.project === pr.name) d.scope.project = name;
+            for (const c of Object.keys(st.clients ?? {})) if (st.clients?.[c] === pr.name) st.clients[c] = name;
           });
           new NotesStore("", p.dir).renameProject(pr.name, name);
           return `プロジェクト「${pr.name}」の名前を「${name}」にしました`;
